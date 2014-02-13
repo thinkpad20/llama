@@ -3,15 +3,16 @@
 module Parser where
 
 import System.IO.Unsafe
-import Text.Parsec hiding (Parser, parse, State)
+import Text.ParserCombinators.Parsec.IndentParser
+import Text.Parsec hiding (Parser, parse, State, getState, setState, runParser, parseTest)
 import Control.Applicative hiding (many, (<|>))
 import Data.List (intercalate)
 import "mtl" Control.Monad.Identity
 import "mtl" Control.Monad.State
 
-type ParseState = Int
-type Source = String
-type Parser = ParsecT Source ParseState IO
+type ParseState = ()
+type Token = Char
+type Parser a = IndentParser Token ParseState a
 type Name = String
 data Expr = Id Name
           | Number Double
@@ -212,29 +213,10 @@ pDotted = pUnary >>= parseRest where
 
 pTerm = lexeme $ choice [ Number <$> pDouble, String <$> pString, pId, pParens ]
 
-pIndent, pDedent :: Parser ()
-(pIndent, pDedent) = (pDent "indent" (>), pDent "dedent" (<)) where
-  pDent name comp = try $ do
-    many $ char '\n'
-    spaces <- length <$> many (char ' ')
-    level  <- getLevel
-    prnt $ "counted " ++ show spaces ++ " spaces"
-    if spaces `comp` level
-    then do
-      prnt $ "level went from " ++ show level ++ " to " ++ show spaces
-      setLevel spaces
-    else do
-      prnt $ "Tried to " ++ name ++ " but we got " ++ show spaces ++ " and level was "  ++ show level
-      unexpected "Different indentation"
-
-getLevel = getState
-setLevel = setState
-
-pEndLine = char '\n' <|> schar ';'
-prnt = lift . putStrLn
+pEndLine = schar ';'
 single = pure
 pBlock = schar' '{' *> pStatements <* schar' '}'
-         <|> pIndent *> pStatements <* pDedent
+         <|> block pStatements
          <|> (keyword "do" >> single <$> pStatement)
 
 pWhile = do keyword "while"
@@ -247,23 +229,19 @@ pDefine = try $ pure Define <*> pExpr <* keysym "=" <*> pBody
 pAssign = try $ pure Assign <*> pExpr <* keysym ":=" <*> pBody
 
 pStatements = pStatement `sepEndBy1` pEndLine
-pStatement = do
-  level <- getLevel
-  prnt $ "Parsing a statement, level is " ++ show level
-  lexeme $ choice $ [pDefine, pAssign, Expr <$> pExpr, pWhile]
+pStatement = lexeme $ choice $ [pDefine, pAssign, Expr <$> pExpr, pWhile]
 
 pExpr :: Parser Expr
 pExpr = lexeme $ choice [ pBinary ]
 
-parse :: Parser a -> ParseState -> Source -> IO (Either ParseError a)
-parse p u s = runParserT p u "" s
+test input = parseTest pStatements input
 
-grab input = case test' pStatements input of
-  Left err -> error $ show err
-  Right stmts -> stmts
+-- grab input = case test' pStatements input of
+--   Left err -> error $ show err
+--   Right stmts -> stmts
 
-test' parser input = unsafePerformIO $ parse (skip *> parser) 0 input
-test input = (intercalate "\n" . map show) <$> test' pStatements input
-ptest input = case test input of
-  Left err -> print err
-  Right val -> putStrLn val
+-- test' parser input = parse' (skip *> parser) input
+-- test input = (intercalate "\n" . map show) <$> test' pStatements input
+-- ptest input = case test input of
+--   Left err -> print err
+--   Right val -> putStrLn val
