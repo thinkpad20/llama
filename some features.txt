@@ -9,11 +9,17 @@ foo (bar, baz) == foo(bar, baz)
 foo bar, baz == (foo bar, baz)
 
 # dot reference is left associative, higher than function call
-foo.bar == foo.bar
-foo.bar baz == foo.bar(baz)
-foo bar.baz == foo(bar.baz)
-(foo bar).baz == foo(bar).baz
-foo bar.baz qux = foo(bar.baz)(qux)
+foo.bar == bar foo
+(foo bar).baz == baz(foo(bar))
+foo.bar baz == foo.bar(baz) == bar foo baz == (bar foo) baz
+foo bar.baz == foo (bar.baz) == foo (baz bar)
+foo bar.baz qux = foo(bar.baz)(qux) == foo (baz bar) qux
+# this is the parsing we want for tuples... not sure if that's hard tho
+foo (bar, baz).qux == qux(foo(bar, baz))
+foo ((bar, baz).qux) == foo(qux(bar, baz))
+# we might have to stick with
+foo (bar, baz).qux == foo(qux(bar, baz))
+(foo (bar, baz)).qux == qux(foo(bar, baz))
 
 # functions are block-structured, declare argument types:
 
@@ -21,7 +27,7 @@ foo (bar: [a], baz: [a]) =
   blob = bar ++ baz
   if length blob > 3
     print "oh crap"
-  	max(head bar, head baz)
+  	max [head bar, head baz]
   else
   	blob[3]
 
@@ -49,9 +55,9 @@ assert (2 * 3 == 6)
   fix result
 assert ("hello" * 3 == "hellohellohello")
 
-# it's a verrrry common pattern to have some mutable accumulator, so
+# it's a very common pattern to have some mutable accumulator, so
 # let's create a syntactic sugar for that, which should also help
-# prevent errors
+# prevent errors when we forget to return said accumulator
 repl = (str: String, count: Num) =>
   with result = "" do for n in [1..count] do result.append! str
 
@@ -62,13 +68,6 @@ bar = with result = 1 do for i in [1..5] do result.times! i
 assert (bar == 120)
 product = list: [Num] => with result = 1 do for i in list do result.times! i
 assert (bar == product [1..5])
-
-# we might want to make declarations like this
-(str: String) + (c: Char) = with result = str do result.push! c
-assert ("hello" + "!" == "hello!")
-# or go crazy and overload it further
-(str: String) + (n: Num) = with result = str do result.append! (toString n)
-assert ("catch-" + 22 == "catch-22")
 
 # if we don't want to fix on return:
 repl2 = (str: String, count: Num) =>
@@ -87,11 +86,22 @@ assert ((repl2 "hey" 5).append! "!" == "heyheyheyheyhey!")
 map (f: a -> b) (vec: [a]) =
   with result = [] do for a in vec do result.push! (f a)
 
+# we might want to make declarations like this
+(str: String) + (c: Char) = with result = str do result.push! c
+assert ("hello" + "!" == "hello!")
+# or go crazy and overload it further
+(str: String) + (n: Num) = with result = str do result.append! n.toString
+assert ("catch-" + 22 == "catch-22")
+
 # lambdas are also simple
 add1 = map (x: Num => x + 1)
 addPairs = map (+)
 print(add1 [1..10])
 print(addPairs(zip([1,2,3], [4,5,6]))
+
+# so we can generate curried from uncurried if we want
+curry (f: (a, b) -> c) = a => b => f (a, b)
+assert(1 + 2 == curry (+) 1 2)
 
 # we can also define map as follows:
 map2 = f: a->b => vec: [a] => ...
@@ -176,10 +186,23 @@ c.resize!(r=3).move!(1, -1) |> report # area is 28.2, location is Point(0, 4)
 
 
 # traits (type classes)
+# I don't know if we really need them, with multiple dispatch... but idk.
+# they would allow us to build interfaces and put restrictions on what types
+# a function supports.
 
-trait Mobile order 1 =
+trait Mobile =
   move : Self -> Self
   move! : mut Self -> Self
+
+moveAll! (things: mut [m: Mobile]) = for t in things do t.move!(randN(-10, 10))
+optionOr = (_, Some(thing: a)) => thing | (default: a, _) => default
+doScene (h: Num, w: Num, @seed: Num) = 
+  r = mut Random <| Time.now() `optionOr` seed
+  randPoint!() = Point(rand! r % w, rand! r % h)
+  objects = mut [Circle(randPoint!()), 2.5), Rectangle(randPoint!(), randPoint!())]
+  scene = buildScene objects
+  loop do moveAll! objects
+
 
 # not sure if we should have higher-order type classes... gets ugly fast.
 
@@ -272,6 +295,10 @@ bar = mut [1,2,3] # bar is C-style
 baz = mut foo # baz is C-style, with a copy of foo's contents
 qux = fix bar # qux is Clojure-style, with a copy of foo's contents
 
+# So going from mutable to immutable and vice-versa is a little expensive,
+# but keeps things sane. Could make this user-definable with some kind of
+# features (immutable/mutable maps...)
+
 struct List a = End | (::) (value: a, next: List a)
 
 # a `!` after the `[` indicates a linked list, syntactic sugar
@@ -297,3 +324,95 @@ toList (str: String) =
 fello = fix (mut "hello".toList()).replace!('h', 'f')
 assert (fello == "fello")
 
+
+# How about redoing (.) so it's simply a syntactic sugar for reordering
+# its arguments
+
+inc(n: Num) = n + 1
+assert(1.inc + 2.inc == 5 == inc 0 + inc 3)
+
+# what happens when a mutable object gets left in a closure?
+push! (v: mut [a]) (a: a)
+
+vec = mut [1,2,3]
+foo = push! vec # type of foo is Num -> (), but it's a side-effecty thing...
+foo 1 # Vec now contains [1,2,3,1]
+2.foo # Vec now contains [1,2,3,1,2]
+vec.push! 4 # now contains [1,2,3,1,2,4]
+
+# ok, so we have `.` as a simple reordering! Interesting.
+inc! = n: mut Num => n := n + 1; n
+k = mut 1
+inc! k # now k = 2
+j = fix k.inc! # now k = 3, j = 3
+
+map (f: a -> b) (v: [a]) = with result = [] do result.push! f a for a in v
+print <| (x -> x + 1).map [1,2,3,4] # [2,3,4,5]
+
+# overloaded fo funz:
+map (v: [a]) (f: a -> b) = with result = [] do result.push! f a for a in v
+print <| [1,2,3,4].map (x -> x + 1) # [2,3,4,5]
+
+# this might screw with multiple dispatch, though. For example, before we had:
+move! (c: mut Circle, d: Point) = c.center := c.center + d; c
+move! (c: mut Circle, dx: Num, dy: Num) = c.move!(Point(dx, dy))
+
+# and we were able to do c.move!(1, 2) and c.move!(Point(1, 2))
+# but now what if we have:
+move! (c: mut Circle) (d: Point) = c.center := c.center + d; c
+move! (c: mut Circle) (dx: Num, dy: Num) = c.move!(Point(dx, dy))
+
+# then if we say
+c = mut Circle(..)
+c.move! (1, 2)
+c.move! (Point(1,2))
+
+# can we figure that out? I guess we could have c.move! evaluate to a function
+# which takes either a Point or two Nums... so we need to be able to formalize
+# functions which can take multiple argument types. I think that's doable...
+foo = (str: String) => print "oh ho ho! #{str}"
+    | (n: Num) => io.write("foo.txt", "the answer is #{num}")
+    | (x: String, y: Num) => foo x; foo (y * 3)
+    | (@vec = ["foo", "bar"]: [String]) => print "you entered #{vec}"
+
+# type of multiArgs = (String | Num | (String, Num) | [String]) -> ()
+# we just need to ensure that all of the return types are the same. This
+# means we can overload operators:
+(-) (a: Num, b: Num) = a.subtract b
+(-) (a: Num) = negate a
+(+) (a: Num) = abs a
+(+) (a: Num, b: Num) = a.add b
+
+# and who knows what else.
+# and if later on we overload foo some more, then we will just add to its type
+# alternatives as appropriate...
+
+# One issue though is namespacing with structures:
+struct MyStruct = MyStruct(foo: String, bar: Num)
+s = MyStruct("hello", 2)
+print s.foo # prints hello
+foo = k: Num => k ^ 2 * 3
+print s.foo # type error here? no, should be ok
+bar = s: MyStruct => s.bar * 7
+# now here's the issue:
+print s.bar # what? is it 2, or 14?
+# probably we should make dot syntax always go to a member variable if there,
+# and only if not does it make a function call, so the above prints 2.
+print <| bar s # prints 14
+# then the following would NOT work:
+print <| foo s # (no function `foo` which takes MyStruct as its argument)
+# this should allow us to reuse member variables:
+struct Foo = Foo(bar: String, baz: [Num])
+struct Bar = Bar(baz: Num)
+baz (s: String) = s ++ "!"
+print Foo ("hello", [1,2,3]).baz # [1,2,3]
+print Bar (45).baz # 45
+print "yo".baz # yo!
+print Foo.baz.baz # hello!
+
+# ah, we should probably _not_ make `.` bind higher than application when
+# coming after a tuple... so that foo(bar, baz).qux == qux(foo(bar, baz))
+# and not foo(qux(bar, baz)). 
+# What if we did that, and we DID want foo(qux(bar, baz))?
+# We'd write foo((bar, baz).qux)
+# we could play around in parsec until we get this exact behavior...
