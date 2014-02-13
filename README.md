@@ -1,3 +1,4 @@
+```coffeescript
 # Some feature ideas:
 
 
@@ -48,7 +49,7 @@ assert(apply2 (*) == 230)
 append! (str: mut String, str2: String) = str := str ++ str2; str
 
 # functions can be overloaded
-assert (2 * 3 == 6) 
+assert (2 * 3 == 6)
 (*) = (str: String, num: Num) =>
   result = mut ""
   for n in [1..num] do result.append! str
@@ -117,7 +118,7 @@ map4 (f: a -> b) (vec: [a]) =
   loop ([], vec)
 
 # we can have a muting map if we want:
-map! (vec: mut [a], f: a -> b) = 
+map! (vec: mut [a], f: a -> b) =
   for i in [0..vec.length-1] do vec[i] := f (vec i); vec
 
 # should we be smart enough to figure out that `reverse [1]` is a function
@@ -170,9 +171,9 @@ report (c: Circle) = print("area is #{c.area}, location is #{c.center}")
 assert(c.report === report) # === is equality by pointer, always works
 
 # optional args get wrapped and appear as option types
-resize! (c: mut Circle, @scale: Num, @newR: Num) = 
+resize! (c: mut Circle, @scale: Num, @newR: Num) =
   case scale of
-  	Some scale => c.radius := c.radius * scale 
+  	Some scale => c.radius := c.radius * scale
   	Nothing => case newR of
   	  Some r => c.radius := r
   	  Nothing => () # could optionally throw error here
@@ -196,7 +197,7 @@ trait Mobile =
 
 moveAll! (things: mut [m: Mobile]) = for t in things do t.move!(randN(-10, 10))
 optionOr = (_, Some(thing: a)) => thing | (default: a, _) => default
-doScene (h: Num, w: Num, @seed: Num) = 
+doScene (h: Num, w: Num, @seed: Num) =
   r = mut Random <| Time.now() `optionOr` seed
   randPoint!() = Point(rand! r % w, rand! r % h)
   objects = mut [Circle(randPoint!()), 2.5), Rectangle(randPoint!(), randPoint!())]
@@ -206,7 +207,7 @@ doScene (h: Num, w: Num, @seed: Num) =
 
 # not sure if we should have higher-order type classes... gets ugly fast.
 
-trait Functor order 2 = 
+trait Functor order 2 =
   map : (Self a, a -> b) -> Self b
 
 trait MutFunctor order 2 =
@@ -216,7 +217,7 @@ trait Applicative extends Functor =
   pure : a -> Self a
   apply : (Self a, Self (a -> b)) -> Self b
 
-trait Monad extends Applicative = 
+trait Monad extends Applicative =
   lift : a -> Self a
   bind : (Self a, a -> Self b) -> Self b
 
@@ -241,10 +242,10 @@ Option as Monad =
 trait Function t = # of course, the return type is unset...
   call : (self, arg: t) -> u
 
-[a] as Function Num = 
+[a] as Function Num =
   call (self, n) = self{!n}
 
-[a] as Function [Num] = 
+[a] as Function [Num] =
   call (self, indices: [Num]) = self.slice indices
 
 assert ([1..10] 4 == 5)
@@ -256,7 +257,7 @@ assert ([1..10] [2,5,4] == [3,6,5])
 
 assert (["hello", "world"] allCaps == ["HELLO", "WORLD"])
 
-Num as Function Num = 
+Num as Function Num =
   call (self, n) = self * n
 
 assert (22 3 == 66)
@@ -266,7 +267,7 @@ assert (2x + 3y == 23)
 Num as Function (Num -> a) =
   call (self, f) = f self
 
-replicate times a = 
+replicate times a =
   result = mut []
   for n in [1..times] do result.push! a
   fix result
@@ -283,7 +284,7 @@ String as Function String = call (str1, str2) = str1 ++ str2
 # now it will work
 assert ("hello " "world!" == "hello world!")
 
-# one thing we can do is when dealing with immutable vectors, use a 
+# one thing we can do is when dealing with immutable vectors, use a
 # Clojure-style implementation, but when using mutable vectors, use a
 # C-style implementation. Since we'll always know which is which, this
 # should be possible and maintain the advantages of each use case. As
@@ -308,7 +309,7 @@ assert(list == 1 :: 2 :: 3 :: End)
 list2 = mut list # mutable linked list, deep copied...
 
 # how about a replace function?
-replace! (list: mut [!a], toReplace: a, toReplaceWith: a) = 
+replace! (list: mut [!a], toReplace: a, toReplaceWith: a) =
   runner = list # runner grabs a copy of the reference
   while runner != [!]
     if runner.value == toReplace then runner.value := toReplaceWith
@@ -412,7 +413,8 @@ print Foo.baz.baz # hello!
 
 # ah, we should probably _not_ make `.` bind higher than application when
 # coming after a tuple... so that foo(bar, baz).qux == qux(foo(bar, baz))
-# and not foo(qux(bar, baz)). 
+# and not foo(qux(bar, baz)).
 # What if we did that, and we DID want foo(qux(bar, baz))?
 # We'd write foo((bar, baz).qux)
 # we could play around in parsec until we get this exact behavior...
+```
