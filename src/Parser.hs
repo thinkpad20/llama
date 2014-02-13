@@ -29,8 +29,8 @@ data Statement = Expr Expr
                | If' Expr Block
                | While Expr Block
                | For Expr Expr Block
-               | Define Name Expr
-               | Assign Expr Expr
+               | Define Expr Block
+               | Assign Expr Block
                | Return Expr
                | Throw Expr
                | Break
@@ -59,8 +59,12 @@ instance Show Statement where
         for <- line $ "for " ++ show pat ++ " in " ++ show expr
         blk' <- block blk
         join $ [for] ++ blk'
-      Define e1 e2 -> line $ show e1 ++ " = " ++ show e2
-      Assign e1 e2 -> line $ show e1 ++ " := " ++ show e2
+      Define e1 [Expr e2] -> line $ show e1 ++ " = " ++ show e2
+      Define e blk -> do
+        expr <- line $ show e ++ " ="
+        body <- block blk
+        join $ [expr] ++ body
+      Assign e1 block -> line $ show e1 ++ " := " ++ show block
       Break -> line "break"
       Throw e -> line $ "throw " ++ show e
       Return e -> line $ "return " ++ show e
@@ -90,13 +94,14 @@ instance Show Expr where
         _ -> show expr
 
 
-skip :: Parser ()
-skip = many (oneOf " \t") *> option () lineComment
-  where lineComment = do char '#'
-                         many (noneOf "\n")
-                         (char '\n' >> return ()) <|> eof
-
-keywords = [ "if", "do", "else", "case", "of", "infix", "type", "object"]
+-- skip :: Parser ()
+-- skip = many (oneOf " \t") *> option () lineComment
+--   where lineComment = do char '#'
+--                          many (noneOf "\n")
+--                          (char '\n' >> return ()) <|> eof
+skip = many (oneOf " \t")
+keywords = ["if", "do", "else", "case", "of", "infix", "type",
+            "object", "while", "for"]
 keySyms =  ["->", "|", "=", ";", "..", "=>", "?", ":", "#"]
 
 keyword k = lexeme . try $ string k <* notFollowedBy alphaNum
@@ -106,6 +111,7 @@ keysym k = lexeme . try $ string k <* notFollowedBy (oneOf symChars)
 lexeme p = p <* skip
 sstring = lexeme . string
 schar = lexeme . char
+schar' c = lexeme (char c) >> return ()
 
 symChars = "><=+-*/^~!%@&$:.#|?"
 
@@ -122,7 +128,8 @@ pId :: Parser Expr
 pId = fmap Id $ check $ do
   first <- oneOf $ ['a'..'z'] ++ "_"
   rest <- many $ letter <|> digit <|> char '_'
-  return $ first : rest
+  bangs <- many $ char '!'
+  return $ first : rest ++ bangs
 
 pDouble :: Parser Double
 pDouble = lexeme $ do
@@ -212,10 +219,34 @@ pDotted = pUnary >>= parseRest where
 
 pTerm = lexeme $ choice [ Number <$> pDouble, String <$> pString, pId, pParens ]
 
+pBegin = schar '{'
+pEnd   = schar '}'
+pEndLine = schar '\n' <|> schar ';'
+
+single x = [x]
+pBlock = pBegin *> pStatements <* pEnd
+         <|> (keyword "do" >> single <$> pStatement)
+
+pWhile = do keyword "while"
+            cond <- pExpr
+            block <- pBlock
+            return $ While cond block
+
+pBody = try pBlock <|> (single <$> Expr <$> pExpr)
+pDefine = try $ pure Define <*> pExpr <* keysym "=" <*> pBody
+pAssign = try $ pure Assign <*> pExpr <* keysym ":=" <*> pBody
+
+pStatements = pStatement `sepBy1` pEndLine
+pStatement = lexeme $ choice $ [pDefine, pAssign, Expr <$> pExpr, pWhile]
+
 pExpr :: Parser Expr
 pExpr = lexeme $ choice [ pBinary ]
 
 parse :: Parser a -> ParseState -> Source -> Identity (Either ParseError a)
 parse p u s = runParserT p u "" s
-test parser input = runIdentity $ parse (skip *> parser) 0 input
-test' = test pExpr
+
+test' parser input = runIdentity $ parse (skip *> parser) 0 input
+test input = (intercalate "\n" . map show) <$> test' pStatements input
+ptest input = case test input of
+  Left err -> print err
+  Right val -> putStrLn val
