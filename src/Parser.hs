@@ -164,16 +164,6 @@ pString' = do
     '"' -> return str
     c -> error $ "wtf is " ++ [c]
 
-
-pIndent, pDedent :: Parser ()
-(pIndent, pDedent) = (pDent (>), pDent (<)) where
-  pDent comp = try $ do
-    many1 $ char '\n'
-    spaces <- length <$> many (char ' ')
-    level  <- getLevel
-    if spaces `comp` level then return () else unexpected "Different indentation"
-  getLevel = getState
-
 pArray :: Parser Expr
 pArray = Array <$> between (schar '[') (schar ']') get where
     get = try (do
@@ -219,8 +209,18 @@ pDotted = pUnary >>= parseRest where
 
 pTerm = lexeme $ choice [ Number <$> pDouble, String <$> pString, pId, pParens ]
 
-pBegin = schar '{'
-pEnd   = schar '}'
+pIndent, pDedent :: Parser ()
+(pIndent, pDedent) = (pDent (>), pDent (<)) where
+  pDent comp = try $ do
+    many $ char '\n'
+    spaces <- length <$> many (char ' ')
+    level  <- getLevel
+    if spaces `comp` level then setLevel spaces else unexpected "Different indentation"
+  getLevel = getState
+  setLevel = setState
+
+pBegin = schar' '{' <|> pIndent
+pEnd   = schar' '}' <|> pDedent
 pEndLine = schar '\n' <|> schar ';'
 
 single x = [x]
