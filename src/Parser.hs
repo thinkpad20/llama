@@ -1,8 +1,14 @@
 {-# LANGUAGE LambdaCase #-}
-import Text.ParserCombinators.Parsec
+{-# LANGUAGE PackageImports #-}
+import Text.Parsec hiding (Parser, parse, State)
 import Control.Applicative hiding (many, (<|>))
 import Data.List (intercalate)
+import "mtl" Control.Monad.Identity
+import "mtl" Control.Monad.State
 
+type ParseState = Int
+type Source = String
+type Parser = ParsecT Source ParseState Identity
 type Name = String
 data Expr = Id Name
           | Number Double
@@ -12,7 +18,57 @@ data Expr = Id Name
           | Unary String Expr
           | Binary String (Expr, Expr)
           | Tuple [Expr]
+          | Array ArrayLiteral
           deriving (Eq)
+
+data ArrayLiteral = ArrayLiteral [Expr] | ArrayRange Expr Expr deriving (Eq)
+
+type Block = [Statement]
+data Statement = Expr Expr
+               | If Expr Block Block
+               | If' Expr Block
+               | While Expr Block
+               | For Expr Expr Block
+               | Define Name Expr
+               | Assign Expr Expr
+               | Return Expr
+               | Throw Expr
+               | Break
+               deriving (Eq)
+
+instance Show Statement where
+  show stmt = fst $ runState (render stmt) 0 where
+    render :: Statement -> State Int String
+    render stmt = case stmt of
+      Expr expr -> line $ show expr
+      If c t f -> do
+        if' <- line $ "if " ++ show c
+        else' <- line "else"
+        t' <- block t
+        f' <- block f
+        join $ [if'] ++  t' ++ [else'] ++ f'
+      If' c t -> do
+        if' <- line $ "if " ++ show c
+        t' <- block t
+        join $ [if'] ++ t'
+      While e blk -> do
+        while <- line $ "while " ++ show e
+        blk' <- block blk
+        join $ [while] ++ blk'
+      For pat expr blk -> do
+        for <- line $ "for " ++ show pat ++ " in " ++ show expr
+        blk' <- block blk
+        join $ [for] ++ blk'
+      Define e1 e2 -> line $ show e1 ++ " = " ++ show e2
+      Assign e1 e2 -> line $ show e1 ++ " := " ++ show e2
+      Break -> line "break"
+      Throw e -> line $ "throw " ++ show e
+      Return e -> line $ "return " ++ show e
+    line str = get >>= \i -> return $ replicate i ' ' ++ str
+    join = return . intercalate "\n"
+    block blk = up *> mapM render blk <* down
+    (up, down) = (modify (+2), modify (\n -> n - 2))
+
 
 instance Show Expr where
   show expr = case expr of
@@ -33,11 +89,15 @@ instance Show Expr where
         Unary _ _ ->  "(" ++ show expr ++ ")"
         _ -> show expr
 
+
 skip :: Parser ()
-skip = many (oneOf " \t") *> return ()
+skip = many (oneOf " \t") *> option () lineComment
+  where lineComment = do char '#'
+                         many (noneOf "\n")
+                         (char '\n' >> return ()) <|> eof
 
 keywords = [ "if", "do", "else", "case", "of", "infix", "type", "object"]
-keySyms = ["->", "|", "=", ";", "=>", "?", ":", "#"]
+keySyms =  ["->", "|", "=", ";", "..", "=>", "?", ":", "#"]
 
 keyword k = lexeme . try $ string k <* notFollowedBy alphaNum
 
@@ -78,8 +138,6 @@ pParens = schar '(' *> expr <* schar ')'
                  [e] -> return e
                  es  -> return $ Tuple es
 
--- data EString = Str String | EString String Expr EString
-
 pString :: Parser String
 pString = char '"' >> pString'
 pString' = do
@@ -100,14 +158,23 @@ pString' = do
     c -> error $ "wtf is " ++ [c]
 
 
--- pList :: Parser Expr
--- pList = List <$> between (schar '[') (schar ']') get where
---     get = try (do
---       start <- pExpr
---       keysym ".."
---       stop <- pExpr
---       return $ ListRange start stop)
---       <|> ListLiteral <$> (sepBy pExpr (schar ','))
+pIndent, pDedent :: Parser ()
+(pIndent, pDedent) = (pDent (>), pDent (<)) where
+  pDent comp = try $ do
+    many1 $ char '\n'
+    spaces <- length <$> many (char ' ')
+    level  <- getLevel
+    if spaces `comp` level then return () else unexpected "Different indentation"
+  getLevel = getState
+
+pArray :: Parser Expr
+pArray = Array <$> between (schar '[') (schar ']') get where
+    get = try (do
+      start <- pExpr
+      keysym ".."
+      stop <- pExpr
+      return $ ArrayRange start stop)
+      <|> ArrayLiteral <$> (sepBy pExpr (schar ','))
 
 pBinary = pLogical where
   -- | @pBinOp@ takes either @chainl1@ or @chainr1@ for left- or right-
@@ -148,5 +215,7 @@ pTerm = lexeme $ choice [ Number <$> pDouble, String <$> pString, pId, pParens ]
 pExpr :: Parser Expr
 pExpr = lexeme $ choice [ pBinary ]
 
-test parser input = parse (skip *> parser) "" input
+parse :: Parser a -> ParseState -> Source -> Identity (Either ParseError a)
+parse p u s = runParserT p u "" s
+test parser input = runIdentity $ parse (skip *> parser) 0 input
 test' = test pExpr
