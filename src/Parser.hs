@@ -1,18 +1,17 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE PackageImports #-}
+{-# LANGUAGE OverlappingInstances #-}
+{-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE TypeSynonymInstances #-}
 module Parser where
 
-import System.IO.Unsafe
-import Text.ParserCombinators.Parsec.IndentParser
-import Text.Parsec hiding (Parser, parse, State, getState, setState, runParser, parseTest)
+import Text.Parsec hiding (Parser, parse, State)
+import Indent
 import Control.Applicative hiding (many, (<|>))
 import Data.List (intercalate)
 import "mtl" Control.Monad.Identity
 import "mtl" Control.Monad.State
 
-type ParseState = ()
-type Token = Char
-type Parser a = IndentParser Token ParseState a
 type Name = String
 data Expr = Id Name
           | Number Double
@@ -77,6 +76,8 @@ instance Show Statement where
     block blk = up *> mapM render blk <* down
     (up, down) = (modify (+2), modify (\n -> n - 2))
 
+instance Show Block where
+  show = ('\n':) . unlines . map show
 
 instance Show Expr where
   show expr = case expr of
@@ -213,10 +214,11 @@ pDotted = pUnary >>= parseRest where
 
 pTerm = lexeme $ choice [ Number <$> pDouble, String <$> pString, pId, pParens ]
 
-pEndLine = schar ';'
+pOpenBrace = schar' '{'
+pCloseBrace = schar' '}'
 single = pure
-pBlock = schar' '{' *> pStatements <* schar' '}'
-         <|> block pStatements
+pBlock = pOpenBrace *> pStatementsNoWS <* pCloseBrace
+         <|> indent *> pStatementsWS <* dedent
          <|> (keyword "do" >> single <$> pStatement)
 
 pWhile = do keyword "while"
@@ -228,20 +230,13 @@ pBody = try pBlock <|> (single <$> Expr <$> pExpr)
 pDefine = try $ pure Define <*> pExpr <* keysym "=" <*> pBody
 pAssign = try $ pure Assign <*> pExpr <* keysym ":=" <*> pBody
 
-pStatements = pStatement `sepEndBy1` pEndLine
-pStatement = lexeme $ choice $ [pDefine, pAssign, Expr <$> pExpr, pWhile]
+pStatementsNoWS = pStatement `sepEndBy1` (schar ';')
+pStatementsWS = pStatement `sepEndBy1` same
+pStatement = do
+  lexeme $ choice $ [pDefine, pAssign, Expr <$> pExpr, pWhile]
 
 pExpr :: Parser Expr
 pExpr = lexeme $ choice [ pBinary ]
 
-test input = parseTest pStatements input
-
--- grab input = case test' pStatements input of
---   Left err -> error $ show err
---   Right stmts -> stmts
-
--- test' parser input = parse' (skip *> parser) input
--- test input = (intercalate "\n" . map show) <$> test' pStatements input
--- ptest input = case test input of
---   Left err -> print err
---   Right val -> putStrLn val
+testE = parse pExpr
+testS = parse pStatementsWS
