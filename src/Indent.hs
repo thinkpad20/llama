@@ -35,15 +35,18 @@ indent = try $ do
   level <- getLevel
   case nspaces > level of
     True -> setLevel nspaces
-    False -> unexpected $ "Not an indent: was " ++ show level ++ ", now " ++ show nspaces
-
+    False -> unexpected $ unwords ["Not an indent: looked for more than"
+                                  , show level, "spaces, but found"
+                                  , show nspaces]
 dedent = try $ do
   many emptyLine
   nspaces <- length <$> (many $ char ' ')
   level <- getLevel
   case nspaces < level of
     True -> setLevel nspaces
-    False -> unexpected "Not a dedent"
+    False -> unexpected $ unwords ["Not a dedent: looked for less than"
+                                  , show level, "spaces, but found"
+                                  , show nspaces]
 
 same = try $ do
   many emptyLine
@@ -51,7 +54,9 @@ same = try $ do
   level <- getLevel
   case nspaces == level of
     True -> return ()
-    False -> unexpected$ "Not the same indent: was " ++ show level ++ ", now " ++ show nspaces
+    False -> unexpected $ unwords ["Not the same indentation:"
+                                  , "looked for", show level
+                                  , "spaces, but found", show nspaces]
 
 block :: Parser Block
 block = indent *> statements <* dedent

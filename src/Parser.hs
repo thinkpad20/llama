@@ -3,7 +3,7 @@
 {-# LANGUAGE OverlappingInstances #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE TypeSynonymInstances #-}
-module Parser where
+module Parser (grab, Expr(..), Statement(..), Block(..), single) where
 
 import Text.Parsec hiding (Parser, parse, State)
 import Indent
@@ -232,6 +232,7 @@ pAssign = try $ pure Assign <*> pExpr <* keysym ":=" <*> pBody
 
 pStatementsNoWS = pStatement `sepEndBy1` (schar ';')
 pStatementsWS = pStatement `sepEndBy1` same
+pStatements = pStatement `sepEndBy1` (same <|> schar' ';')
 pStatement = do
   lexeme $ choice $ [pDefine, pAssign, Expr <$> pExpr, pWhile]
 
@@ -241,7 +242,5 @@ pExpr = lexeme $ choice [ pBinary ]
 testE = parse pExpr
 testS = parse pStatementsWS
 
-grab :: String -> IO [Statement]
-grab input = case parse pStatementsWS input of
-  Left err -> error $ show err
-  Right a -> return a
+grab :: String -> Either ParseError [Statement]
+grab = parse pStatements
