@@ -240,3 +240,8 @@ pExpr = lexeme $ choice [ pBinary ]
 
 testE = parse pExpr
 testS = parse pStatementsWS
+
+grab :: String -> IO [Statement]
+grab input = case parse pStatementsWS input of
+  Left err -> error $ show err
+  Right a -> return a
