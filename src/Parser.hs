@@ -77,7 +77,7 @@ instance Show Statement where
     (up, down) = (modify (+2), modify (\n -> n - 2))
 
 instance Show Block where
-  show = ('\n':) . unlines . map show
+  show = unlines . map show
 
 instance Show Expr where
   show expr = case expr of
@@ -231,8 +231,8 @@ pDefine = try $ pure Define <*> pExpr <* keysym "=" <*> pBody
 pAssign = try $ pure Assign <*> pExpr <* keysym ":=" <*> pBody
 
 pStatementsNoWS = pStatement `sepEndBy1` (schar ';')
-pStatementsWS = pStatement `sepEndBy1` same
-pStatements = pStatement `sepEndBy1` (same <|> schar' ';')
+pStatementsWS = pStatement `sepEndBy1` (char '\n' >> same)
+pStatements = pStatement `sepEndBy1` ((char '\n' >> same) <|> schar' ';')
 pStatement = do
   lexeme $ choice $ [pDefine, pAssign, Expr <$> pExpr, pWhile]
 
