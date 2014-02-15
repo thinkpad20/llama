@@ -1,8 +1,8 @@
 {-# LANGUAGE LambdaCase #-}
 module Indent (indent, dedent, same, parse, Parser(..)) where
 
+import Common
 import Text.Parsec hiding (parse)
-import Control.Applicative hiding (many, (<|>))
 import Control.Monad.Identity
 
 -- These are for testing only and not exported
@@ -58,7 +58,7 @@ dedent = eof <|> (newline >> go) where
                                     , show level, "spaces, but found"
                                     , show nspaces]
 
-same = eof <|> (newline >> go) where
+same = (many emptyLine >> eof) <|> (newline >> go) where
   go = try $ do
     nspaces <- length <$> (many $ char ' ')
     level <- getLevel

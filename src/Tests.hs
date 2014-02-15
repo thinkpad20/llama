@@ -1,15 +1,12 @@
 {-# LANGUAGE LambdaCase #-}
 module Tests (Test(..), runTests) where
 
+import Common
 import System.IO
-import Data.IORef
 import Data.List (intercalate)
 import System.Console.ANSI
-import Control.Monad
-import Control.Applicative
 import Control.Exception
-import Control.Monad.State
-import Data.Monoid
+
 import qualified Data.Map as M
 data TestResult = TestSuccess [Name]
                 | TestFailure [Name] String String String
@@ -62,21 +59,20 @@ runTest function count test = case test of
     putStrI "| "
     addGroupName name
     groupName <- getGroupName
-    withColor Blue $ withUL $ putStrLn' $ "(Skipped test " ++ groupName ++ ")"
+    withColor Blue $ withUL $ putStrLn' $ "(Skipped group " ++ groupName ++ ")"
     removeGroupName
     line
   TestGroup name tests -> do
     putStrI "| "
     addGroupName name
-    groupName <- getGroupName
-    withColor Cyan $ withUL $ putStrLn' $ "Test " ++ groupName
+    withColor Cyan $ withUL $ putStrLn' $ "Test " ++ name
     upIndent >> runTests' function tests >> downIndent
     removeGroupName
     line
   SkipTest name _ _ -> do
-    withColor Blue $ putStrLnI $ "(skipped test " ++ show count ++ ". " ++ name ++ ")"
+    withColor Blue $ putStrLnI $ "(skipped test " ++ show count ++ " '" ++ name ++ "')"
   Test name input expect -> do
-    -- print the header, e.g. "Test 6 (test sky is blue): "
+    -- print the header, e.g. "6. test sky is blue: "
     withColor Cyan $ putStrI $ show count ++ ". "
     putStr' $ name ++ ": "
     -- run the function on the input, one of three possibilities
@@ -85,7 +81,7 @@ runTest function count test = case test of
       Right result | result == expect -> do
         addSuccess name
         withColor Green $ putStrLn' "PASSED!"
-      -- no errors, but unexpected result
+      -- no errors, but unexpected result (failure)
       Right result -> do
         addFailure name input expect result
         withColor Magenta $ putStrLn' "FAILED!"
@@ -93,9 +89,6 @@ runTest function count test = case test of
       Left message -> do
         addError name input message
         withColor Red $ putStrLn' "ERROR!"
-
-(!) = flip ($)
-(<!>) = flip (<$>)
 
 reportFailure (TestFailure names input expect result) = do
   let name = intercalate ", " names

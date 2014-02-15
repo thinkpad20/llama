@@ -1,103 +1,12 @@
 {-# LANGUAGE LambdaCase #-}
-{-# LANGUAGE PackageImports #-}
-{-# LANGUAGE OverlappingInstances #-}
-{-# LANGUAGE FlexibleInstances #-}
-{-# LANGUAGE TypeSynonymInstances #-}
-module Parser (grab, Expr(..), Statement(..), Block(..), single) where
+module Parser ( grab, Expr(..), Statement(..), Block(..)
+              , single, ArrayLiteral(..)) where
 
+import Common
+import AST
 import Text.Parsec hiding (Parser, parse, State)
 import Indent
 import Control.Applicative hiding (many, (<|>))
-import Data.List (intercalate)
-import "mtl" Control.Monad.Identity
-import "mtl" Control.Monad.State
-
-type Name = String
-data Expr = Id Name
-          | Number Double
-          | String String
-          | Dot Expr Expr
-          | Apply Expr Expr
-          | Unary String Expr
-          | Binary String (Expr, Expr)
-          | Tuple [Expr]
-          | Array ArrayLiteral
-          deriving (Eq)
-
-data ArrayLiteral = ArrayLiteral [Expr] | ArrayRange Expr Expr deriving (Eq)
-
-type Block = [Statement]
-data Statement = Expr Expr
-               | If Expr Block Block
-               | If' Expr Block
-               | While Expr Block
-               | For Expr Expr Block
-               | Define Expr Block
-               | Assign Expr Block
-               | Return Expr
-               | Throw Expr
-               | Break
-               deriving (Eq)
-
-instance Show Statement where
-  show stmt = fst $ runState (render stmt) 0 where
-    render :: Statement -> State Int String
-    render stmt = case stmt of
-      Expr expr -> line $ show expr
-      If c t f -> do
-        if' <- line $ "if " ++ show c
-        else' <- line "else"
-        t' <- block t
-        f' <- block f
-        join $ [if'] ++  t' ++ [else'] ++ f'
-      If' c t -> do
-        if' <- line $ "if " ++ show c
-        t' <- block t
-        join $ [if'] ++ t'
-      While e blk -> do
-        while <- line $ "while " ++ show e
-        blk' <- block blk
-        join $ [while] ++ blk'
-      For pat expr blk -> do
-        for <- line $ "for " ++ show pat ++ " in " ++ show expr
-        blk' <- block blk
-        join $ [for] ++ blk'
-      Define e1 [Expr e2] -> line $ show e1 ++ " = " ++ show e2
-      Define e blk -> do
-        expr <- line $ show e ++ " ="
-        body <- block blk
-        join $ [expr] ++ body
-      Assign e1 block -> line $ show e1 ++ " := " ++ show block
-      Break -> line "break"
-      Throw e -> line $ "throw " ++ show e
-      Return e -> line $ "return " ++ show e
-    line str = get >>= \i -> return $ replicate i ' ' ++ str
-    join = return . intercalate "\n"
-    block blk = up *> mapM render blk <* down
-    (up, down) = (modify (+2), modify (\n -> n - 2))
-
-instance Show Block where
-  show = unlines . map show
-
-instance Show Expr where
-  show expr = case expr of
-    Id name -> name
-    Number n -> show n
-    String s -> show s
-    Dot e1 e2 -> show' e1 ++ "." ++ show' e2
-    Apply e1 e2 -> show' e1 ++ " " ++ show' e2
-    Tuple es -> "(" ++ (intercalate "," . map show) es ++ ")"
-    Unary "~" e -> show $ Unary "-" e
-    Unary op e -> op ++ show' e
-    Binary op (e1, e2) -> show' e1 ++ " " ++ op ++ " " ++ show' e2
-    where
-      show' expr = case expr of
-        Apply _ _ -> "(" ++ show expr ++ ")"
-        Dot _ _ -> "(" ++ show expr ++ ")"
-        Binary _ _ -> "(" ++ show expr ++ ")"
-        Unary _ _ ->  "(" ++ show expr ++ ")"
-        _ -> show expr
-
 
 -- skip :: Parser ()
 -- skip = many (oneOf " \t") *> option () lineComment
@@ -107,7 +16,7 @@ instance Show Expr where
 skip = many (oneOf " \t")
 keywords = ["if", "do", "else", "case", "of", "infix", "type",
             "object", "while", "for", "in"]
-keySyms =  ["->", "|", "=", ";", "..", "=>", "?", ":", "#"]
+keySyms =  ["->", "|", "=", ";", "..", "=>", "?", ":", "#", "{!"]
 
 keyword k = lexeme . try $ string k <* notFollowedBy alphaNum
 
@@ -129,12 +38,15 @@ check p = lexeme . try $ do
 pSymbol :: Parser String
 pSymbol = check $ many1 $ oneOf symChars
 
-pId :: Parser Expr
-pId = fmap Id $ check $ do
-  first <- oneOf $ ['a'..'z'] ++ "_"
-  rest <- many $ letter <|> digit <|> char '_'
-  bangs <- many $ char '!'
+pIdent :: Parser Char -> Parser String
+pIdent firstChar = check $ do
+  first <- firstChar
+  rest <- many $ alphaNum <|> char '_'
+  bangs <- many $ char '!' <|> char '\''
   return $ first : rest ++ bangs
+
+pVar :: Parser Expr
+pVar = Var <$> (pIdent $ oneOf $ ['a'..'z'] ++ "_")
 
 pDouble :: Parser Double
 pDouble = lexeme $ do
@@ -144,11 +56,25 @@ pDouble = lexeme $ do
     ds' <- many1 digit
     return $ read (ds ++ "." ++ ds')
 
+pType :: Parser Type
+pType = pTApply
+pTTerm = choice [pTVar, pTConst, pTTuple]
+pTVar = TVar <$> pIdent lower
+pTConst = TConst <$> pIdent upper
+pTTuple = TTuple <$ schar '(' <*> many pType <* schar ')'
+pTApply = chainl1 pTTerm (pure TApply)
+
+a <$$ f = pure a <*> f
+
+pTypedVar :: Parser Expr
+pTypedVar = try $ Typed <$$ pVar <* keysym ":" <*> pType
+
 pParens :: Parser Expr
-pParens = schar '(' *> expr <* schar ')'
+pParens = schar '(' *> (lambda <|> expr) <* schar ')'
   where expr = pExpr `sepBy` schar ',' >>= \case
                  [e] -> return e
                  es  -> return $ Tuple es
+        lambda = pLambda
 
 pString :: Parser String
 pString = char '"' >> pString'
@@ -197,24 +123,36 @@ pUnary :: Parser Expr
 pUnary = schar '~' *> (Unary "~" <$> pUnary) <|> pTerm
 
 pApply :: Parser Expr
-pApply = pDotted >>= parseRest where
+pApply = pRef >>= parseRest where
   parseRest res = do -- res is a parsed expression
-    term <- pDotted -- run the parser again
+    term <- pRef -- run the parser again
     parseRest (Apply res term)
     <|> return res -- at some point the second parse will fail; then
                    -- return what we have so far
+
+pRef :: Parser Expr
+pRef = pDotted >>= parseRest where
+  parseRest res = do
+    y <- keysym "{!" *> pExpr <* pCloseBrace
+    parseRest (Ref res y)
+    <|> return res
 
 pDotted :: Parser Expr
 pDotted = pUnary >>= parseRest where
   parseRest res = do
     keysym "."
-    y <- pTerm
+    y <- pUnary
     parseRest (Dot res y)
     <|> return res
 
-pTerm = lexeme $ choice [ Number <$> pDouble, String <$> pString, pId, pParens ]
+pTerm = lexeme $ choice [ Number <$> pDouble
+                        , String <$> pString
+                        , pTypedVar
+                        , pVar
+                        , pParens
+                        , pArray ]
 
-pOpenBrace = schar' '{'
+pOpenBrace = schar' '{' >> notFollowedBy (char '!')
 pCloseBrace = schar' '}'
 single = pure
 pBlock = pOpenBrace *> pStatementsNoWS <* pCloseBrace
@@ -226,8 +164,9 @@ pFor = For <$ keyword "for" <*> pExpr <* keyword "in"
            <*> pExpr <*> pBlock
 
 pBody = try pBlock <|> (single <$> Expr <$> pExpr)
-pDefine = try $ pure Define <*> pExpr <* keysym "=" <*> pBody
-pAssign = try $ pure Assign <*> pExpr <* keysym ":=" <*> pBody
+pDefine = try $ Define <$$ pExpr <* keysym "=" <*> pBody
+pAssign = try $ Assign <$$ pExpr <* keysym ":=" <*> pBody
+pLambda = try $ Lambda <$$ pTerm <* keysym "=>" <*> pBody
 
 getSame = same
 pStatementsNoWS = pStatement `sepEndBy1` (schar ';')
@@ -244,3 +183,7 @@ testS = parse pStatementsWS
 
 grab :: String -> Either ParseError [Statement]
 grab = parse pStatements
+
+grab' input = case grab input of
+  Right statements -> map show statements ! intercalate "\n"
+  Left err -> error $ show err
