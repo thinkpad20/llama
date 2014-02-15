@@ -58,7 +58,7 @@ dedent = eof <|> (newline >> go) where
                                     , show level, "spaces, but found"
                                     , show nspaces]
 
-same = eof <|> (newline >> go) where
+same = many emptyLine >>eof <|> (newline >> go) where
   go = try $ do
     nspaces <- length <$> (many $ char ' ')
     level <- getLevel

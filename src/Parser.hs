@@ -106,7 +106,7 @@ instance Show Expr where
 --                          (char '\n' >> return ()) <|> eof
 skip = many (oneOf " \t")
 keywords = ["if", "do", "else", "case", "of", "infix", "type",
-            "object", "while", "for"]
+            "object", "while", "for", "in"]
 keySyms =  ["->", "|", "=", ";", "..", "=>", "?", ":", "#"]
 
 keyword k = lexeme . try $ string k <* notFollowedBy alphaNum
@@ -221,21 +221,20 @@ pBlock = pOpenBrace *> pStatementsNoWS <* pCloseBrace
          <|> indent *> pStatementsWS <* dedent
          <|> (keyword "do" >> single <$> pStatement)
 
-pWhile = do keyword "while"
-            cond <- pExpr
-            block <- pBlock
-            return $ While cond block
+pWhile = While <$ keyword "while" <*> pExpr <*> pBlock
+pFor = For <$ keyword "for" <*> pExpr <* keyword "in"
+           <*> pExpr <*> pBlock
 
 pBody = try pBlock <|> (single <$> Expr <$> pExpr)
 pDefine = try $ pure Define <*> pExpr <* keysym "=" <*> pBody
 pAssign = try $ pure Assign <*> pExpr <* keysym ":=" <*> pBody
 
-getSame = try $ char '\n' >> same
+getSame = same
 pStatementsNoWS = pStatement `sepEndBy1` (schar ';')
 pStatementsWS = pStatement `sepEndBy1` getSame
 pStatements = pStatement `sepEndBy1` (getSame <|> schar' ';')
 pStatement = do
-  lexeme $ choice $ [pDefine, pAssign, Expr <$> pExpr, pWhile]
+  lexeme $ choice $ [pDefine, pAssign, Expr <$> pExpr, pWhile, pFor]
 
 pExpr :: Parser Expr
 pExpr = lexeme $ choice [ pBinary ]

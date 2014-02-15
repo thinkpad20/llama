@@ -25,7 +25,9 @@ data TesterState = TesterState { indentLevel::Int
                                , names::M.Map Name Int}
 type Tester = StateT TesterState IO
 data Test input result = Test Name input result
+                       | SkipTest Name input result
                        | TestGroup Name [Test input result]
+                       | SkipTestGroup Name [Test input result]
 
 defaultState = TesterState { indentLevel = 0
                            , spaceCount = 4
@@ -56,6 +58,13 @@ runTest :: (Eq result, Show input, Show result, Show error) =>
            Test input result ->
            Tester ()
 runTest function count test = case test of
+  SkipTestGroup name _ -> do
+    putStrI "| "
+    addGroupName name
+    groupName <- getGroupName
+    withColor Blue $ withUL $ putStrLn' $ "(Skipped test " ++ groupName ++ ")"
+    removeGroupName
+    line
   TestGroup name tests -> do
     putStrI "| "
     addGroupName name
@@ -64,9 +73,11 @@ runTest function count test = case test of
     upIndent >> runTests' function tests >> downIndent
     removeGroupName
     line
+  SkipTest name _ _ -> do
+    withColor Blue $ putStrLnI $ "(skipped test " ++ show count ++ ". " ++ name ++ ")"
   Test name input expect -> do
     -- print the header, e.g. "Test 6 (test sky is blue): "
-    withColor Blue $ putStrI $ show count ++ ". "
+    withColor Cyan $ putStrI $ show count ++ ". "
     putStr' $ name ++ ": "
     -- run the function on the input, one of three possibilities
     case function input of
@@ -87,7 +98,7 @@ runTest function count test = case test of
 (<!>) = flip (<$>)
 
 reportFailure (TestFailure names input expect result) = do
-  let name = intercalate " -> " names
+  let name = intercalate ", " names
   withColor Magenta $ withUL $ putStrLnI name
   upIndent
   withColor Magenta $ putStrLnI "Input was:"
@@ -99,7 +110,7 @@ reportFailure (TestFailure names input expect result) = do
   downIndent
 
 reportError (TestError names input message) = do
-  let name = intercalate " -> " names
+  let name = intercalate ", " names
   withColor Red $ withUL $ putStrLnI name
   upIndent
   withColor Red $ putStrLnI "Input was:"
@@ -118,7 +129,7 @@ report = do
   let tot'= (fromIntegral tot)::Double
   line
   withColor Cyan $ putStrLn' $ concat $ replicate 10 "=--="
-  withColor Cyan $ putStrLn' $ "Total tests: " ++ show tot
+  withColor Cyan $ putStrLn' $ show tot ++ " tests ran total"
   let rep n testType c = do
         let n' = (fromIntegral n)::Double
         let tests = if n == 1 then "1 test " else  show n ++ " tests "
@@ -127,9 +138,8 @@ report = do
   rep s "passed" Green
   rep f "failed" Magenta
   rep e "had errors" Red
-  line
-  when (f > 0) $ putStrLn' "Failures:" >> forM_ (reverse fails) reportFailure
-  when (e > 0) $ putStrLn' "Errors:" >> forM_ (reverse errs) reportError
+  when (f > 0) $ line >> putStrLn' "Failures:" >> forM_ (reverse fails) reportFailure
+  when (e > 0) $ line >> putStrLn' "Errors:" >> forM_ (reverse errs) reportError
   withColor Cyan $ putStrLn' $ concat $ replicate 10 "=--="
 
 indent :: String -> Tester String
@@ -170,7 +180,7 @@ addError name input message = do
   let e = TestError names (show input) (show message)
   modify $ \s -> s { errors = e : errors s }
 getGroupNames = get <!> groupNames
-getGroupName = get <!> groupNames <!> reverse <!> intercalate " -> "
+getGroupName = get <!> groupNames <!> reverse <!> intercalate ", "
 addGroupName name = modify (\s -> s { groupNames = name : groupNames s } )
 removeGroupName = modify (\s -> s {groupNames = tail $ groupNames s})
 upIndent :: Tester ()

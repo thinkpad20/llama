@@ -59,6 +59,15 @@ expressionTests = [
     ]
   ]
 
+assignmentTests = [
+    Test "can make definitions" "foo = bar" [Define foo $ expr bar]
+  , Test "can make assignments" "foo := bar" [Assign foo $ expr bar]
+  , Test "can make complex definitions" "foo = bar + baz"
+         [Define foo $ expr $ Binary "+" (bar, baz)]
+  , Test "can make complex definitions 2" "foo bar := baz * qux foo"
+         [Assign (Apply foo bar) $ expr $ Binary "*" (baz, Apply qux foo)]
+  ]
+
 blockTests = [
     Test "separate expressions into blocks by newline"
           "foo\nbar\nbaz qux"
@@ -85,7 +94,7 @@ whileTests = [
     , Test "multiple statements"
            "while foo {2; 3}"
            [While foo [Expr $ Number 2, Expr $ Number 3]]
-    , Test "complex statements"
+    , SkipTest "complex statements"
            "while foo {bar 2; baz 3}"
            [While foo [Expr $ Apply bar $ Number 2, Expr $ Apply baz $ Number 3]]
     , Test "followed by other statement"
@@ -103,7 +112,7 @@ whileTests = [
                       , While bar $ expr $ Number 3
                       , Expr baz]]
   ]
-  , TestGroup "using whitespace" [
+  , SkipTestGroup "using whitespace" [
       Test "basic" "while foo\n  2"
            [While foo (expr $ Number 2)]
     , Test "multiple statements" "while foo\n  2\n  3"
@@ -129,6 +138,17 @@ whileTests = [
     ]
   ]
 
+forTests = TestGroup "For statements" tests where
+  tests =
+    [
+      Test "basic" "for foo in bar { baz }" [For foo bar [Expr baz]]
+    , Test "basic one-line" "for foo in bar do baz" [For foo bar [Expr baz]]
+    , Test "nested via one-line" "for foo in bar do for baz in qux do 1"
+      [For foo bar [For baz qux $ expr $ Number 1]]
+    ]
+
 main = runTests grab [ TestGroup "Expressions" expressionTests
+                     , TestGroup "Assignments" assignmentTests
                      , TestGroup "Blocks" blockTests
-                     , TestGroup "While statements" whileTests ]
+                     , TestGroup "While statements" whileTests
+                     , forTests ]
