@@ -230,9 +230,10 @@ pBody = try pBlock <|> (single <$> Expr <$> pExpr)
 pDefine = try $ pure Define <*> pExpr <* keysym "=" <*> pBody
 pAssign = try $ pure Assign <*> pExpr <* keysym ":=" <*> pBody
 
+getSame = try $ char '\n' >> same
 pStatementsNoWS = pStatement `sepEndBy1` (schar ';')
-pStatementsWS = pStatement `sepEndBy1` (char '\n' >> same)
-pStatements = pStatement `sepEndBy1` ((char '\n' >> same) <|> schar' ';')
+pStatementsWS = pStatement `sepEndBy1` getSame
+pStatements = pStatement `sepEndBy1` (getSame <|> schar' ';')
 pStatement = do
   lexeme $ choice $ [pDefine, pAssign, Expr <$> pExpr, pWhile]
 

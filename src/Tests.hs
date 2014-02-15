@@ -9,24 +9,31 @@ import Control.Monad
 import Control.Applicative
 import Control.Exception
 import Control.Monad.State
+import Data.Monoid
+import qualified Data.Map as M
+data TestResult = TestSuccess [Name]
+                | TestFailure [Name] String String String
+                | TestError [Name] String String
 
 type Name = String
 data TesterState = TesterState { indentLevel::Int
                                , spaceCount::Int
                                , groupNames::[Name]
-                               , successCount::Int
-                               , failCount::Int
-                               , errorCount::Int }
+                               , successes::[TestResult]
+                               , failures::[TestResult]
+                               , errors::[TestResult]
+                               , names::M.Map Name Int}
 type Tester = StateT TesterState IO
 data Test input result = Test Name input result
                        | TestGroup Name [Test input result]
 
 defaultState = TesterState { indentLevel = 0
-                           , spaceCount = 2
-                           , successCount = 0
-                           , errorCount = 0
-                           , failCount = 0
-                           , groupNames = [] }
+                           , spaceCount = 4
+                           , successes = []
+                           , errors = []
+                           , failures = []
+                           , groupNames = []
+                           , names = mempty }
 
 runTests :: (Eq result, Show input, Show result, Show error) =>
             (input -> Either error result) ->
@@ -50,58 +57,80 @@ runTest :: (Eq result, Show input, Show result, Show error) =>
            Tester ()
 runTest function count test = case test of
   TestGroup name tests -> do
-    putStrI ""
+    putStrI "| "
     addGroupName name
     groupName <- getGroupName
-    withColor Cyan $ withUL $ putStrLnI $ "Test Group " ++ groupName
+    withColor Cyan $ withUL $ putStrLn' $ "Test " ++ groupName
     upIndent >> runTests' function tests >> downIndent
     removeGroupName
-    putStrI ""
+    line
   Test name input expect -> do
     -- print the header, e.g. "Test 6 (test sky is blue): "
-    withColor Blue $ putStrI $ "Test " ++ show count
-    putStr' $ " (" ++ name ++ "): "
+    withColor Blue $ putStrI $ show count ++ ". "
+    putStr' $ name ++ ": "
     -- run the function on the input, one of three possibilities
     case function input of
       -- no errors, and result is what's expected
       Right result | result == expect -> do
-        addSuccess
+        addSuccess name
         withColor Green $ putStrLn' "PASSED!"
       -- no errors, but unexpected result
       Right result -> do
-        addFailure
-        withColor Magenta $ putStrLn' "FAILED!" >> putStrLnI "Input was:"
-        withIndent $ withColor Yellow $ printI input
-        withColor Magenta $ putStrLnI "Expected: "
-        withIndent $ withColor Yellow $ printI expect
-        withColor Magenta $ putStrLnI "Evaluated to: "
-        withColor Yellow $ printI result
+        addFailure name input expect result
+        withColor Magenta $ putStrLn' "FAILED!"
       -- errors occurred
-      Left err -> do
-        addError
-        withColor Red $ putStrLn' "ERROR!" >> putStrLnI "Input was:"
-        withColor Yellow $ printI input
-        withColor Red $ putStrLnI "Error message: "
-        withColor Yellow $ putStrLnI (show err ++ "\n")
+      Left message -> do
+        addError name input message
+        withColor Red $ putStrLn' "ERROR!"
 
 (!) = flip ($)
 (<!>) = flip (<$>)
 
+reportFailure (TestFailure names input expect result) = do
+  let name = intercalate " -> " names
+  withColor Magenta $ withUL $ putStrLnI name
+  upIndent
+  withColor Magenta $ putStrLnI "Input was:"
+  withIndent $ withColor Yellow $ putStrLnI input
+  withColor Magenta $ putStrLnI "Expected: "
+  withIndent $ withColor Yellow $ putStrLnI expect
+  withColor Magenta $ putStrLnI "Evaluated to: "
+  withIndent $ withColor Yellow $ putStrLnI result
+  downIndent
+
+reportError (TestError names input message) = do
+  let name = intercalate " -> " names
+  withColor Red $ withUL $ putStrLnI name
+  upIndent
+  withColor Red $ putStrLnI "Input was:"
+  withColor Yellow $ putStrLnI input
+  withColor Red $ putStrLnI "Error message: "
+  withColor Yellow $ putStrLnI (message ++ "\n")
+  downIndent
+
+report :: Tester ()
 report = do
-  s <- get <!> successCount
-  f <- get <!> failCount
-  e <- get <!> errorCount
+  s <- length <$> getSuccesses
+  fails <- getFailures
+  errs <- getErrors
+  let (f, e) = (length fails, length errs)
   let tot = s + f + e
-  putStrLn' $ "Total tests: " ++ show tot
   let tot'= (fromIntegral tot)::Double
-  let rep n t c = do
+  line
+  withColor Cyan $ putStrLn' $ concat $ replicate 10 "=--="
+  withColor Cyan $ putStrLn' $ "Total tests: " ++ show tot
+  let rep n testType c = do
         let n' = (fromIntegral n)::Double
-        withColor c $ putStrLn' $
-                       concat $ [show n, " tests ", t, " (",
-                                 show (100 * n' / tot'), "%)"]
+        let tests = if n == 1 then "1 test " else  show n ++ " tests "
+        let percent = " (" ++ show (round $ 100 * n' / tot') ++ "%)"
+        withColor c $ putStrLn' $ tests ++ testType ++ percent
   rep s "passed" Green
   rep f "failed" Magenta
   rep e "had errors" Red
+  line
+  when (f > 0) $ putStrLn' "Failures:" >> forM_ (reverse fails) reportFailure
+  when (e > 0) $ putStrLn' "Errors:" >> forM_ (reverse errs) reportError
+  withColor Cyan $ putStrLn' $ concat $ replicate 10 "=--="
 
 indent :: String -> Tester String
 indent str = do lev <- getILevel
@@ -111,6 +140,7 @@ indent str = do lev <- getILevel
 withIndent :: Tester a -> Tester a
 withIndent x = upIndent >> x >>= \result -> downIndent >> return result
 
+line = putStrLn' ""
 putStrLn', putStr', putStrLnI, putStrI :: String -> Tester ()
 putStrLn' s = lift (putStrLn s) >> flush
 putStr' s = lift (putStr s) >> flush
@@ -118,12 +148,28 @@ putStrLnI str = indent str >>= putStrLn'
 putStrI str = indent str >>= putStr'
 printI :: Show a => a -> Tester ()
 printI = putStrLnI . show
+getSuccesses, getFailures, getErrors :: Tester [TestResult]
+getSuccesses = get <!> successes
+getFailures = get <!> failures
+getErrors = get <!> errors
 
 getILevel = indentLevel <$> get
 getNSpaces = spaceCount <$> get
-addSuccess = modify $ \s -> s { successCount = successCount s + 1 }
-addFailure = modify $ \s -> s { failCount = failCount s + 1 }
-addError = modify $ \s -> s { errorCount = errorCount s + 1 }
+addSuccess name = do
+  gNames <- getGroupNames
+  let names = reverse $ name : gNames
+  modify $ \s -> s {successes = TestSuccess [name] : successes s}
+addFailure name input expect result = do
+  gNames <- getGroupNames
+  let names = reverse $ name : gNames
+  let f = TestFailure names (show input) (show expect) (show result)
+  modify $ \s -> s { failures = f : failures s }
+addError name input message = do
+  gNames <- getGroupNames
+  let names = reverse $ name : gNames
+  let e = TestError names (show input) (show message)
+  modify $ \s -> s { errors = e : errors s }
+getGroupNames = get <!> groupNames
 getGroupName = get <!> groupNames <!> reverse <!> intercalate " -> "
 addGroupName name = modify (\s -> s { groupNames = name : groupNames s } )
 removeGroupName = modify (\s -> s {groupNames = tail $ groupNames s})
@@ -151,10 +197,10 @@ withUL action = do
 
 sampleTests = TestGroup "Division"
   [
-    Test "division 1" (10, 2) 5 -- passes
-  , Test "division 2" (5, 5) 1 -- passes
-  , Test "division 3" (5, 0) 0 -- error
-  , Test "division 4" (14, 7) 2 -- wrong
+    Test "division" (10, 2) 5 -- passes
+  , Test "division" (5, 5) 1 -- passes
+  , Test "division" (5, 0) 0 -- error
+  , Test "division" (14, 7) 2 -- wrong
   ]
 
 stupidDiv :: (Int, Int) -> Either String Int

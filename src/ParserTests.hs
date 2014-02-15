@@ -69,55 +69,64 @@ blockTests = [
   ]
 
 whileTests = [
-    Test "while block via 'do'" "while foo do bar;"
-         [While foo (expr bar)]
-  , Test "while block via 'do' with following expression"
-         "while foo do bar\nbaz"
-         [While foo (expr bar), Expr baz]
-  , Test "while block via 'do' with following expression, split by semicolon"
-         "while foo do bar; baz"
-         [While foo (expr bar), Expr baz]
-  , Test "while block without whitespace" "while foo {2}"
-         [While foo (expr $ Number 2)]
-  , Test "while block without whitespace, multiple statements"
-         "while foo {2; 3}"
-         [While foo [Expr $ Number 2, Expr $ Number 3]]
-  , Test "while block without whitespace, complex statements"
-         "while foo {bar 2; baz 3}"
-         [While foo [Expr $ Apply bar $ Number 2, Expr $ Apply baz $ Number 3]]
-  , Test "while block with whitespace" "while foo\n  2"
-         [While foo (expr $ Number 2)]
-  , Test "while block with whitespace, multiple statements" "while foo\n  2\n  3"
-         [While foo [Expr $ Number 2, Expr $ Number 3]]
-  , Test "while block with whitespace, trailing newline" "while foo\n  2\n"
-         [While foo (expr $ Number 2)]
-  , Test "while block with binary condition" "while foo < 2\n  bar 3\n"
-         [While (Binary "<" (foo, Number 2)) (expr $ Apply bar (Number 3))]
-  , Test "while statement followed by other statement"
-          "while foo\n  bar\nbaz"
-          [While foo $ expr bar, Expr baz]
-  , Test "nested while statements 1"
-          "while foo\n  while bar\n    3\n"
-          [ While foo [While bar $ expr $ Number 3]]
-  , Test "nested while statements 2"
-         "while foo\n  2\n  while bar\n    3\n  baz"
-         [While foo [Expr $ Number 2
+    TestGroup "single statements" [
+      Test "while block via 'do'" "while foo do bar;"
+           [While foo (expr bar)]
+    , Test "while block via 'do' with following expression"
+           "while foo do bar\nbaz"
+           [While foo (expr bar), Expr baz]
+    , Test "while block via 'do' with following expression, split by semicolon"
+           "while foo do bar; baz"
+           [While foo (expr bar), Expr baz]
+  ]
+  , TestGroup "using curly braces" [
+      Test "basic" "while foo {2}"
+           [While foo (expr $ Number 2)]
+    , Test "multiple statements"
+           "while foo {2; 3}"
+           [While foo [Expr $ Number 2, Expr $ Number 3]]
+    , Test "complex statements"
+           "while foo {bar 2; baz 3}"
+           [While foo [Expr $ Apply bar $ Number 2, Expr $ Apply baz $ Number 3]]
+    , Test "followed by other statement"
+           "while foo { bar }\nbaz"
+           [While foo $ expr bar, Expr baz]
+    , Test "followed by other statement, using semicolon"
+           "while foo { bar }; baz"
+           [While foo $ expr bar, Expr baz]
+    , Test "nested while statements 1"
+           "while foo { while bar {3}}"
+           [ While foo [While bar $ expr $ Number 3]]
+    , Test "nested while statements 2"
+           "while foo {2; while bar{ 3}; baz}"
+           [While foo [Expr $ Number 2
+                      , While bar $ expr $ Number 3
+                      , Expr baz]]
+  ]
+  , TestGroup "using whitespace" [
+      Test "basic" "while foo\n  2"
+           [While foo (expr $ Number 2)]
+    , Test "multiple statements" "while foo\n  2\n  3"
+           [While foo [Expr $ Number 2, Expr $ Number 3]]
+    , Test "trailing newline" "while foo\n  2\n"
+           [While foo (expr $ Number 2)]
+    , Test "binary condition" "while foo < 2\n  bar 3\n"
+           [While (Binary "<" (foo, Number 2)) (expr $ Apply bar (Number 3))]
+    , Test "followed by other statement"
+           "while foo\n  bar\nbaz"
+           [While foo $ expr bar, Expr baz]
+    , Test "followed by two other statements"
+           "while foo\n  bar\nbaz\nqux"
+           [While foo $ expr bar, Expr baz, Expr qux]
+    , Test "nested while statements 1"
+           "while foo\n  while bar\n    3\n"
+           [ While foo [While bar $ expr $ Number 3]]
+    , Test "nested while statements 2"
+           "while foo\n  2\n  while bar\n    3\n  baz"
+           [While foo [Expr $ Number 2
                     , While bar $ expr $ Number 3
                     , Expr baz]]
-  , Test "while statement with braces followed by other statement"
-         "while foo { bar }\nbaz"
-         [While foo $ expr bar, Expr baz]
-  , Test "while statement with braces followed by other statement, using semicolon"
-         "while foo { bar }; baz"
-         [While foo $ expr bar, Expr baz]
-  , Test "nested while statements with braces 1"
-         "while foo { while bar {3}}"
-         [ While foo [While bar $ expr $ Number 3]]
-  , Test "nested while statements with braces 2"
-         "while foo {2; while bar{ 3}; baz}"
-         [While foo [Expr $ Number 2
-                    , While bar $ expr $ Number 3
-                    , Expr baz]]
+    ]
   ]
 
 main = runTests grab [ TestGroup "Expressions" expressionTests
