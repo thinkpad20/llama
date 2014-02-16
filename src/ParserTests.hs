@@ -7,13 +7,21 @@ import Parser (grab)
 
 expr e = [Expr e]
 (foo, bar, baz, qux) = (Var "foo", Var "bar", Var "baz", Var "qux")
+(fooT, barT, bazT, quxT) = ( TConst "Foo", TConst "Bar"
+                           , TConst "Baz", TConst "Qux")
+arrayS exprs = expr $ Array $ ArrayLiteral exprs
+arrayE exprs = Array $ ArrayLiteral exprs
+rangeS start stop = ArrayRange start stop ! Array ! expr
+plus a b = Binary "+" (a, b)
+times a b = Binary "*" (a, b)
+(one, two, three) = (Number 1, Number 2, Number 3)
 
 expressionTests = TestGroup "Expressions" 
   [
-    Test "number" "1" (expr $ Number 1)
+    Test "number" "1" (expr $ one)
   , Test "variable" "foo" (expr foo)
-  , Test "binary" "1 + 2" (expr $ Binary "+" (Number 1, Number 2))
-  , Test "binary 2" "1 + foo" (expr $ Binary "+" (Number 1, foo))
+  , Test "binary" "1 + 2" (expr $ plus one two)
+  , Test "binary 2" "1 + foo" (expr $ plus one foo)
   , Test "observes precedence rules 1"
           "foo + bar * baz"
           (expr $ Binary "+" (foo, Binary "*" (bar, baz)))
@@ -41,7 +49,7 @@ expressionTests = TestGroup "Expressions"
     , Test "dot is higher precedence than apply 2"
            "foo.baz bar"
            (expr $ Apply (Dot foo baz) bar)
-    , Test "dots work on numbers" "1 . foo" (expr $ Dot (Number 1) foo)
+    , Test "dots work on numbers" "1 . foo" (expr $ Dot one foo)
     , Test "dots work on decimals" "2.34 . foo" (expr $ Dot (Number 2.34) foo)
     ]
   , TestGroup "Tuples" $ [
@@ -54,7 +62,7 @@ expressionTests = TestGroup "Expressions"
     , Test "nested tuples 2" "((bar, baz, qux), foo)"
             (expr $ Tuple [Tuple [bar, baz, qux], foo])
     , Test "tuples with expressions inside" "(foo + 1, bar baz)"
-            (expr $ Tuple [Binary "+" (foo, Number 1), Apply bar baz])
+            (expr $ Tuple [Binary "+" (foo, one), Apply bar baz])
     , Test "tuples as arguments" "foo(bar, baz)"
             (expr $ Apply foo $ Tuple [bar, baz])
     , Test "tuples as arguments 2" "foo()bar"
@@ -69,9 +77,11 @@ arrayTests = TestGroup "Arrays"
            (arrayS [foo, bar, baz])
     , Test "empty array" "[]" (arrayS [])
     , Test "with complex expressions" "[foo * 1 + bar, baz (qux foo.bar)]"
-           (arrayS [ Binary "+" (Binary "*" (foo, Number 1), bar)
+           (arrayS [ Binary "+" (Binary "*" (foo, one), bar)
                 , Apply baz (Apply qux (Dot foo bar))])
     , Test "nested" "[foo, [bar, baz]]" (arrayS [foo, arrayE [bar, baz]])
+    , Test "use as arguments" "foo [1, bar, baz]"
+           (expr $ Apply foo $ arrayE [one, bar, baz])
     ]
   , TestGroup "ranges" [
       Test "make array ranges" "[foo..bar]" (rangeS foo bar)
@@ -95,9 +105,6 @@ arrayTests = TestGroup "Arrays"
            "foo{!bar}{!baz}" (expr $ Ref (Ref foo bar) baz)
     ]
   ]
-  where arrayS exprs = expr $ Array $ ArrayLiteral exprs
-        arrayE exprs = Array $ ArrayLiteral exprs
-        rangeS start stop = ArrayRange start stop ! Array ! expr
 
 typingTests = TestGroup "Typed expressions"
   [
@@ -105,26 +112,61 @@ typingTests = TestGroup "Typed expressions"
          (expr $ Typed foo (TConst "Foo"))
   , Test "typing with 2nd order type" "bar: Option Foo"
          (expr $ Typed bar (TApply (TConst "Option") (TConst "Foo")))
+  , Test "typing with type tuple" "foo: (Foo, Bar)"
+         (expr $ Typed foo (TTuple [fooT, barT]))
+  , Test "a typed tuple" "(foo: Foo, bar: Bar)"
+         (expr $ Tuple [Typed foo fooT, Typed bar barT])
   ]
 
 functionTests = TestGroup "Functions"
   [
     TestGroup "Lambdas" [
       Test "should make a lambda"
-           "foo: Foo => foo bar"
-           (expr $ Lambda typedFoo $ expr $ Binary "+" (foo, Number 1))
+           "foo=> foo + 1"
+           (eLambda foo $ expr $ Binary "+" (foo, one))
+    , Test "should make a lambda with a typed argument"
+           "foo: Foo => foo + 1"
+           (eLambda (Typed foo fooT) $ expr $ Binary "+" (foo, one))
+    , Test "should make a lambda with a tuple"
+           "(foo: Foo, bar: Bar) => foo bar"
+           (eLambda tup1 (expr $ Apply foo bar))
+    , Test "should make a lambda with a list"
+           "[] => [1..10]"
+           (eLambda (arrayE []) (rangeS one (Number 10)))
+    , Test "should make a lambda with multiple statements"
+           "foo => { bar foo; foo + 1}"
+           (eLambda foo [Expr $ Apply bar foo, Expr $ Binary "+" (foo, one)])
+    , Test "should make nested lambdas"
+           "foo => bar => foo + bar"
+           (eLambda foo (eLambda bar (expr $ plus foo bar)))
+    , Test "should be able to be used in definitions"
+           "foo = bar => bar + 1"
+           [Define foo (eLambda bar (expr $ plus bar $ one))]
+    , Test "should be able to be used in assignments"
+           "foo := bar: Baz => qux bar"
+           [Assign foo (eLambda (Typed bar bazT) (expr $ Apply qux bar))]
+    , Test "should be able to string alternatives"
+           "1 => 2 | 2 => 3"
+           (eLambdas [(one, expr two), (two, expr three)])
+    , Test "should be able to handle complex lambdas"
+           "(1 => 2 | 2 => 3 | foo => bar baz) 3"
+           (expr $ Apply (Lambda [ (one, expr two)
+                                 , (two, expr three)
+                                 , (foo, expr $ Apply bar baz)]) three)
     ]
   ]
-  where typedFoo = Typed foo (TConst "Foo")
+  where tup1 = Tuple [Typed foo fooT, Typed bar barT]
+        eLambda arg body = expr $ Lambda [(arg, body)]
+        eLambdas = expr . Lambda
 
 assignmentTests = TestGroup "Assignments" 
   [
     Test "can make definitions" "foo = bar" [Define foo $ expr bar]
   , Test "can make assignments" "foo := bar" [Assign foo $ expr bar]
   , Test "can make complex definitions" "foo = bar + baz"
-         [Define foo $ expr $ Binary "+" (bar, baz)]
-  , Test "can make complex definitions 2" "foo bar := baz * qux foo"
-         [Assign (Apply foo bar) $ expr $ Binary "*" (baz, Apply qux foo)]
+         [Define foo $ expr $ bar `plus` baz]
+  , Test "can make complex assignments" "foo bar := baz * qux foo"
+         [Assign (Apply foo bar) $ expr $ baz `times` Apply qux foo]
   ]
 
 blockTests = TestGroup "Blocks" 
@@ -208,7 +250,7 @@ forTests = TestGroup "For statements" tests where
       Test "basic" "for foo in bar { baz }" [For foo bar [Expr baz]]
     , Test "basic one-line" "for foo in bar do baz" [For foo bar [Expr baz]]
     , Test "nested via one-line" "for foo in bar do for baz in qux do 1"
-      [For foo bar [For baz qux $ expr $ Number 1]]
+      [For foo bar [For baz qux $ expr $ one]]
     ]
 
 main = runTests grab [ expressionTests

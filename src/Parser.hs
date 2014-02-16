@@ -46,7 +46,11 @@ pIdent firstChar = check $ do
   return $ first : rest ++ bangs
 
 pVar :: Parser Expr
-pVar = Var <$> (pIdent $ oneOf $ ['a'..'z'] ++ "_")
+pVar = do
+  var <- Var <$> pIdent (oneOf $ ['a'..'z'] ++ "_")
+  option var $ do
+    typ <- keysym ":" *> pType
+    return $ Typed var typ
 
 pDouble :: Parser Double
 pDouble = lexeme $ do
@@ -61,7 +65,7 @@ pType = pTApply
 pTTerm = choice [pTVar, pTConst, pTTuple]
 pTVar = TVar <$> pIdent lower
 pTConst = TConst <$> pIdent upper
-pTTuple = TTuple <$ schar '(' <*> many pType <* schar ')'
+pTTuple = TTuple <$ schar '(' <*> sepBy pType (schar ',') <* schar ')'
 pTApply = chainl1 pTTerm (pure TApply)
 
 a <$$ f = pure a <*> f
@@ -69,12 +73,17 @@ a <$$ f = pure a <*> f
 pTypedVar :: Parser Expr
 pTypedVar = try $ Typed <$$ pVar <* keysym ":" <*> pType
 
+pLambda = try $ do
+  argsBodies <- pArgBody `sepBy1` (keysym "|")
+  return $ Lambda argsBodies
+
+pArgBody = (,) <$$ pTerm <* keysym "=>" <*> pBody
+
 pParens :: Parser Expr
-pParens = schar '(' *> (lambda <|> expr) <* schar ')'
+pParens = schar '(' *> expr <* schar ')'
   where expr = pExpr `sepBy` schar ',' >>= \case
                  [e] -> return e
                  es  -> return $ Tuple es
-        lambda = pLambda
 
 pString :: Parser String
 pString = char '"' >> pString'
@@ -113,7 +122,7 @@ pBinary = pLogical where
     getOp = op >>= \name -> return (\e1 e2 -> Binary name (e1, e2))
   fold first toTry = foldl (pBinOp chainl1) first . map' where
     map' = map (if toTry then try . sstring else sstring)
-  pLogical = fold pComp False ["&&", "||"]
+  pLogical = fold pComp True ["&&", "||"]
   pComp = fold pAdd True ["<=", ">=", "<", ">", "==", "!="]
   pAdd = fold pMult False ["+", "-"]
   pMult = fold pExp False ["*", "/", "%"]
@@ -147,7 +156,6 @@ pDotted = pUnary >>= parseRest where
 
 pTerm = lexeme $ choice [ Number <$> pDouble
                         , String <$> pString
-                        , pTypedVar
                         , pVar
                         , pParens
                         , pArray ]
@@ -164,9 +172,21 @@ pFor = For <$ keyword "for" <*> pExpr <* keyword "in"
            <*> pExpr <*> pBlock
 
 pBody = try pBlock <|> (single <$> Expr <$> pExpr)
-pDefine = try $ Define <$$ pExpr <* keysym "=" <*> pBody
+pDefine = try $ do
+  var <- pExpr
+  body <- keysym "=" *> pBody
+  create var body
+  where
+    create var body = case var of
+      Var _ -> return $ Define var body
+      Typed (Var _) _ -> return $ Define var body
+      Apply name@(Var _) arg -> mkLambda name arg body
+      Apply name@(Typed _ _) arg -> mkLambda name arg body
+      otherwise -> unexpected $ "Illegal definition of `" ++ show var ++ "`"
+    mkLambda name arg body = return $
+      Define name $ [Expr $ Lambda [(arg, body)]]
+
 pAssign = try $ Assign <$$ pExpr <* keysym ":=" <*> pBody
-pLambda = try $ Lambda <$$ pTerm <* keysym "=>" <*> pBody
 
 getSame = same
 pStatementsNoWS = pStatement `sepEndBy1` (schar ';')
@@ -176,7 +196,7 @@ pStatement = do
   lexeme $ choice $ [pDefine, pAssign, Expr <$> pExpr, pWhile, pFor]
 
 pExpr :: Parser Expr
-pExpr = lexeme $ choice [ pBinary ]
+pExpr = lexeme $ choice [ pLambda, pBinary ]
 
 testE = parse pExpr
 testS = parse pStatementsWS

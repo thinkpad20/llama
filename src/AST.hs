@@ -12,7 +12,7 @@ data Expr = Var Name
           | Dot Expr Expr
           | Apply Expr Expr
           | Unary String Expr
-          | Lambda Expr Block
+          | Lambda [(Expr, Block)]
           | Binary String (Expr, Expr)
           | Tuple [Expr]
           | Array ArrayLiteral
@@ -55,7 +55,9 @@ instance Show Expr where
     Array (ArrayLiteral exprs) -> '[' : (intercalate ", " $ map show exprs) ++ "]"
     Array (ArrayRange start stop) -> '[' : show start ++ ".." ++ show stop ++ "]"
     Ref object index -> show' object ++ "{" ++ show index ++ "}"
-    Lambda arg body -> show' arg ++ " => " ++ show'' body
+    Lambda [(arg, body)] -> show' arg ++ " => " ++ show'' body
+    Lambda abs -> let lams = map (\(a, b) -> Lambda [(a, b)]) abs in
+                  intercalate " | " $ map show lams
     Typed expr typ -> show' expr ++ ": " ++ show typ
     where
       show'' [stmt] = show stmt
@@ -65,7 +67,7 @@ instance Show Expr where
         Dot _ _ -> parens
         Binary _ _ -> parens
         Unary _ _ ->  parens
-        Lambda _ _ -> parens
+        Lambda _ -> parens
         _ -> show expr
         where parens = "(" ++ show expr ++ ")"
 
