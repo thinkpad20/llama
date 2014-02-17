@@ -34,6 +34,10 @@ So we can know everything we need to know about a function if we have:
                    , baz: Index 1 (Index 0 ArgRef)
                    , qux: Index 1 ArgRef }
     And the arg type of the function would be ((Number, String), Number)
+
+  BUT another view is, we can check types statically, and there's no need to
+  keep those types afterwards, because we already will have determined that
+  we are passing in the right types! 
 -}
 
 data Value = VNumber Double
@@ -44,11 +48,16 @@ data Value = VNumber Double
            | VArg ArgRef
            deriving (Show, Eq)
 
+-- | The evaluated form of a Statement. To be determined.
 data Instruction = Instruction deriving (Show)
 
 -- | References to as-yet-unset values, as in function args
 data ArgRef = ArgRef -- meaning "the argument of this function"
             | Index Int ArgRef -- meaning an index into the argument
+
+data FuncEvalEnv = FuncEvalEnv {argument::Value, nmap::M.Map Name Value}
+-- might want to abstract out a stack frame?
+
 
 type SymbolTable = [M.Map Name Value]
 data EvalState = EvalState {table::SymbolTable}
@@ -65,24 +74,10 @@ pushWith name val = modify $ \s -> s {table = M.singleton name val : table s}
 getVarName :: Expr -> Eval Name
 getVarName = undefined
 
-typeOf :: Value -> Eval Type
-typeOf val = case val of
-  VNumber _ -> return $ TConst "Number"
-  VString _ -> return $ TConst "String"
-  VArray [] -> return $ TConst "[]" `TApply` TVar "a"
-  VArray (v:vals) -> do
-    (t:types) <- mapM typeOf (v:vals)
-    -- later, we'll relax this to allow disparate types unified by interface
-    case all (==t) types of
-      True -> return $ t:types
-      False -> throwError $ "Multiple types found in the same array"
-  VTuple vals -> TTuple <$> mapM typeOf vals
-  VFunction typ body nmap -> do
-    retType <- getReturnType typ body nmap -- catch errors here
-                                           -- passing in the type in case
-                                           -- of argument references
-    return $ TFunction typ retType
-
+-- | takes a list of instructions and an environment to operate in,
+-- and evaluates each instruction. 
+evalFunc :: [Instruction] -> FuncEvalEnv -> Eval Value
+evalFunc = undefined
 
 eExpr :: Expr -> Eval Value
 eExpr expr = case expr of
@@ -90,12 +85,15 @@ eExpr expr = case expr of
   String s -> return $ VString s
   Dot a b -> eExpr $ Apply b a
   Apply func arg -> do
-    funcVal <- eval func
+    funcVal <- eExpr func
     -- we should be able to get the type of the argument here
     -- and the type of the function
     -- so we can do type checking right away
+    argType <- typeOf arg
     case funcVal of
-      Lambda [()]
-    argVal <- eval arg
+      VFunction typ insts env | typ == argType -> do
+        argVal <- eval arg
+        result <- eval insts ()
+
     pushWith varName argVal
     eExpr a <* pop

@@ -15,13 +15,20 @@ import qualified Data.Map as M
 class Typable a where
   typeOf :: a -> Typing Type
 
-type TypingError = [String]
+newtype TypingError = TE [String]
 data TypingState = TypingState { table ::[M.Map Name Type]
-                               , aliases :: M.Map Name Type } deriving (Show)
+                               , aliases :: M.Map Name Type }
 type Typing = ErrorT TypingError (StateT TypingState IO)
 
 instance Error TypingError where
-  strMsg = pure
+  strMsg = TE . pure
+
+instance Show TypingError where
+  show (TE msgs) = msgs ! concatMap ("\n  "++) ! (++ "\n")
+
+instance Show TypingState where
+  show state = concat ["Table: ", show $ init $ table state, ", "
+                      , "Aliases: ", show $ aliases state]
 
 --instance Show TypingState where
 --  show state = "Typings: " ++ show (init $ table state)
@@ -67,23 +74,24 @@ addTypeAlias name typ =
   modify $ \s -> s { aliases = M.insert name typ (aliases s)}
 
 instance Typable Expr where
-  typeOf expr = case expr of
-    Number _ -> return numT
-    String _ -> return strT
-    Var name -> lookupAndError name
-    Constructor name -> lookupAndError name
-    Array arr@(ArrayLiteral _) -> typeOfArrayLiteral typeOf arr
-    Tuple vals -> TTuple <$> mapM typeOf vals
-    Lambda argsAndBodies -> do
-      -- get all of the arguments and bodies
-      t:types <- mapM typeOf argsAndBodies
-      -- make sure they're all the same
-      case all (==t) types of
-        True -> return t
-        False -> throwError1 "All alternatives in a lambda must have the same type"
-    Apply a b -> typeOfApply typeOf a b `catchError` err
-    _ -> error $ "we can't handle expression `" ++ show expr ++ "'"
-    where err = addError' ["When typing the expression `", show expr, "'"]
+  typeOf expr = go `catchError` err where
+    go = case expr of
+      Number _ -> return numT
+      String _ -> return strT
+      Var name -> lookupAndError name
+      Constructor name -> lookupAndError name
+      Array arr@(ArrayLiteral _) -> typeOfArrayLiteral typeOf arr
+      Tuple vals -> TTuple <$> mapM typeOf vals
+      Lambda argsAndBodies -> do
+        -- get all of the arguments and bodies
+        t:types <- mapM typeOf argsAndBodies
+        -- make sure they're all the same
+        case all (==t) types of
+          True -> return t
+          False -> throwError1 "All alternatives in a lambda must have the same type"
+      Apply a b -> typeOfApply typeOf a b
+      _ -> error $ "we can't handle expression `" ++ show expr ++ "'"
+    err = addError' ["When typing the expression `", show expr, "'"]
 instance Show (M.Map Name Type) where
   show mp = "{" ++ intercalate ", " pairs ++ "}" where
     pairs = mp ! M.toList ! map (\(n, t) -> n ++ ": " ++ show t)
@@ -115,8 +123,9 @@ litTypeOf expr = case expr of
 
 instance Typable Block where
   -- Returns the type of the last statement. Operates in a new context.
-  typeOf block = push *> go <* pop
+  typeOf block = push *> go `catchError` err <* pop
     where 
+      err = addError' ["When typing the block `", show block, "'"]
       go = case block of
         [] -> return $ TTuple [] -- shouldn't encounter this, but...
         Break:_ -> return $ TTuple []
@@ -134,58 +143,60 @@ instance Typable Block where
       isReturn _ = False
 
 instance Typable Statement where
-  typeOf statement = case statement of
-    Expr expr -> typeOf expr
-    If cond tBranch fBranch -> do
-      cType <- typeOf cond
-      tType <- typeOf tBranch
-      fType <- typeOf fBranch
-      case (cType == boolT, tType == fType) of
-        (True, True) -> return tType
-        -- later we might want to add a "boolable" class
-        (False, _) -> throwErrorC [ "Condition type is `", show cType
-                                  , "', but it must be a Bool"]
-        (_, False) -> throwErrorC [ "True branch in if statement "
-                                  , "has type `", show tType, "' is not"
-                                  , " the same type as False branch"
-                                  , " of type `", show fType, "'"]
-    Define (Var name) block -> 
-      lookup1 name >>= \case
-        Nothing -> typeOf block >>= setType name
-        Just typ -> throwErrorC ["'", name, "' is already defined in scope"]
-    Define (Typed (Var name) typ) block ->
-      lookup1 name >>= \case
-        Just typ -> throwErrorC ["'", name, "' is already defined in scope"]
-        Nothing -> do
-          typ' <- typeOf block
-          case typ == typ' of
-            True -> setType name typ >> return typ
-            False -> throwErrorC ["Asserted type of '", name
-                                 , "' to be `", show typ, "', but "
-                                 , "inferred as type `", show typ', "'"]
-    Assign expr block -> do
-      exprT <- typeOf expr
-      -- check mutability of exprT here?
-      blockT <- typeOf block
-      case exprT == blockT of
-        True -> return exprT
-        False -> throwErrorC ["Attempted to assign a value of type `"
-                             , show blockT, "' to an expression of "
-                             , "type `", show exprT, "'"]
-    While cond block -> do
-      condT <- typeOf cond
-      case condT == boolT of
-        True -> typeOf block
-        False -> throwErrorC ["Type of while condition must be a bool, "
-                             , "but instead it's a `", show condT, "'"]
-    For (Var name) container block -> do
-      -- need to make sure container contains things...
-      contT <- typeOf container
-      -- we probably want to do this via traits instead of this, but eh...
-      case contT of
-        TApply typ typ' -> setType name typ' >> typeOf block
-        typ -> throwErrorC ["Non-container type `", show typ
-                           , "' used in a for loop"]
+  typeOf statement = go `catchError` err where
+    err = addError' ["When typing the statement `", show statement, "'"]
+    go = case statement of
+      Expr expr -> typeOf expr
+      If cond tBranch fBranch -> do
+        cType <- typeOf cond
+        tType <- typeOf tBranch
+        fType <- typeOf fBranch
+        case (cType == boolT, tType == fType) of
+          (True, True) -> return tType
+          -- later we might want to add a "boolable" class
+          (False, _) -> throwErrorC [ "Condition type is `", show cType
+                                    , "', but it must be a Bool"]
+          (_, False) -> throwErrorC [ "True branch in if statement "
+                                    , "has type `", show tType, "' is not"
+                                    , " the same type as False branch"
+                                    , " of type `", show fType, "'"]
+      Define (Var name) block -> 
+        lookup1 name >>= \case
+          Nothing -> typeOf block >>= setType name
+          Just typ -> throwErrorC ["'", name, "' is already defined in scope"]
+      Define (Typed (Var name) typ) block ->
+        lookup1 name >>= \case
+          Just typ -> throwErrorC ["'", name, "' is already defined in scope"]
+          Nothing -> do
+            typ' <- typeOf block
+            case typ == typ' of
+              True -> setType name typ >> return typ
+              False -> throwErrorC ["Asserted type of '", name
+                                   , "' to be `", show typ, "', but "
+                                   , "inferred as type `", show typ', "'"]
+      Assign expr block -> do
+        exprT <- typeOf expr
+        -- check mutability of exprT here?
+        blockT <- typeOf block
+        case exprT == blockT of
+          True -> return exprT
+          False -> throwErrorC ["Attempted to assign a value of type `"
+                               , show blockT, "' to an expression of "
+                               , "type `", show exprT, "'"]
+      While cond block -> do
+        condT <- typeOf cond
+        case condT == boolT of
+          True -> typeOf block
+          False -> throwErrorC ["Type of while condition must be a bool, "
+                               , "but instead it's a `", show condT, "'"]
+      For (Var name) container block -> do
+        -- need to make sure container contains things...
+        contT <- typeOf container
+        -- we probably want to do this via traits instead of this, but eh...
+        case contT of
+          TApply typ typ' -> setType name typ' >> typeOf block
+          typ -> throwErrorC ["Non-container type `", show typ
+                             , "' used in a for loop"]
 
 getTable = get <!> table
 
@@ -222,14 +233,14 @@ lookupAndError name = lookup name >>= \case
   Nothing -> throwErrorC ["Variable '", name, "' not defined in scope"]
 
 throwErrorC = throwError1 . concat
-throwError1 = throwError . pure
-addError msg msgs = throwError $ msg : msgs
+throwError1 = throwError . TE . pure
+addError msg (TE msgs) = throwError $ TE $ msg : msgs
 addError' = addError . concat
 
 builtIns = M.fromList [ ("+", nnn), ("-", nnn), ("*", nnn), ("/", nnn)
                       , ("%", nnn), (">", nnb), ("<", nnb), (">=", nnb)
                       , ("<=", nnb), ("==", nnb), ("!=", nnb)
-                      , ("print", numT ==> unitT)
+                      , ("print", TVar "a" ==> unitT)
                       , ("Just", TVar "a" ==> TApply (TConst "Maybe") (TVar "a"))
                       , ("Nothing", TApply (TConst "Maybe") (TVar "a")) ]
   where nnn = numT ==> numT ==> numT

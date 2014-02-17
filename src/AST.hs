@@ -55,7 +55,7 @@ instance Show Expr where
     Apply (Apply (Var op) e1) e2
       | isSymbol op -> show' e1 ++ " " ++ op ++ " " ++ show' e2
     Apply (Var "~") e -> "-" ++ show' e
-    Apply (Var op) e | isSymbol op ->  op ++ show' e
+    Apply (Var op) e | isSymbol op ->  op ++ " " ++ show' e
     Apply e1 e2 -> show' e1 ++ " " ++ show' e2
     Tuple es -> "(" ++ (intercalate "," . map show) es ++ ")"
     Array (ArrayLiteral exprs) -> '[' : (intercalate ", " $ map show exprs) ++ "]"

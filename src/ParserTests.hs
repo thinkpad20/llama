@@ -1,4 +1,4 @@
-module ParserTests where
+module ParserTests (doTests) where
 
 import Common
 import Tests
@@ -12,32 +12,45 @@ expr e = [Expr e]
 arrayS exprs = expr $ Array $ ArrayLiteral exprs
 arrayE exprs = Array $ ArrayLiteral exprs
 rangeS start stop = ArrayRange start stop ! Array ! expr
-plus a b = Binary "+" (a, b)
-times a b = Binary "*" (a, b)
+plus a b = binary "+" a b
+times a b = binary "*" a b
+minus a b = binary "-" a b
+divide a b = binary "/" a b
+expon a b =  binary "^" a b
+lt a b =  binary "<" a b
 (one, two, three) = (Number 1, Number 2, Number 3)
 
 expressionTests = TestGroup "Expressions" 
   [
-    Test "number" "1" (expr $ one)
+    Test "number" "1" (expr one)
   , Test "variable" "foo" (expr foo)
-  , Test "binary" "1 + 2" (expr $ plus one two)
-  , Test "binary 2" "1 + foo" (expr $ plus one foo)
-  , Test "observes precedence rules 1"
-          "foo + bar * baz"
-          (expr $ Binary "+" (foo, Binary "*" (bar, baz)))
-  , Test "observes precedence rules 2"
-          "foo * bar + baz"
-          (expr $ Binary "+" (Binary "*" (foo, bar), baz))
-  , Test "observes associativity rules 1"
-          "foo - bar - baz"
-          (expr $ Binary "-" (Binary "-" (foo, bar), baz))
-  , Test "observes associativity rules 2"
-          "foo ^ bar ^ baz"
-          (expr $ Binary "^" (foo, Binary "^" (bar, baz)))
+  , TestGroup "binary operators" [
+      Test "binary" "1 + 2" (expr $ plus one two)
+    , Test "binary 2" "1 + foo" (expr $ plus one foo)
+    , Test "observes precedence rules 1"
+            "foo + bar * baz"
+            (expr $ plus foo (times bar baz))
+    , Test "observes precedence rules 2"
+            "foo * bar + baz"
+            (expr $ plus (times foo bar) baz)
+    , Test "observes associativity rules 1"
+            "foo - bar - baz"
+            (expr $ minus (minus foo bar) baz)
+    , Test "observes associativity rules 2"
+            "foo ^ bar ^ baz"
+            (expr $ expon foo (expon bar baz))
+  ]
   , Test "apply" "foo bar" (expr $ Apply foo bar)
   , Test "apply associates to the left"
           "foo bar baz"
           (expr $ Apply (Apply foo bar) baz)
+  , TestGroup "strings" [
+      Test "basic" "\"hello\"" (expr $ String "hello")
+    , Test "can escape quotes" "\"he said \\\"hello\\\" to me\""
+           (expr $ String "he said \"hello\" to me")
+    , Test "can escape newlines" "\"foo\\nbar\""
+           (expr $ String "foo\nbar")
+  ]
   , TestGroup "dot" [
       Test "dot" "foo.bar" (expr $ Dot foo bar)
     , Test "dot associates left"
@@ -62,7 +75,7 @@ expressionTests = TestGroup "Expressions"
     , Test "nested tuples 2" "((bar, baz, qux), foo)"
             (expr $ Tuple [Tuple [bar, baz, qux], foo])
     , Test "tuples with expressions inside" "(foo + 1, bar baz)"
-            (expr $ Tuple [Binary "+" (foo, one), Apply bar baz])
+            (expr $ Tuple [plus foo one, Apply bar baz])
     , Test "tuples as arguments" "foo(bar, baz)"
             (expr $ Apply foo $ Tuple [bar, baz])
     , Test "tuples as arguments 2" "foo()bar"
@@ -77,8 +90,8 @@ arrayTests = TestGroup "Arrays"
            (arrayS [foo, bar, baz])
     , Test "empty array" "[]" (arrayS [])
     , Test "with complex expressions" "[foo * 1 + bar, baz (qux foo.bar)]"
-           (arrayS [ Binary "+" (Binary "*" (foo, one), bar)
-                , Apply baz (Apply qux (Dot foo bar))])
+           (arrayS [ plus (times foo one) bar
+                   , Apply baz (Apply qux (Dot foo bar))])
     , Test "nested" "[foo, [bar, baz]]" (arrayS [foo, arrayE [bar, baz]])
     , Test "use as arguments" "foo [1, bar, baz]"
            (expr $ Apply foo $ arrayE [one, bar, baz])
@@ -92,7 +105,7 @@ arrayTests = TestGroup "Arrays"
       Test "make array reference" "foo{! bar}" (expr $ Ref foo bar)
     , Test "can contain arbitrary expressions"
            "foo {! bar + baz qux}" 
-           (expr $ Ref foo (Binary "+" (bar, Apply baz qux)))
+           (expr $ Ref foo (plus bar (Apply baz qux)))
     , Test "should have higher precedence than application"
            "foo bar{!baz}" (expr $ Apply foo $ Ref bar baz)
     , Test "should have higher precedence than application 2"
@@ -123,10 +136,10 @@ functionTests = TestGroup "Functions"
     TestGroup "Lambdas" [
       Test "should make a lambda"
            "foo=> foo + 1"
-           (eLambda foo $ expr $ Binary "+" (foo, one))
+           (eLambda foo $ expr $ plus foo one)
     , Test "should make a lambda with a typed argument"
            "foo: Foo => foo + 1"
-           (eLambda (Typed foo fooT) $ expr $ Binary "+" (foo, one))
+           (eLambda (Typed foo fooT) $ expr $ plus foo one)
     , Test "should make a lambda with a tuple"
            "(foo: Foo, bar: Bar) => foo bar"
            (eLambda tup1 (expr $ Apply foo bar))
@@ -135,7 +148,7 @@ functionTests = TestGroup "Functions"
            (eLambda (arrayE []) (rangeS one (Number 10)))
     , Test "should make a lambda with multiple statements"
            "foo => { bar foo; foo + 1}"
-           (eLambda foo [Expr $ Apply bar foo, Expr $ Binary "+" (foo, one)])
+           (eLambda foo [Expr $ Apply bar foo, Expr $ plus foo one])
     , Test "should make nested lambdas"
            "foo => bar => foo + bar"
            (eLambda foo (eLambda bar (expr $ plus foo bar)))
@@ -228,7 +241,7 @@ whileTests = TestGroup "While statements"
     , Test "trailing newline" "while foo\n  2\n"
            [While foo (expr $ Number 2)]
     , Test "binary condition" "while foo < 2\n  bar 3\n"
-           [While (Binary "<" (foo, Number 2)) (expr $ Apply bar (Number 3))]
+           [While (lt foo two) (expr $ Apply bar (Number 3))]
     , Test "followed by other statement"
            "while foo\n  bar\nbaz"
            [While foo $ expr bar, Expr baz]
@@ -261,13 +274,15 @@ forTests = TestGroup "For statements" tests where
       [For foo bar [For baz qux $ expr $ one]]
     ]
 
-main = runTests grab [ expressionTests
-                     , assignmentTests
-                     , arrayTests 
-                     , blockTests
-                     , whileTests
-                     , forTests
-                     , typingTests
-                     , functionTests
-                     , ifTests
-                     ]
+doTests = runTests grab [ expressionTests
+                        , assignmentTests
+                        , arrayTests 
+                        , blockTests
+                        , whileTests
+                        , forTests
+                        , typingTests
+                        , functionTests
+                        , ifTests
+                        ]
+
+main = doTests
