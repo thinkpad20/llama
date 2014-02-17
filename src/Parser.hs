@@ -27,8 +27,6 @@ sstring = lexeme . string
 schar = lexeme . char
 schar' c = lexeme (char c) >> return ()
 
-symChars = "><=+-*/^~!%@&$:.#|?"
-
 check p = lexeme . try $ do
   s <- p
   if s `elem` (keywords ++ keySyms)
@@ -51,6 +49,8 @@ pVar = do
   option var $ do
     typ <- keysym ":" *> pType
     return $ Typed var typ
+
+pConstructor = Constructor <$> pIdent upper
 
 pDouble :: Parser Double
 pDouble = lexeme $ do
@@ -113,23 +113,28 @@ pArray = Array <$> between (schar '[') (schar ']') get where
       return $ ArrayRange start stop)
       <|> ArrayLiteral <$> (sepBy pExpr (schar ','))
 
+pBinary :: Parser Expr
 pBinary = pLogical where
   -- | @pBinOp@ takes either @chainl1@ or @chainr1@ for left- or right-
   -- associativity. Takes the higher-precedence parser to try first.
   -- Finally, takes the operator string which if parsed will parse the
   -- expression.
   pBinOp chain higherPrec op = higherPrec `chain` getOp where
-    getOp = op >>= \name -> return (\e1 e2 -> Binary name (e1, e2))
+    getOp = op >>= \name -> return (\e1 e2 -> binary name e1 e2)
   fold first toTry = foldl (pBinOp chainl1) first . map' where
-    map' = map (if toTry then try . sstring else sstring)
+    map' = map keysym -- (if toTry then try . sstring else sstring)
+  pBackwardApply = pBinOp chainr1 pForwardApply (keysym "<|")
+  pForwardApply = pBinOp chainl1 pLogical (keysym "|>")
   pLogical = fold pComp True ["&&", "||"]
   pComp = fold pAdd True ["<=", ">=", "<", ">", "==", "!="]
   pAdd = fold pMult False ["+", "-"]
   pMult = fold pExp False ["*", "/", "%"]
-  pExp = pBinOp chainr1 pApply $ sstring "^"
+  pExp = pBinOp chainr1 pComposeRight $ sstring "^"
+  pComposeRight = pBinOp chainl1 pComposeLeft (keysym "~>")
+  pComposeLeft = pBinOp chainr1 pApply (keysym "<~")
 
 pUnary :: Parser Expr
-pUnary = schar '~' *> (Unary "~" <$> pUnary) <|> pTerm
+pUnary = keysym "~" *> (Apply (Var "~") <$> pUnary) <|> pTerm
 
 pApply :: Parser Expr
 pApply = pRef >>= parseRest where
@@ -154,15 +159,17 @@ pDotted = pUnary >>= parseRest where
     parseRest (Dot res y)
     <|> return res
 
+pTerm :: Parser Expr
 pTerm = lexeme $ choice [ Number <$> pDouble
                         , String <$> pString
                         , pVar
+                        , pConstructor
                         , pParens
                         , pArray ]
 
-pOpenBrace = schar' '{' >> notFollowedBy (char '!')
-pCloseBrace = schar' '}'
-single = pure
+pOpenBrace = schar'  '{' >> notFollowedBy (char '!')
+pCloseBrace = schar'  '}'
+
 pBlock = pOpenBrace *> pStatementsNoWS <* pCloseBrace
          <|> indent *> pStatementsWS <* dedent
          <|> (keyword "do" >> single <$> pStatement)
@@ -192,11 +199,22 @@ getSame = same
 pStatementsNoWS = pStatement `sepEndBy1` (schar ';')
 pStatementsWS = pStatement `sepEndBy1` getSame
 pStatements = pStatement `sepEndBy1` (getSame <|> schar' ';')
+
+pIf = If <$ keyword "if" <*> pExpr <*> pThen <*> pElse
+pThen = pBlock <|> keyword "then" *> (single <$> pStatement)
+pElse = keyword "else" *> pBlock
+
+pStatement :: Parser Statement
 pStatement = do
-  lexeme $ choice $ [pDefine, pAssign, Expr <$> pExpr, pWhile, pFor]
+  lexeme $ choice $ [ pDefine, pAssign
+                    , Expr <$> pExpr
+                    , pWhile, pFor
+                    , pIf]
 
 pExpr :: Parser Expr
 pExpr = lexeme $ choice [ pLambda, pBinary ]
+
+single = pure
 
 testE = parse pExpr
 testS = parse pStatementsWS

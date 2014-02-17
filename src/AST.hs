@@ -9,11 +9,11 @@ type Name = String
 data Expr = Var Name
           | Number Double
           | String String
+          | Constructor Name
           | Dot Expr Expr
           | Apply Expr Expr
           | Unary String Expr
           | Lambda [(Expr, Block)]
-          | Binary String (Expr, Expr)
           | Tuple [Expr]
           | Array ArrayLiteral
           | Ref Expr Expr
@@ -24,7 +24,11 @@ data Type = TVar Name
           | TConst Name
           | TTuple [Type]
           | TApply Type Type
-          deriving (Eq)
+          | TFunction Type Type
+          deriving (Eq, Ord)
+
+(==>) = TFunction
+infixr 4 ==>
 
 data ArrayLiteral = ArrayLiteral [Expr] | ArrayRange Expr Expr deriving (Eq)
 
@@ -44,14 +48,16 @@ data Statement = Expr Expr
 instance Show Expr where
   show expr = case expr of
     Var name -> name
+    Constructor name -> name
     Number n -> show n
     String s -> show s
     Dot e1 e2 -> show' e1 ++ "." ++ show' e2
+    Apply (Apply (Var op) e1) e2
+      | isSymbol op -> show' e1 ++ " " ++ op ++ " " ++ show' e2
+    Apply (Var "~") e -> "-" ++ show' e
+    Apply (Var op) e | isSymbol op ->  op ++ show' e
     Apply e1 e2 -> show' e1 ++ " " ++ show' e2
     Tuple es -> "(" ++ (intercalate "," . map show) es ++ ")"
-    Unary "~" e -> show $ Unary "-" e
-    Unary op e -> op ++ show' e
-    Binary op (e1, e2) -> show' e1 ++ " " ++ op ++ " " ++ show' e2
     Array (ArrayLiteral exprs) -> '[' : (intercalate ", " $ map show exprs) ++ "]"
     Array (ArrayRange start stop) -> '[' : show start ++ ".." ++ show stop ++ "]"
     Ref object index -> show' object ++ "{" ++ show index ++ "}"
@@ -65,8 +71,6 @@ instance Show Expr where
       show' expr = case expr of
         Apply _ _ -> parens
         Dot _ _ -> parens
-        Binary _ _ -> parens
-        Unary _ _ ->  parens
         Lambda _ -> parens
         _ -> show expr
         where parens = "(" ++ show expr ++ ")"
@@ -117,20 +121,27 @@ instance Show Type where
     TVar name -> name
     TConst name -> name
     TTuple ts -> "(" ++ (intercalate ", " $ map show ts) ++ ")"
+    TApply (TConst "[]") t -> "[" ++ show t ++ "]"
+    TApply (TConst "[!]") t -> "[!" ++ show t ++ "]"
     TApply t1 t2 -> show' t1 ++ " " ++ show' t2
+    TFunction t1 t2 -> show'' t1 ++ " -> " ++ show t2
     where show' typ = case typ of
             TApply _ _ -> "(" ++ show typ ++ ")"
             _ -> show typ
+          show'' typ = case typ of
+            TFunction _ _ -> "(" ++ show typ ++ ")"
+            _ -> show typ
 
+symChars = "><=+-*/^~!%@&$:.#|?"
+isSymbol = all (`elem` symChars)
+binary name e1 e2 = Apply (Apply (Var name) e1) e2
 
-
-
-
-
-
-
-
-
+boolT = TConst "Bool"
+numT = TConst "Number"
+strT = TConst "String"
+arrayOf = TApply (TConst "[]")
+listOf = TApply (TConst "[!]")
+unitT = TTuple []
 
 
 

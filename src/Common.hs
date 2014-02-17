@@ -1,8 +1,9 @@
 {-# LANGUAGE NoMonomorphismRestriction #-}
-module Common ( (!), (<!>), (<$>), (<$), (<*), (*>), (<*>)
+module Common ( (!), (<!>), (<$>), (<$), (<*), (*>), (<*>), pure
               , get, modify, put, lift, forM_, when, Monoid(..)
               , (<>), StateT(..), State(..), ErrorT(..)
-              , intercalate, Identity(..), runState)  where
+              , intercalate, Identity(..), runState
+              , throwError, catchError, (~>))  where
 
 import Control.Monad
 import Control.Monad.State
@@ -17,3 +18,5 @@ import Control.Monad.Identity
 infixl 0 !
 (<!>) = flip (<$>)
 infixl 4 <!>
+(~>) = flip (.)
+infixl 9 ~>

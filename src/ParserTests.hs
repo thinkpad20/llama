@@ -179,6 +179,14 @@ blockTests = TestGroup "Blocks"
          [Expr foo, Expr bar, Expr $ Apply baz qux]
   ]
 
+ifTests = TestGroup "If statements" 
+  [
+    Test "basic one-line" "if 1 then 2 else 3" [If one (expr two) (expr three)]
+  , Test "basic block" "if 1 { 2 } else { 3 }" [If one (expr two) (expr three)]
+  , Test "basic mixed 1" "if 1 then 2 else { 3 }" [If one (expr two) (expr three)]
+  , Test "basic mixed 2" "if 1 { 2 } else 3" [If one (expr two) (expr three)]
+  ]
+
 whileTests = TestGroup "While statements" 
  [
     TestGroup "single statements" [
@@ -261,4 +269,5 @@ main = runTests grab [ expressionTests
                      , forTests
                      , typingTests
                      , functionTests
+                     , ifTests
                      ]
