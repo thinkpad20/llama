@@ -15,7 +15,7 @@ import Control.Applicative hiding (many, (<|>))
 --                          (char '\n' >> return ()) <|> eof
 skip = many (oneOf " \t")
 keywords = ["if", "do", "else", "case", "of", "infix", "type",
-            "object", "while", "for", "in"]
+            "object", "while", "for", "in", "then"]
 keySyms =  ["->", "|", "=", ";", "..", "=>", "?", ":", "#", "{!"]
 
 keyword k = lexeme . try $ string k <* notFollowedBy alphaNum
@@ -45,7 +45,7 @@ pIdent firstChar = check $ do
 
 pVar :: Parser Expr
 pVar = do
-  var <- Var <$> pIdent (oneOf $ ['a'..'z'] ++ "_")
+  var <- Var <$> pIdent (lower <|> char '_')
   option var $ do
     typ <- keysym ":" *> pType
     return $ Typed var typ
@@ -61,14 +61,16 @@ pDouble = lexeme $ do
     return $ read (ds ++ "." ++ ds')
 
 pType :: Parser Type
-pType = pTTerm
-pTTerm = choice [pTVar, pTConst, pTTuple]
+pType = choice [pTApply, pTTuple]
 pTVar = TVar Rigid <$> many1 lower
+pTConst = (\n -> TConst n []) <$> pIdent upper
 pTParens = schar '(' *> sepBy pType (schar ',') <* schar ')'
-pTConst = do name <- pIdent upper
-             TConst name <$> get
-  where get = (pure <$> pTVar) <|> pTParens <|> return []
 pTTuple = tTuple <$> pTParens
+pTApply = pIdent upper >>= getArgs where
+  getArgs name =
+    TConst name [] `option` do
+      args <- choice [ single <$> (pTVar <|> pTConst), pTParens ]
+      return $ TConst name args
 
 pTypedVar :: Parser Expr
 pTypedVar = try $ Typed <$$ pVar <* keysym ":" <*> pType
@@ -198,11 +200,19 @@ pAssign = try $ Assign <$$ pExpr <* keysym ":=" <*> pBody
 getSame = same
 pStatementsNoWS = pStatement `sepEndBy1` (schar ';')
 pStatementsWS = pStatement `sepEndBy1` getSame
-pStatements = pStatement `sepEndBy1` (getSame <|> schar' ';')
+pStatements = pStatement `sepEndBy1` (getSame <|> schar'  ';')
 
-pIf = If <$ keyword "if" <*> pExpr <*> pThen <*> pElse
-pThen = pBlock <|> keyword "then" *> (single <$> pStatement)
-pElse = keyword "else" *> pBlock
+pIf = do
+  keyword "if"
+  cond <- pExpr
+  true <- pThen
+  false <- pElse
+  return $ If cond true false
+
+pBlockOrStatement = try pBlock <|> fmap single pStatement
+pThen = do keyword "then" <|> return "then"
+           pBlockOrStatement
+pElse = keyword "else" *> pBlockOrStatement
 
 pStatement :: Parser Statement
 pStatement = do
