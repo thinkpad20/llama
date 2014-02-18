@@ -3,7 +3,7 @@ module Common ( (!), (<!>), (<$>), (<$), (<*), (*>), (<*>), pure
               , get, modify, put, lift, forM_, when, Monoid(..)
               , (<>), StateT(..), State(..), ErrorT(..)
               , intercalate, Identity(..), runState
-              , throwError, catchError, (~>), (<$$))  where
+              , throwError, catchError, (~>), (<$$), Render(..))  where
 
 import Control.Monad
 import Control.Monad.State
@@ -13,6 +13,9 @@ import Control.Applicative hiding (many, (<|>))
 import Data.List (intercalate)
 import Control.Monad.Identity
 
+
+class Render a where
+  render :: a -> String
 
 (!) = flip ($)
 infixl 0 !

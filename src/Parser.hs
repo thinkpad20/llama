@@ -61,12 +61,14 @@ pDouble = lexeme $ do
     return $ read (ds ++ "." ++ ds')
 
 pType :: Parser Type
-pType = pTApply
+pType = pTTerm
 pTTerm = choice [pTVar, pTConst, pTTuple]
 pTVar = TVar Rigid <$> many1 lower
-pTConst = TConst <$> pIdent upper
-pTTuple = TTuple <$ schar '(' <*> sepBy pType (schar ',') <* schar ')'
-pTApply = chainl1 pTTerm (pure TApply)
+pTParens = schar '(' *> sepBy pType (schar ',') <* schar ')'
+pTConst = do name <- pIdent upper
+             TConst name <$> get
+  where get = (pure <$> pTVar) <|> pTParens <|> return []
+pTTuple = tTuple <$> pTParens
 
 pTypedVar :: Parser Expr
 pTypedVar = try $ Typed <$$ pVar <* keysym ":" <*> pType

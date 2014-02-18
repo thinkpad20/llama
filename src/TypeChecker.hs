@@ -50,20 +50,20 @@ typeOfArrayLiteral typeOfFunc arr = case arr of
 -- | Similarly, inferring the type of an application is slightly different
 -- when looking for a literal type
 typeOfApply typeOf func arg = do
-  log' ["determining the type of ", show func, " applied to ", show arg]
+  log' ["determining the type of ", render func, " applied to ", render arg]
   funcType <- typeOf func
   argType <- typeOf arg
-  log' ["determined funcType to be `", show funcType
-       , "' and argType to be `", show argType, "'"]
+  log' ["determined funcType to be `", render funcType
+       , "' and argType to be `", render argType, "'"]
   case funcType of
     TFunction argType' returnType -> do
       unify argType argType' `catchError` uniError
       refine returnType
     -- here we can check if its type is Functionable?
-    _ -> throwErrorC ["Expression `", show func, "' is not a function, "
-                     , "but of type `", show funcType, "'"]
-  where uniError = addError' ["When attempting to apply `", show func
-                             , "' to argument `", show arg]
+    _ -> throwErrorC ["Expression `", render func, "' is not a function, "
+                     , "but of type `", render funcType, "'"]
+  where uniError = addError' ["When attempting to apply `", render func
+                             , "' to argument `", render arg]
 
 addTypeAlias name typ =
   modify $ \s -> s { aliases = M.insert name typ (aliases s)}
@@ -80,16 +80,17 @@ instance Typable Expr where
         log' ["instantiating expr constructor '", name, "'"]
         lookupAndInstantiate name
       Array arr@(ArrayLiteral _) -> typeOfArrayLiteral typeOf arr
-      Tuple vals -> TTuple <$> mapM typeOf vals
+      Tuple vals -> tTuple <$> mapM typeOf vals
       Lambda argsAndBodies -> do
         -- get all of the arguments and bodies
         t:types <- mapM typeOf argsAndBodies
         -- make sure they're all the same
         mapM_ (unify t) types `catchError` altError
-        return t
+        refine t >>= generalize
+      Dot a b -> typeOf (Apply b a)
       Apply a b -> typeOfApply typeOf a b
-      _ -> error $ "we can't handle expression `" ++ show expr ++ "'"
-    err = addError' ["When typing the expression `", show expr, "'"]
+      _ -> error $ "we can't handle expression `" ++ render expr ++ "'"
+    err = addError' ["When typing the expression `", render expr, "'"]
     altError = addError "All alternatives in a lambda must have the same type"
 
 instance Typable (Expr, Block) where
@@ -104,27 +105,27 @@ instance Typable (Expr, Block) where
 litTypeOf :: Expr -> Typing Type
 litTypeOf expr = case expr of
   Typed (Var name) typ -> do
-    log' ["instantiating typed variable ", name, " as ", show typ]
+    log' ["instantiating typed variable ", name, " as ", render typ]
     instantiate typ >>= setType name
   Number _ -> return numT
   String _ -> return strT
-  Tuple exprs -> TTuple <$> mapM litTypeOf exprs
+  Tuple exprs -> tTuple <$> mapM litTypeOf exprs
   Array arr@(ArrayLiteral _) -> typeOfArrayLiteral litTypeOf arr
   Constructor name -> do
     log' ["instantiating constructor ", name]
     lookupAndInstantiate name
   Apply a b -> typeOfApply litTypeOf a b
-  _ -> throwErrorC [ "`", show expr, "' does not have a literal type. "
+  _ -> throwErrorC [ "`", render expr, "' does not have a literal type. "
                    , "Please provide the type of the expression."]
 
 instance Typable Block where
   -- Returns the type of the last statement. Operates in a new context.
   typeOf block = push *> go `catchError` err <* pop
     where
-      err = addError' ["When typing the block `", show block, "'"]
+      err = addError' ["When typing the block `", render block, "'"]
       go = case block of
-        [] -> return $ TTuple [] -- shouldn't encounter this, but...
-        Break:_ -> return $ TTuple []
+        [] -> return unitT -- shouldn't encounter this, but...
+        Break:_ -> return unitT
         [stmt] -> typeOf stmt
         (Return expr):_ -> typeOf expr
         (If' expr blk1):blk2 | any isReturn blk1 -> do
@@ -133,7 +134,7 @@ instance Typable Block where
           case blk1Type == blk2Type of
             True -> return blk1Type
             False -> throwErrorC ["Two branches have different types: `"
-                                 , show blk1Type, "' and `", show blk1Type, "'"]
+                                 , render blk1Type, "' and `", render blk1Type, "'"]
         stmt:block -> typeOf stmt *> typeOf block
       isReturn (Return _) = True
       isReturn _ = False
@@ -142,7 +143,7 @@ instance Typable Statement where
   typeOf statement = go `catchError` err where
     err = case statement of
       Expr expr -> throwError
-      _ -> addError' ["When typing the statement `", show statement, "'"]
+      _ -> addError' ["When typing the statement `", render statement, "'"]
     condError = addError "Condition should be a Bool"
     branchError = addError "Parallel branches must resolve to the same type"
     scopeError name = throwErrorC ["'", name, "' is already defined in scope"]
@@ -181,8 +182,8 @@ instance Typable Statement where
         contT <- typeOf container
         -- we probably want to do this via traits instead of this, but eh...
         case contT of
-          TApply typ typ' -> setType name typ' >> typeOf block
-          typ -> throwErrorC ["Non-container type `", show typ
+          TConst name [typ'] -> setType name typ' >> typeOf block
+          typ -> throwErrorC ["Non-container type `", render typ
                              , "' used in a for loop"]
 
 getTable = get <!> table
@@ -214,7 +215,7 @@ unusedTypeVar = do
       else map (\_ -> 'a') name ++ "0"
 
 log :: String -> Typing ()
-log = lift . lift . putStrLn
+log s = return ()-- lift . lift . putStrLn
 log' = concat ~> log
 
 lookup, lookup1 :: Name -> Typing (Maybe Type)
@@ -243,8 +244,8 @@ builtIns = M.fromList [ ("+", nnn), ("-", nnn), ("*", nnn), ("/", nnn)
                       , ("<|", ab ==> a ==> b), ("|>", a ==> ab ==> b)
                       , ("~>", ab ==> bc ==> ac), ("<~", bc ==> ab ==> ac)
                       , ("print", a ==> unitT)
-                      , ("Just", a ==> TApply (TConst "Maybe") a)
-                      , ("Nothing", TApply (TConst "Maybe") a) ]
+                      , ("Just", a ==> TConst "Maybe" [a])
+                      , ("Nothing", TConst "Maybe" [a]) ]
   where nnn = numT ==> numT ==> numT
         nnb = numT ==> numT ==> boolT
         [a, b, c] = TVar Polymorphic <$> ["a", "b", "c"]
@@ -270,54 +271,55 @@ unify type1 type2 | type1 == type2 = return ()
                   | otherwise = case (type1, type2) of
   (TVar Polymorphic name, typ) -> addTypeAlias name typ
   (typ, TVar Polymorphic name) -> addTypeAlias name typ
-  (TTuple ts, TTuple ts') -> mapM_ (uncurry unify) $ zip ts ts'
-  (TApply a b, TApply a' b') -> do
-    unify a a' `catchError` operandsError " first "
-    unify b b' `catchError` operandsError " second"
-  _ -> throwErrorC ["Incompatible types: `", show type1, "' and `", show type2, "'"]
+  (TConst _ ts, TConst _ ts') -> mapM_ (uncurry unify) $ zip ts ts'
+  --(TApply a b, TApply a' b') -> do
+  --  unify a a' `catchError` operandsError " first "
+  --  unify b b' `catchError` operandsError " second"
+  _ -> throwErrorC ["Incompatible types: `", render type1, "' and `", render type2, "'"]
   where
     operandsError which = addError' ["When unifying the", which, "operands of `"
-                                    , show type1, "' and `", show type2]
+                                    , render type1, "' and `", render type2]
 
 -- | takes a type and replaces any type variables in the type with unused
--- variables.
+-- variables. Note: in Hindley-Milner, there are two distinct types, Type and
+-- Polytype, and instantiate maps between them. Tentatively, we don't need this
+-- distinction.
+instantiate :: Type -> Typing Type
 instantiate typ = fst <$> runStateT (inst typ) mempty where
   inst :: Type -> StateT (M.Map Name Type) Typing Type
-  inst typ = do
-    lift $ log' ["instantiating type `", show typ, "'"]
-    mp <- get
-    lift $ log' ["Map contains ", show mp]
-    result <-
-      case typ of
-        TVar Rigid name -> return typ
-        TVar Polymorphic name -> do
-          M.lookup name <$> get >>= \case
-            -- if we haven't yet seen this variable, create a new one
-            Nothing -> do typ' <- lift unusedTypeVar
-                          modify $ M.insert name typ'
-                          return typ'
-            -- otherwise, return what we already created
-            Just typ' -> return typ'
-        TConst _ -> return typ
-        TTuple types -> TTuple <$> mapM inst types
-        TApply a b -> TApply <$$ inst a <*> inst b
-        TFunction a b -> TFunction <$$ inst a <*> inst b
-    lift $ log' ["found result `", show result, "'"]
-    return result
+  inst typ = case typ of
+    TVar Rigid name -> return typ
+    TVar Polymorphic name -> do
+      M.lookup name <$> get >>= \case
+        -- if we haven't yet seen this variable, create a new one
+        Nothing -> do typ' <- lift unusedTypeVar
+                      modify $ M.insert name typ'
+                      return typ'
+        -- otherwise, return what we already created
+        Just typ' -> return typ'
+    TConst name types -> TConst name <$> mapM inst types
+    TFunction a b -> TFunction <$$ inst a <*> inst b
+
+-- | the opposite of instantiate; it "polymorphizes" the rigid type variables
+-- so that they can be polymorphic in future uses.
+generalize :: Type -> Typing Type
+generalize typ = case typ of
+  TVar Rigid name -> return $ TVar Polymorphic name
+  TVar Polymorphic name -> return typ
+  TConst name types -> TConst name <$> mapM generalize types
+  TFunction a b -> TFunction <$$ generalize a <*> generalize b
 
 -- | follows the type aliases and returns the fully qualified type (as
 -- qualified as possible)
 refine typ = look mempty typ where
   look :: S.Set Name -> Type -> Typing Type
   look seenNames typ = case typ of
-    TConst _ -> return typ
+    TConst name types -> TConst name <$> mapM (look seenNames) types
     TVar Rigid _ -> return typ
-    TTuple types -> TTuple <$> mapM (look seenNames) types
     TVar Polymorphic name
       | name `S.member` seenNames -> throwError1 "Cycle in type aliases"
       | otherwise -> do
       M.lookup name <$> getAliases >>= \case
         Nothing -> return typ
         Just typ' -> look (S.insert name seenNames) typ'
-    TApply a b -> TApply <$$ look seenNames a <*> look seenNames b
     TFunction a b -> TFunction <$$ look seenNames a <*> look seenNames b

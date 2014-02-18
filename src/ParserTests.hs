@@ -7,8 +7,8 @@ import Parser (grab)
 
 expr e = [Expr e]
 (foo, bar, baz, qux) = (Var "foo", Var "bar", Var "baz", Var "qux")
-(fooT, barT, bazT, quxT) = ( TConst "Foo", TConst "Bar"
-                           , TConst "Baz", TConst "Qux")
+(fooT, barT, bazT, quxT) = ( tConst "Foo", tConst "Bar"
+                           , tConst "Baz", tConst "Qux")
 arrayS exprs = expr $ Array $ ArrayLiteral exprs
 arrayE exprs = Array $ ArrayLiteral exprs
 rangeS start stop = ArrayRange start stop ! Array ! expr
@@ -20,7 +20,7 @@ expon a b =  binary "^" a b
 lt a b =  binary "<" a b
 (one, two, three) = (Number 1, Number 2, Number 3)
 
-expressionTests = TestGroup "Expressions" 
+expressionTests = TestGroup "Expressions"
   [
     Test "number" "1" (expr one)
   , Test "variable" "foo" (expr foo)
@@ -83,7 +83,7 @@ expressionTests = TestGroup "Expressions"
     ]
   ]
 
-arrayTests = TestGroup "Arrays" 
+arrayTests = TestGroup "Arrays"
   [
     TestGroup "literals" [
       Test "make array literals" "[foo, bar, baz]"
@@ -104,7 +104,7 @@ arrayTests = TestGroup "Arrays"
   , TestGroup "array dereference" [
       Test "make array reference" "foo{! bar}" (expr $ Ref foo bar)
     , Test "can contain arbitrary expressions"
-           "foo {! bar + baz qux}" 
+           "foo {! bar + baz qux}"
            (expr $ Ref foo (plus bar (Apply baz qux)))
     , Test "should have higher precedence than application"
            "foo bar{!baz}" (expr $ Apply foo $ Ref bar baz)
@@ -122,11 +122,11 @@ arrayTests = TestGroup "Arrays"
 typingTests = TestGroup "Typed expressions"
   [
     Test "typing an identifier" "foo: Foo"
-         (expr $ Typed foo (TConst "Foo"))
+         (expr $ Typed foo (tConst "Foo"))
   , Test "typing with 2nd order type" "bar: Option Foo"
-         (expr $ Typed bar (TApply (TConst "Option") (TConst "Foo")))
+         (expr $ Typed bar (TConst "Option" [fooT]))
   , Test "typing with type tuple" "foo: (Foo, Bar)"
-         (expr $ Typed foo (TTuple [fooT, barT]))
+         (expr $ Typed foo (tTuple [fooT, barT]))
   , Test "a typed tuple" "(foo: Foo, bar: Bar)"
          (expr $ Tuple [Typed foo fooT, Typed bar barT])
   ]
@@ -172,7 +172,7 @@ functionTests = TestGroup "Functions"
         eLambda arg body = expr $ Lambda [(arg, body)]
         eLambdas = expr . Lambda
 
-assignmentTests = TestGroup "Assignments" 
+assignmentTests = TestGroup "Assignments"
   [
     Test "can make definitions" "foo = bar" [Define foo $ expr bar]
   , Test "can make assignments" "foo := bar" [Assign foo $ expr bar]
@@ -182,7 +182,7 @@ assignmentTests = TestGroup "Assignments"
          [Assign (Apply foo bar) $ expr $ baz `times` Apply qux foo]
   ]
 
-blockTests = TestGroup "Blocks" 
+blockTests = TestGroup "Blocks"
   [
     SkipTest "separate expressions into blocks by newline"
           "foo\nbar\nbaz qux"
@@ -192,7 +192,7 @@ blockTests = TestGroup "Blocks"
          [Expr foo, Expr bar, Expr $ Apply baz qux]
   ]
 
-ifTests = TestGroup "If statements" 
+ifTests = TestGroup "If statements"
   [
     Test "basic one-line" "if 1 then 2 else 3" [If one (expr two) (expr three)]
   , Test "basic block" "if 1 { 2 } else { 3 }" [If one (expr two) (expr three)]
@@ -200,7 +200,7 @@ ifTests = TestGroup "If statements"
   , Test "basic mixed 2" "if 1 { 2 } else 3" [If one (expr two) (expr three)]
   ]
 
-whileTests = TestGroup "While statements" 
+whileTests = TestGroup "While statements"
  [
     TestGroup "single statements" [
       Test "while block via 'do'" "while foo do bar;"
@@ -276,7 +276,7 @@ forTests = TestGroup "For statements" tests where
 
 doTests = runTests grab [ expressionTests
                         , assignmentTests
-                        , arrayTests 
+                        , arrayTests
                         , blockTests
                         , whileTests
                         , forTests
