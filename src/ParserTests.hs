@@ -1,5 +1,8 @@
 module ParserTests (doTests) where
 
+import qualified Data.Map as M
+import Prelude hiding (mod)
+
 import Common
 import Tests
 import AST
@@ -12,19 +15,27 @@ expr e = [Expr e]
 arrayS exprs = expr $ Array $ ArrayLiteral exprs
 arrayE exprs = Array $ ArrayLiteral exprs
 rangeS start stop = ArrayRange start stop ! Array ! expr
-plus a b = binary "+" a b
-times a b = binary "*" a b
-minus a b = binary "-" a b
-divide a b = binary "/" a b
-expon a b =  binary "^" a b
-lt a b =  binary "<" a b
+ops = [ "+", "*", "-", "/", "^", "%", "<", ">", "<="
+      , ">=", "==", "!=", "<|", "|>", "<~", "~>"]
+[ plus, times, minus, divide, expon, mod, lt, gt, leq, geq
+ , eq, neq, bAp, fAp, bComp, fComp] = map binary ops
+opsFuncs = M.fromList [("+", plus), ("*", times), ("-", minus)
+                      , ("/", divide), ("^", expon), ("%", mod)
+                      , ("<", lt), (">", gt), ("<=", leq), (">=", geq)
+                      , ("==", eq), ("!=", neq), ("|>", fAp), ("<|", bAp)
+                      , ("~>", fComp), ("<~", bComp)]
 (one, two, three) = (Number 1, Number 2, Number 3)
+
+binOpsTests = [test op | op <- ops] where
+  test op = Test ("can parse `" ++ op ++ "'")
+                 ("1 " ++ op ++ " 2")
+                 (expr $ binary op one two)
 
 expressionTests = TestGroup "Expressions"
   [
     Test "number" "1" (expr one)
   , Test "variable" "foo" (expr foo)
-  , TestGroup "binary operators" [
+  , TestGroup "binary operators" ([
       Test "binary" "1 + 2" (expr $ plus one two)
     , Test "binary 2" "1 + foo" (expr $ plus one foo)
     , Test "observes precedence rules 1"
@@ -39,7 +50,7 @@ expressionTests = TestGroup "Expressions"
     , Test "observes associativity rules 2"
             "foo ^ bar ^ baz"
             (expr $ expon foo (expon bar baz))
-  ]
+  ] ++ binOpsTests)
   , Test "apply" "foo bar" (expr $ Apply foo bar)
   , Test "apply associates to the left"
           "foo bar baz"

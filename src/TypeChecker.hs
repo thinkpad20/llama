@@ -2,6 +2,7 @@
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE TypeSynonymInstances #-}
 {-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE NoMonomorphismRestriction #-}
 module TypeChecker where
 
 import Prelude hiding (lookup, log)
@@ -19,22 +20,25 @@ class Typable a where
 newtype TypingError = TE [String]
 data TypingState = TypingState { table ::[M.Map Name Type]
                                , aliases :: M.Map Name Type
-                               , freshName :: Name }
+                               , freshName :: Name } deriving (Show)
 type Typing = ErrorT TypingError (StateT TypingState IO)
 
 instance Error TypingError where
   strMsg = TE . pure
 
 instance Show TypingError where
-  show (TE msgs) = msgs ! concatMap ("\n  "++) ! (++ "\n")
+  show (TE msgs) = msgs ! concatMap ((++ "\n") . indentBy 4 . trim) ! line
 
-instance Show TypingState where
-  show state = concat ["Table: ", show $ init $ table state, ", "
-                      , "Aliases: ", show $ aliases state]
+instance Render TypingState where
+  render state = line $ concat ["Table: ", render $ init $ table state, ", "
+                               , "Aliases: ", render $ aliases state]
 
-instance Show (M.Map Name Type) where
-  show mp = "{" ++ intercalate ", " pairs ++ "}" where
-    pairs = mp ! M.toList ! map (\(n, t) -> n ++ ": " ++ show t)
+instance Render [M.Map Name Type] where
+  render mps = line $ "[" ++ (intercalate ", " $ map render mps) ++ "]"
+
+instance Render (M.Map Name Type) where
+  render mp = line $ "{" ++ intercalate ", " pairs ++ "}" where
+    pairs = mp ! M.toList ! map (\(n, t) -> n ++ ": " ++ render t)
 
 -- | Pulled this one out since the behavior is almost the same, but not
 -- identical, between `typeOf` and `litTypeOf`
@@ -57,13 +61,14 @@ typeOfApply typeOf func arg = do
        , "' and argType to be `", render argType, "'"]
   case funcType of
     TFunction argType' returnType -> do
-      unify argType argType' `catchError` uniError
+      unify argType argType' `catchError` uniError argType argType'
       refine returnType
     -- here we can check if its type is Functionable?
     _ -> throwErrorC ["Expression `", render func, "' is not a function, "
                      , "but of type `", render funcType, "'"]
-  where uniError = addError' ["When attempting to apply `", render func
-                             , "' to argument `", render arg]
+  where uniError typ typ' = addError' ["`", render func, "' takes `", render typ'
+                                      , "' as its argument, but `", render arg
+                                      , "' has the type `", render typ, "'"]
 
 addTypeAlias name typ =
   modify $ \s -> s { aliases = M.insert name typ (aliases s)}
@@ -250,32 +255,18 @@ builtIns = M.fromList [ ("+", nnn), ("-", nnn), ("*", nnn), ("/", nnn)
         nnb = numT ==> numT ==> boolT
         [a, b, c] = TVar Polymorphic <$> ["a", "b", "c"]
         (ab, bc, ac) = (a ==> b, b ==> c, a ==> c)
-defaultState = TypingState { table = [builtIns]
-                           , aliases = mempty
-                           , freshName = "a0"}
-
--- NOTE: using unsafePerformIO for testing purposes only. This will
--- all be pure code in the end.
-runTyping :: Typable a => a -> (Either TypingError Type, TypingState)
-runTyping a = unsafePerformIO $ runStateT (runErrorT $ typeOf a) defaultState
-
-typeIt :: String -> (Either TypingError Type, TypingState)
-typeIt input = case grab input of
-  Left err -> error $ show err
-  Right block -> runTyping block
 
 -- | adds to the type aliases map any substitutions needed to make
 -- its two arguments equivalent. Throws an error if such a substitution
 -- is impossible (todo: throw an error if there's a cycle)
 unify type1 type2 | type1 == type2 = return ()
-                  | otherwise = case (type1, type2) of
-  (TVar Polymorphic name, typ) -> addTypeAlias name typ
-  (typ, TVar Polymorphic name) -> addTypeAlias name typ
-  (TConst _ ts, TConst _ ts') -> mapM_ (uncurry unify) $ zip ts ts'
-  --(TApply a b, TApply a' b') -> do
-  --  unify a a' `catchError` operandsError " first "
-  --  unify b b' `catchError` operandsError " second"
-  _ -> throwErrorC ["Incompatible types: `", render type1, "' and `", render type2, "'"]
+                  | otherwise =
+  case (type1, type2) of
+    (TVar Polymorphic name, typ) -> addTypeAlias name typ
+    (typ, TVar Polymorphic name) -> addTypeAlias name typ
+    (TConst name ts, TConst name' ts')
+      | name == name' -> mapM_ (uncurry unify) $ zip ts ts'
+    _ -> throwErrorC ["Incompatible types: `", render type1, "' and `", render type2, "'"]
   where
     operandsError which = addError' ["When unifying the", which, "operands of `"
                                     , render type1, "' and `", render type2]
@@ -323,3 +314,19 @@ refine typ = look mempty typ where
         Nothing -> return typ
         Just typ' -> look (S.insert name seenNames) typ'
     TFunction a b -> TFunction <$$ look seenNames a <*> look seenNames b
+
+defaultState = TypingState { table = [builtIns]
+                           , aliases = mempty
+                           , freshName = "a0"}
+
+-- NOTE: using unsafePerformIO for testing purposes only. This will
+-- all be pure code in the end.
+runTyping :: Typable a => a -> (Either TypingError Type, TypingState)
+runTyping a = unsafePerformIO $ runStateT (runErrorT $ typeOf a) defaultState
+
+typeIt :: String -> IO ()
+typeIt input = case grab input of
+  Left err -> error $ show err
+  Right block -> case runTyping block of
+    (Left err, _) -> error $ show err
+    (Right block, state) -> putStrLn $ render block ++ "\n" ++ render state

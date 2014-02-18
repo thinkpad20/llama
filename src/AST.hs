@@ -120,7 +120,7 @@ instance Render Statement where
     (up, down) = (modify (+2), modify (\n -> n - 2))
 
 instance Render Block where
-  render = unlines . map show
+  render b = "{" ++ (line . trim . (intercalate "; ") . map render) b
 
 instance Render Type where
   render t = case t of

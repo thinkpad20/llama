@@ -20,7 +20,7 @@ keySyms =  ["->", "|", "=", ";", "..", "=>", "?", ":", "#", "{!"]
 
 keyword k = lexeme . try $ string k <* notFollowedBy alphaNum
 
-keysym k = lexeme . try $ string k <* notFollowedBy (oneOf symChars)
+exactSym k = lexeme . try $ string k <* notFollowedBy (oneOf symChars)
 
 lexeme p = p <* skip
 sstring = lexeme . string
@@ -47,7 +47,7 @@ pVar :: Parser Expr
 pVar = do
   var <- Var <$> pIdent (lower <|> char '_')
   option var $ do
-    typ <- keysym ":" *> pType
+    typ <- exactSym ":" *> pType
     return $ Typed var typ
 
 pConstructor = Constructor <$> pIdent upper
@@ -56,7 +56,7 @@ pDouble :: Parser Double
 pDouble = lexeme $ do
   ds <- many1 digit
   option (read ds) $ do
-    keysym "."
+    exactSym "."
     ds' <- many1 digit
     return $ read (ds ++ "." ++ ds')
 
@@ -73,13 +73,13 @@ pTApply = pIdent upper >>= getArgs where
       return $ TConst name args
 
 pTypedVar :: Parser Expr
-pTypedVar = try $ Typed <$$ pVar <* keysym ":" <*> pType
+pTypedVar = try $ Typed <$$ pVar <* exactSym ":" <*> pType
 
 pLambda = try $ do
-  argsBodies <- pArgBody `sepBy1` (keysym "|")
+  argsBodies <- pArgBody `sepBy1` (exactSym "|")
   return $ Lambda argsBodies
 
-pArgBody = (,) <$$ pTerm <* keysym "=>" <*> pBody
+pArgBody = (,) <$$ pTerm <* exactSym "=>" <*> pBody
 
 pParens :: Parser Expr
 pParens = schar '(' *> expr <* schar ')'
@@ -110,7 +110,7 @@ pArray :: Parser Expr
 pArray = Array <$> between (schar '[') (schar ']') get where
     get = try (do
       start <- pExpr
-      keysym ".."
+      exactSym ".."
       stop <- pExpr
       return $ ArrayRange start stop)
       <|> ArrayLiteral <$> (sepBy pExpr (schar ','))
@@ -123,20 +123,19 @@ pBinary = pBackwardApply where
   -- expression.
   pBinOp chain higherPrec op = higherPrec `chain` getOp where
     getOp = op >>= \name -> return (\e1 e2 -> binary name e1 e2)
-  fold first toTry = foldl (pBinOp chainl1) first . map' where
-    map' = map keysym -- (if toTry then try . sstring else sstring)
-  pBackwardApply = pBinOp chainr1 pForwardApply (keysym "<|")
-  pForwardApply = pBinOp chainl1 pLogical (keysym "|>")
-  pLogical = fold pComp True ["&&", "||"]
-  pComp = fold pAdd True ["<=", ">=", "<", ">", "==", "!="]
-  pAdd = fold pMult False ["+", "-"]
-  pMult = fold pExp False ["*", "/", "%"]
+  fold first = foldl (pBinOp chainl1) first . map exactSym
+  pBackwardApply = pBinOp chainr1 pForwardApply (exactSym "<|")
+  pForwardApply = pBinOp chainl1 pLogical (exactSym "|>")
+  pLogical = fold pComp ["&&", "||"]
+  pComp = fold pAdd ["<=", ">=", "<", ">", "==", "!="]
+  pAdd = fold pMult ["+", "-"]
+  pMult = fold pExp ["*", "/", "%"]
   pExp = pBinOp chainr1 pComposeRight $ sstring "^"
-  pComposeRight = pBinOp chainl1 pComposeLeft (keysym "~>")
-  pComposeLeft = pBinOp chainr1 pApply (keysym "<~")
+  pComposeRight = pBinOp chainl1 pComposeLeft (exactSym "~>")
+  pComposeLeft = pBinOp chainr1 pApply (exactSym "<~")
 
 pUnary :: Parser Expr
-pUnary = keysym "~" *> (Apply (Var "~") <$> pUnary) <|> pTerm
+pUnary = exactSym "~" *> (Apply (Var "~") <$> pUnary) <|> pTerm
 
 pApply :: Parser Expr
 pApply = pRef >>= parseRest where
@@ -149,14 +148,14 @@ pApply = pRef >>= parseRest where
 pRef :: Parser Expr
 pRef = pDotted >>= parseRest where
   parseRest res = do
-    y <- keysym "{!" *> pExpr <* pCloseBrace
+    y <- exactSym "{!" *> pExpr <* pCloseBrace
     parseRest (Ref res y)
     <|> return res
 
 pDotted :: Parser Expr
 pDotted = pUnary >>= parseRest where
   parseRest res = do
-    keysym "."
+    exactSym "."
     y <- pUnary
     parseRest (Dot res y)
     <|> return res
@@ -183,7 +182,7 @@ pFor = For <$ keyword "for" <*> pExpr <* keyword "in"
 pBody = try pBlock <|> (single <$> Expr <$> pExpr)
 pDefine = try $ do
   var <- pExpr
-  body <- keysym "=" *> pBody
+  body <- exactSym "=" *> pBody
   create var body
   where
     create var body = case var of
@@ -195,7 +194,7 @@ pDefine = try $ do
     mkLambda name arg body = return $
       Define name $ [Expr $ Lambda [(arg, body)]]
 
-pAssign = try $ Assign <$$ pExpr <* keysym ":=" <*> pBody
+pAssign = try $ Assign <$$ pExpr <* exactSym ":=" <*> pBody
 
 getSame = same
 pStatementsNoWS = pStatement `sepEndBy1` (schar ';')
