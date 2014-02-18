@@ -63,12 +63,10 @@ pDouble = lexeme $ do
 pType :: Parser Type
 pType = pTApply
 pTTerm = choice [pTVar, pTConst, pTTuple]
-pTVar = TVar <$> pIdent lower
+pTVar = TVar Rigid <$> many1 lower
 pTConst = TConst <$> pIdent upper
 pTTuple = TTuple <$ schar '(' <*> sepBy pType (schar ',') <* schar ')'
 pTApply = chainl1 pTTerm (pure TApply)
-
-a <$$ f = pure a <*> f
 
 pTypedVar :: Parser Expr
 pTypedVar = try $ Typed <$$ pVar <* keysym ":" <*> pType
@@ -114,7 +112,7 @@ pArray = Array <$> between (schar '[') (schar ']') get where
       <|> ArrayLiteral <$> (sepBy pExpr (schar ','))
 
 pBinary :: Parser Expr
-pBinary = pLogical where
+pBinary = pBackwardApply where
   -- | @pBinOp@ takes either @chainl1@ or @chainr1@ for left- or right-
   -- associativity. Takes the higher-precedence parser to try first.
   -- Finally, takes the operator string which if parsed will parse the
@@ -220,7 +218,7 @@ testE = parse pExpr
 testS = parse pStatementsWS
 
 grab :: String -> Either ParseError [Statement]
-grab = parse pStatements
+grab = parse (pStatements <* eof)
 
 grab' input = case grab input of
   Right statements -> map show statements ! intercalate "\n"

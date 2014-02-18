@@ -3,7 +3,7 @@ module Common ( (!), (<!>), (<$>), (<$), (<*), (*>), (<*>), pure
               , get, modify, put, lift, forM_, when, Monoid(..)
               , (<>), StateT(..), State(..), ErrorT(..)
               , intercalate, Identity(..), runState
-              , throwError, catchError, (~>))  where
+              , throwError, catchError, (~>), (<$$))  where
 
 import Control.Monad
 import Control.Monad.State
@@ -20,3 +20,4 @@ infixl 0 !
 infixl 4 <!>
 (~>) = flip (.)
 infixl 9 ~>
+a <$$ f = pure a <*> f

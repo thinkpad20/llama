@@ -20,7 +20,11 @@ data Expr = Var Name
           | Typed Expr Type
           deriving (Eq)
 
-data Type = TVar Name
+-- | A variable can be rigid (fixed in scope), or polymorphic (free to take on
+-- multiple forms in the same scope).
+data TVarType = Rigid | Polymorphic deriving (Show, Eq, Ord)
+
+data Type = TVar TVarType Name
           | TConst Name
           | TTuple [Type]
           | TApply Type Type
@@ -118,7 +122,7 @@ instance Show Block where
 
 instance Show Type where
   show t = case t of
-    TVar name -> name
+    TVar _ name -> name
     TConst name -> name
     TTuple ts -> "(" ++ (intercalate ", " $ map show ts) ++ ")"
     TApply (TConst "[]") t -> "[" ++ show t ++ "]"
@@ -137,8 +141,8 @@ isSymbol = all (`elem` symChars)
 binary name e1 e2 = Apply (Apply (Var name) e1) e2
 
 boolT = TConst "Bool"
-numT = TConst "Number"
-strT = TConst "String"
+numT = TConst "Num"
+strT = TConst "Str"
 arrayOf = TApply (TConst "[]")
 listOf = TApply (TConst "[!]")
 unitT = TTuple []
