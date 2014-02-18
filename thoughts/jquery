@@ -1,0 +1,10 @@
+namespace JQuery =
+  object Node(text: Str, tail: Str, children: [Node])
+  zero: Node
+  parse: (xml: Str) -> Node
+  select: (selector: Str) -> (context: Node) -> Node
+
+$ () = JQuery.zero
+$ (text: Str, @context: JQuery) = case context of
+  Nothing => JQuery.parse text
+  Just context => JQuery.select text context

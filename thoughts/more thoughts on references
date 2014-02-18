@@ -1,0 +1,317 @@
+@call (v: [a]) (index: Num) = v{! index}
+v = mut [1,2,3]
+assert (v 0 == 1)
+v 0 := 4              # Error: `Number' is not mutable
+v{! 0} := 4           # ok
+print (v 0)           # 4
+
+n = mut 3
+v' = mut! [1,2,n]     # mutability recurses down to members
+print v'              # [1,2,3]
+assert (v' 0 == 1)    # yup
+v' 0 := 4             # ok
+v' 2 := 5             # ok, and changes value of n?
+                      # no, that seems like a bad design decision
+                      # but perhaps...
+                      # basically the question is, does `n := mut 3`
+                      # mean that n is a reference to a box which
+                      # starts with 3, but might later change?
+                      # or does it mean that n is a reference to 3,
+                      # but at some later point n might be a reference
+                      # to some other location?
+                      # In other words: is a variable always a pointer
+                      # to the same box, and boxes can change their values,
+                      # or do boxes never change their values, but variables
+                      # can change which boxes they're pointing to?
+# Let's assume both approaches are equally viable to implement, and see
+# which one makes more sense.
+# in the first approach:
+n = mut 1             # make a box for n, and put 1 in it
+m = n                 # m points to n's box
+print (m, n)          # (1, 1)
+n += 1; print (m, n)  # (2, 2)
+m += 1; print (m, n)  # (3, 3)
+
+# equivalent C:
+int *m, *n = (int *)malloc(sizeof int);
+*n = 1;
+m = n;
+*n += 1;
+...
+# advantages: less memory usage, possibly simpler to type (m = n means m must 
+# be mutable)
+# disadvantages: side-effects, using stack frames might make memory usage 
+# issues inconsequential anyway
+
+# another approach: generally C-style
+int m, n = 1; // stack-allocated, mutable
+m = n; // m gets a copy of n's contents in its box
+n += 1; // n gets incremented, m doesn't
+
+# using the C-style approach:
+n = mut 1            # n has a box with 1 in it
+m = n                # m has a box, copy n's box's contents => 1
+print (m, n)         # (1, 1)
+n += 1; print (m, n) # (1, 2)
+m += 1; print (m, n) # (2, 2)
+
+# what if we could make it explicit?
+n = ref 1
+m = n
+n += 1 
+print (m, n) # (2, 2)
+
+# we could say references are always mutable (maybe provide syntax for 
+# otherwise)
+
+# this would suggest:
+(:=): (obj: ref a) -> (val: a) -> a # definition is built-in
+# then we have this
+(n: ref Num) += (m: Num) = n := n + m
+# and these
+(n: ref Num) ++ = fix n before n := n + 1
+++ (n: ref Num) = n := n + 1
+# so these operators change the value of an object inside of a box
+# (yes, this is a side-effect)
+
+# then how about
+n = mut 0
+n++
+# would this type check?
+
+####################################################
+### NEED TO THINKING ABOUT IT! Think C pointers! ###
+####################################################
+
+```c
+// janky, but it would work
+int assignInt (int *from, int to) {
+  *from = to;
+  return to;
+}
+int main() {
+  int i = 0;
+  printf("%d", i); // 0
+  printf("%d", assignInt(&i, 1)); // 1
+}
+```
+
+#### we can abstract int to a, and come up with:
+# so mutable objects can be converted to references (automagically?)
+# then perhaps we have a `&` operator to get a reference from a 
+# mutable...
+(&): (obj: mut a) -> ref a
+
+assign! :: (from: ref a) (to: a) -> a # definition built-in
+
+main () = 
+  i = mut 0             # must be mutable, so that we can...
+  print i               # 0
+  print <| &i.assign! 1 # prints 1
+
+# and perhaps then we can make the following:
+(obj: mut a) := (val: a) = &obj `assign!` a
+
+# then we'd be out of the woods! Now we'd have...
+
+vec = mut [1,2,3]
+vec 1 := 2    #  == vec{! 1} := 2 == assign! &vec{! 1} 2
+
+# of course the difficulty here is that the & operator can't work arbitrarily; 
+# it needs to be able to find the address. So it might be theoretically OK 
+# but not actually feasible. Who knows. Need to thinking about it.
+# One possibility is to keep the `:=` as syntactic sugar for `assign!`;
+# in the sense that just as `&` only has meaning within a given scope, so does
+# `:=`. So a := b only operates on local variables, and this would extend to
+# `++`, `--`, `+=`, etc. Just as it is in C. Then the implications for
+# mutable mapping are important:
+
+map! (f: a -> b) (v: mut [a]) = v after
+  for index in v.range do v{! index} := f v{! index}
+
+# this is still fine, because since we have v available, we can find 
+# references to the boxes in `v`.
+
+# and we can do
+n = mut 0
+while n++ < 100
+  if n % 3 == 0 do print "fizz"
+  if n % 5 == 0 do print "buzz"
+  print ""
+
+
+# Returning mutable objects in closures
+# We have a bit of an issue. What if we do this?
+
+```
+foo = 
+  i = mut 0
+  () => print ++i
+f1 = foo
+f2 = foo
+f1()
+f2()
+```
+
+We have a theoretical problem here (is it desirable to have a function 
+update a variable outside its scope?) and a practical problem (how does 
+the returned closure know what the address of `i` is, so that it can 
+update it? Where does `i` get allocated?). The solution to the practical 
+problem can be seen by implementing something similar in JavaScript:
+
+```javascript
+var foo = function() {
+  var i = 0;
+  return function() { console.log(++i); }
+}
+f1 = foo();
+f2 = foo();
+f1();
+f2();
+```
+
+Here `f1` and `f2` each get their own copies of `i`, which each get
+updated each time they're called. So the practical solution is to use
+
+```
+foo () = 
+  i = mut 0
+  () => print ++i
+```
+
+But of course, our syntax doesn't disallow the first version we made, in
+which case what would that mean? The simple answer is to say, you shouldn't
+be able to do that. In fact, this makes an argument for the idea that
+variable definitions shouldn't use blocks; only single expressions. That
+would make the former definition illegal but the latter OK, which is a start.
+And if JavaScript is able to solve the problem of how to update that reference,
+then so can we, somehow.
+
+Interestingly, Julia *does* allow this:
+
+```julia
+> foo = begin
+    x = 0
+    () -> x += 1
+  end
+(anonymous function)
+> foo()
+1
+> foo()
+2
+> bar = foo
+(anonymous function)
+> bar()
+3
+```
+
+So it might be ok. Maybe. Seems unsafe but what can I say.
+
+But how about the theoretical problem? Having a function which has a side-effect
+on someone else's local variable seems like a bad idea. But of course, this is 
+the nature of side-effects in the first place. However, a reference to a stack-
+allocated variable seems very unsafe. OTOH, JavaScript doesn't seem to have a 
+problem. And is there that much difference between that, and a function which
+affects some global state?
+
+```
+# this seems pretty side-effecty!
+foo (url: Str) = 
+  $.ajax url
+  ($ ".div").append "<p>what's up?</p>"
+```
+
+I know that Rust has a lot to say about this kind of thing (who 'owns' `i` in
+this case?). I think Rust disallows returning closures which capture stack
+variables, which is very reasonable, and probably easy to implement. Then again,
+we could simply label those functions as `unsafe` or whatever; for example, 
+putting `-|>` instead of `->` in the type signature, or `=>` instead of `=|>` 
+in the lambda, to indicate that it's a side-effecting function...
+
+```
+> :t print
+print: (a: Show) -|> ()
+> :t (++)
+(++) : mut a: Ord -> a
+> foo () = { i = mut 0; () =|> {print ++i; i} }
+> :t foo
+foo: () -> () -|> ()
+> foo1 = foo()
+> :t foo1
+foo1: () -|> ()
+> foo1()
+1
+()
+> foo1()
+2
+()
+> bar () = {i = mut 0; (@amt=1) {i += amt}}
+> :t bar
+bar: () -> (@Num) -|> Num
+> bar1 = bar()
+> :t bar1
+bar1: (@Num) -|> Num
+> bar1()
+1
+> bar1()
+2
+> bar1 4
+6
+> bar1 (-6)
+0
+> foo = 
+    i = mut 0
+    () =|> i++
+> foo()
+1
+> bar = foo
+> bar()
+2
+> :t foo
+foo: () -|> Num
+```
+
+Essentially, when we have `a -|> b` in the type, it means "takes an `a` and
+returns a `b`, but not necessarily always the same b given the same `a`".
+
+```
+> map! (v: mut [a]) (f: a -> b) |= v after
+    for i in v.range do v{! i} := f v{! i}
+> :t map!
+map! : mut [a] -> (a -> b) -|> mut [a]
+```
+
+Yeah, that seems kinda useful/fun actually. I don't think we necessarily
+need to worry about it. Putting the bars in the function arrows seems like 
+a simple and unobtrusive way to indicate/help people to be aware that their 
+functions have side-effects, and it also bubbles up nicely.
+
+
+
+
+
+
+
+
+
+                      # whatever we choose here we should choose the most
+                      # straightforward option.
+print n               # 5
+print v'              # [4, 2, 5]
+
+@call (s1: String) (s2: String) = s1 <> s2
+
+print ("hello " "world!") # hello world!
+
+
+[1..10] `map (^2)` 4
+== map (^2) [1..10] 4
+== 25
+
+# lazy instantiation
+silly =
+  ohNo = lazy 1 / 0 # won't get evaluated
+  ohYes = 3
+  if False then ohNo else ohYes
+
+print silly       # 3
