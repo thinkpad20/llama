@@ -1,7 +1,7 @@
 {-# LANGUAGE LambdaCase #-}
 module Tests (Test(..), runTests) where
 
-import Common
+import Common hiding (line)
 import System.IO
 import Data.List (intercalate)
 import System.Console.ANSI
@@ -12,7 +12,6 @@ data TestResult = TestSuccess [Name]
                 | TestFailure [Name] String String String
                 | TestError [Name] String String
 
-type Name = String
 data TesterState = TesterState { indentLevel::Int
                                , spaceCount::Int
                                , groupNames::[Name]

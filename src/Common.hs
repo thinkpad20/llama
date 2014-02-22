@@ -1,7 +1,10 @@
 {-# LANGUAGE NoMonomorphismRestriction #-}
+{-# LANGUAGE OverlappingInstances #-}
+{-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE TypeSynonymInstances #-}
 module Common ( (!), (<!>), (<$>), (<$), (<*), (*>), (<*>), pure
               , get, modify, put, lift, forM_, forM, when, Monoid(..)
-              , (<>), StateT(..), State(..), ErrorT(..), indentBy
+              , (<>), StateT(..), State(..), ErrorT(..), indentBy, Name(..)
               , intercalate, Identity(..), runState, (>>==), trim, line
               , throwError, catchError, (~>), (<$$), Render(..))  where
 
@@ -13,10 +16,24 @@ import Control.Applicative hiding (many, (<|>))
 import Data.List (intercalate)
 import Control.Monad.Identity
 import Data.Char (isSpace)
+import qualified Data.Map as M
+import qualified Data.Set as S
 
+type Name = String
 
-class Render a where
+class Show a => Render a where
   render :: a -> String
+
+instance Render a => Render [a] where
+  render as = "[" ++ (intercalate ", " $ map render as) ++ "]"
+
+instance Render a => Render (M.Map Name a) where
+  render mp = line $ "{" ++ intercalate ", " pairs ++ "}" where
+    pairs = mp ! M.toList ! map (\(n, t) -> n ++ ": " ++ render t)
+
+instance Render a => Render (S.Set a) where
+  render set = line $ "{" ++ intercalate ", " elems ++ "}" where
+    elems = set ! S.elems ! map render
 
 (!) = flip ($)
 infixl 0 !

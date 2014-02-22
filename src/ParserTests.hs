@@ -14,7 +14,8 @@ expr e = [Expr e]
                            , tConst "Baz", tConst "Qux")
 arrayS exprs = expr $ Array $ ArrayLiteral exprs
 arrayE exprs = Array $ ArrayLiteral exprs
-rangeS start stop = ArrayRange start stop ! Array ! expr
+rangeS start stop = rangeE start stop ! expr
+rangeE start stop = ArrayRange start stop ! Array
 ops = [ "+", "*", "-", "/", "^", "%", "<", ">", "<="
       , ">=", "==", "!=", "<|", "|>", "<~", "~>"]
 [ plus, times, minus, divide, expon, mod, lt, gt, leq, geq
@@ -146,51 +147,52 @@ functionTests = TestGroup "Functions"
   [
     TestGroup "Lambdas" [
       Test "should make a lambda"
-           "foo=> foo + 1"
-           (eLambda foo $ expr $ plus foo one)
+           "foo => foo + 1"
+           (eLambda foo $ plus foo one)
     , Test "should make a lambda with a typed argument"
            "foo: Foo => foo + 1"
-           (eLambda (Typed foo fooT) $ expr $ plus foo one)
+           (eLambda (Typed foo fooT) $ plus foo one)
     , Test "should make a lambda with a tuple"
            "(foo: Foo, bar: Bar) => foo bar"
-           (eLambda tup1 (expr $ Apply foo bar))
+           (eLambda tup1 (Apply foo bar))
     , Test "should make a lambda with a list"
            "[] => [1..10]"
-           (eLambda (arrayE []) (rangeS one (Number 10)))
+           (eLambda (arrayE []) (rangeE one (Number 10)))
     , Test "should make a lambda with multiple statements"
            "foo => { bar foo; foo + 1}"
-           (eLambda foo [Expr $ Apply bar foo, Expr $ plus foo one])
+           (eLambda foo $ Block [Expr $ Apply bar foo, Expr $ plus foo one])
     , Test "should make nested lambdas"
            "foo => bar => foo + bar"
-           (eLambda foo (eLambda bar (expr $ plus foo bar)))
+           (eLambda foo (Lambda bar (plus foo bar)))
     , Test "should be able to be used in definitions"
            "foo = bar => bar + 1"
-           [Define foo (eLambda bar (expr $ plus bar $ one))]
+           [Define "foo" (Lambda bar (plus bar one))]
     , Test "should be able to be used in assignments"
            "foo := bar: Baz => qux bar"
-           [Assign foo (eLambda (Typed bar bazT) (expr $ Apply qux bar))]
+           [Assign foo (Lambda (Typed bar bazT) (Apply qux bar))]
     , Test "should be able to string alternatives"
            "1 => 2 | 2 => 3"
-           (eLambdas [(one, expr two), (two, expr three)])
+           (eLambdas [(one, two), (two, three)])
     , Test "should be able to handle complex lambdas"
            "(1 => 2 | 2 => 3 | foo => bar baz) 3"
-           (expr $ Apply (Lambda [ (one, expr two)
-                                 , (two, expr three)
-                                 , (foo, expr $ Apply bar baz)]) three)
+           (expr $ Apply (Lambda (Var "(arg)") $ Case (Var "(arg)") $
+                                 [ (one, two)
+                                 , (two, three)
+                                 , (foo, Apply bar baz)]) three)
     ]
   ]
   where tup1 = Tuple [Typed foo fooT, Typed bar barT]
-        eLambda arg body = expr $ Lambda [(arg, body)]
-        eLambdas = expr . Lambda
+        eLambda arg body = expr $ Lambda arg body
+        eLambdas abds = expr $ Lambda (Var "(arg)") $ Case (Var "(arg)") abds
 
 assignmentTests = TestGroup "Assignments"
   [
-    Test "can make definitions" "foo = bar" [Define foo $ expr bar]
-  , Test "can make assignments" "foo := bar" [Assign foo $ expr bar]
+    Test "can make definitions" "foo = bar" [Define "foo" $ bar]
+  , Test "can make assignments" "foo := bar" [Assign foo $ bar]
   , Test "can make complex definitions" "foo = bar + baz"
-         [Define foo $ expr $ bar `plus` baz]
+         [Define "foo" $ bar `plus` baz]
   , Test "can make complex assignments" "foo bar := baz * qux foo"
-         [Assign (Apply foo bar) $ expr $ baz `times` Apply qux foo]
+         [Assign (Apply foo bar) $ baz `times` Apply qux foo]
   ]
 
 blockTests = TestGroup "Blocks"

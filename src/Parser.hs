@@ -77,9 +77,16 @@ pTypedVar = try $ Typed <$$ pVar <* exactSym ":" <*> pType
 
 pLambda = try $ do
   argsBodies <- pArgBody `sepBy1` (exactSym "|")
-  return $ Lambda argsBodies
+  case argsBodies of
+    [(arg, body)] -> return $ Lambda arg body
+    _ -> do
+      name <- unusedName
+      return $ Lambda (Var name) $ Case (Var name) argsBodies
 
-pArgBody = (,) <$$ pTerm <* exactSym "=>" <*> pBody
+unusedName :: Parser Name
+unusedName = return "(arg)"
+
+pArgBody = (,) <$$ pTerm <* exactSym "=>" <*> pExprOrBlock
 
 pParens :: Parser Expr
 pParens = schar '(' *> expr <* schar ')'
@@ -179,22 +186,27 @@ pWhile = While <$ keyword "while" <*> pExpr <*> pBlock
 pFor = For <$ keyword "for" <*> pExpr <* keyword "in"
            <*> pExpr <*> pBlock
 
-pBody = try pBlock <|> (single <$> Expr <$> pExpr)
-pDefine = try $ do
-  var <- pExpr
-  body <- exactSym "=" *> pBody
-  create var body
-  where
-    create var body = case var of
-      Var _ -> return $ Define var body
-      Typed (Var _) _ -> return $ Define var body
-      Apply name@(Var _) arg -> mkLambda name arg body
-      Apply name@(Typed _ _) arg -> mkLambda name arg body
-      otherwise -> unexpected $ "Illegal definition of `" ++ show var ++ "`"
-    mkLambda name arg body = return $
-      Define name $ [Expr $ Lambda [(arg, body)]]
+pExprOrBlock :: Parser Expr
+pExprOrBlock = try (Block <$> pBlock) <|> pExpr
 
-pAssign = try $ Assign <$$ pExpr <* exactSym ":=" <*> pBody
+pBody = try pBlock <|> (single <$> Expr <$> pExpr)
+
+pDefine = choice [pDefineBinary, pDefineFunction]
+
+pDefineFunction = try $ do
+  name <- pIdent lower
+  args <- many pTerm
+  body <- exactSym "=" *> pExprOrBlock
+  return $ Define name $ foldr Lambda body args
+
+pDefineBinary = try $ do
+  arg1 <- pTerm
+  op   <- pSymbol
+  arg2 <- pTerm
+  body <- exactSym "=" *> pExprOrBlock
+  return $ Define op $ Lambda (Tuple [arg1, arg2]) body
+
+pAssign = try $ Assign <$$ pExpr <* exactSym ":=" <*> pExprOrBlock
 
 getSame = same
 pStatementsNoWS = pStatement `sepEndBy1` (schar ';')

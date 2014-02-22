@@ -5,15 +5,16 @@ module AST where
 
 import Common
 
-type Name = String
 data Expr = Var Name
           | Number Double
           | String String
           | Constructor Name
+          | Block Block
           | Dot Expr Expr
           | Apply Expr Expr
           | Unary String Expr
-          | Lambda [(Expr, Block)]
+          | Lambda Expr Expr
+          | Case Expr [(Expr, Expr)]
           | Tuple [Expr]
           | Array ArrayLiteral
           | Ref Expr Expr
@@ -44,8 +45,8 @@ data Statement = Expr Expr
                | If' Expr Block
                | While Expr Block
                | For Expr Expr Block
-               | Define Expr Block
-               | Assign Expr Block
+               | Define Name Expr
+               | Assign Expr Expr
                | Return Expr
                | Throw Expr
                | Break
@@ -56,6 +57,7 @@ instance Render Expr where
     Var name -> name
     Constructor name -> name
     Number n -> show n
+    Block blk -> render'' blk
     String s -> show s
     Dot e1 e2 -> render' e1 ++ "." ++ render' e2
     Apply (Apply (Var op) e1) e2
@@ -66,10 +68,10 @@ instance Render Expr where
     Tuple es -> "(" ++ (intercalate "," . map render) es ++ ")"
     Array (ArrayLiteral exprs) -> '[' : (intercalate ", " $ map render exprs) ++ "]"
     Array (ArrayRange start stop) -> '[' : render start ++ ".." ++ render stop ++ "]"
-    Ref object index -> render' object ++ "{" ++ render index ++ "}"
-    Lambda [(arg, body)] -> render' arg ++ " => " ++ render'' body
-    Lambda abs -> let lams = map (\(a, b) -> Lambda [(a, b)]) abs in
-                  intercalate " | " $ map render lams
+    Ref object index -> render' object ++ "[:" ++ render index ++ "]"
+    Lambda arg expr -> render' arg ++ " => " ++ render expr
+    Case expr alts -> "case " ++ render expr ++ " of " ++ intercalate " | " rPairs
+      where rPairs = map (\(p, r) -> render p ++ " => " ++ render r) alts
     Typed expr typ -> render' expr ++ ": " ++ render typ
     where
       render'' [stmt] = render stmt
@@ -77,7 +79,7 @@ instance Render Expr where
       render' expr = case expr of
         Apply _ _ -> parens
         Dot _ _ -> parens
-        Lambda _ -> parens
+        Lambda _ _ -> parens
         _ -> render expr
         where parens = "(" ++ render expr ++ ")"
 
@@ -105,11 +107,7 @@ instance Render Statement where
         for <- line $ "for " ++ render pat ++ " in " ++ render expr
         blk' <- block blk
         join $ [for] ++ blk'
-      Define e1 [Expr e2] -> line $ render e1 ++ " = " ++ render e2
-      Define e blk -> do
-        expr <- line $ render e ++ " ="
-        body <- block blk
-        join $ [expr] ++ body
+      Define name expr -> line $ name ++ " = " ++ render expr
       Assign e1 block -> line $ render e1 ++ " := " ++ render block
       Break -> line "break"
       Throw e -> line $ "throw " ++ render e
@@ -120,7 +118,7 @@ instance Render Statement where
     (up, down) = (modify (+2), modify (\n -> n - 2))
 
 instance Render Block where
-  render b = "{" ++ (line . trim . (intercalate "; ") . map render) b
+  render b = "{" ++ (line . trim . (intercalate "; ") . map render) b ++ "}"
 
 instance Render Type where
   render t = case t of
@@ -141,7 +139,7 @@ instance Render Type where
 
 symChars = "><=+-*/^~!%@&$:.#|?"
 isSymbol = all (`elem` symChars)
-binary name e1 e2 = Apply (Apply (Var name) e1) e2
+binary name e1 e2 = Apply (Var name) $ Tuple [e1, e2]
 
 boolT = tConst "Bool"
 numT = tConst "Num"
@@ -149,16 +147,3 @@ strT = tConst "Str"
 arrayOf a = TConst "[]" [a]
 listOf a = TConst "[!]" [a]
 unitT = tTuple []
-
-
-
-
-
-
-
-
-
-
-
-
-
