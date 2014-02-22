@@ -6,7 +6,7 @@ module Common ( (!), (<!>), (<$>), (<$), (<*), (*>), (<*>), pure
               , get, modify, put, lift, forM_, forM, when, Monoid(..)
               , (<>), StateT(..), State(..), ErrorT(..), indentBy, Name(..)
               , intercalate, Identity(..), runState, (>>==), trim, line
-              , throwError, catchError, (~>), (<$$), Render(..))  where
+              , throwError, catchError, (~>), (<$$), Render(..), isInt)  where
 
 import Control.Monad
 import Control.Monad.State
@@ -55,3 +55,9 @@ indentBy amount str =
 
 line :: String -> String
 line s = if '\n' `elem` s then "\n" ++ s else s
+
+--Returns if x is an int to n decimal places
+isIntTo :: (Integral a, RealFrac b) => b -> a -> Bool
+isIntTo x n = (round $ 10^(fromIntegral n)*(x-(fromIntegral $ round x)))==0
+
+isInt x = isIntTo x 10

@@ -67,6 +67,7 @@ typeOfApply typeOf func arg = do
   case func of
     Var name -> do
       tList <- lookupFuncs name
+      when (length tList == 0) $ throwErrorC ["`", name, "' is not defined in scope"]
       getFirstCompatible argT name tList
     _ -> typeOf func >>= \case
       TFunction fromT returnT -> do
