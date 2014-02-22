@@ -46,6 +46,7 @@ data Statement = Expr Expr
                | While Expr Block
                | For Expr Expr Block
                | Define Name Expr
+               | Extend Name Expr
                | Assign Expr Expr
                | Return Expr
                | Throw Expr
@@ -109,6 +110,7 @@ instance Render Statement where
         blk' <- block blk
         join $ [for] ++ blk'
       Define name expr -> line $ name ++ " = " ++ render expr
+      Extend name expr -> line $ name ++ " &= " ++ render expr
       Assign e1 block -> line $ render e1 ++ " := " ++ render block
       Break -> line "break"
       Throw e -> line $ "throw " ++ render e

@@ -6,7 +6,8 @@ module Common ( (!), (<!>), (<$>), (<$), (<*), (*>), (<*>), pure
               , get, modify, put, lift, forM_, forM, when, Monoid(..)
               , (<>), StateT(..), State(..), ErrorT(..), indentBy, Name(..)
               , intercalate, Identity(..), runState, (>>==), trim, line
-              , throwError, catchError, (~>), (<$$), Render(..), isInt)  where
+              , throwError, catchError, (~>), (<$$), Render(..), isInt
+              , ErrorList(..), throwError1, throwErrorC, addError, addError')  where
 
 import Control.Monad
 import Control.Monad.State
@@ -18,6 +19,12 @@ import Control.Monad.Identity
 import Data.Char (isSpace)
 import qualified Data.Map as M
 import qualified Data.Set as S
+
+newtype ErrorList = TE [String]
+instance Error ErrorList where
+  strMsg = TE . pure
+instance Show ErrorList where
+  show (TE msgs) = msgs ! concatMap ((++ "\n") . indentBy 4 . trim) ! line
 
 type Name = String
 
@@ -61,3 +68,8 @@ isIntTo :: (Integral a, RealFrac b) => b -> a -> Bool
 isIntTo x n = (round $ 10^(fromIntegral n)*(x-(fromIntegral $ round x)))==0
 
 isInt x = isIntTo x 10
+
+throwErrorC = throwError1 . concat
+throwError1 = throwError . TE . pure
+addError msg (TE msgs) = throwError $ TE $ msg : msgs
+addError' = addError . concat

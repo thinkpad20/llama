@@ -8,17 +8,16 @@ import Text.Parsec hiding (Parser, parse, State)
 import Indent
 import Control.Applicative hiding (many, (<|>))
 
--- skip :: Parser ()
--- skip = many (oneOf " \t") *> option () lineComment
---   where lineComment = do char '#'
---                          many (noneOf "\n")
---                          (char '\n' >> return ()) <|> eof
-skip = many (oneOf " \t")
-keywords = ["if", "do", "else", "case", "of", "infix", "type",
-            "object", "while", "for", "in", "then"]
+skip :: Parser ()
+skip = many (oneOf " \t") *> option () lineComment
+  where lineComment = do char '#'
+                         many (noneOf "\n")
+                         (char '\n' >> return ()) <|> eof
+keywords = ["if", "do", "else", "case", "of", "infix", "typedef",
+            "object", "while", "for", "in", "then", "after"]
 keySyms =  ["->", "|", "=", ";", "..", "=>", "?", ":", "#", "{!"]
 
-keyword k = lexeme . try $ string k <* notFollowedBy alphaNum
+keyword k = lexeme . try $ string k <* notFollowedBy (alphaNum <|> char '_')
 
 exactSym k = lexeme . try $ string k <* notFollowedBy (oneOf symChars)
 
@@ -100,12 +99,12 @@ pString' = do
   str <- anyChar `manyTill` (lookAhead $ oneOf "\\\"")
   oneOf "\\\"" >>= \case
     '\\' -> anyChar >>= \case
-      'n' -> escape '\n'
+      'n'  -> escape '\n'
       '\\' -> escape '\\'
-      't' -> escape '\t'
-      'r' -> escape '\r'
-      'b' -> escape '\b'
-      '"' -> escape '"'
+      't'  -> escape '\t'
+      'r'  -> escape '\r'
+      'b'  -> escape '\b'
+      '"'  -> escape '"'
       c | c `elem` [' ', '\n', '\t'] -> consume
       c -> unexpected $ "Unrecognized escape character `" ++ [c] ++ "'"
       where escape c = pString' >>= \rest -> return $ str ++ [c] ++ rest
@@ -178,6 +177,7 @@ pTerm = lexeme $ choice [ Number <$> pDouble
 pOpenBrace = schar'  '{' >> notFollowedBy (char '!')
 pCloseBrace = schar'  '}'
 
+pBlock :: Parser Block
 pBlock = pOpenBrace *> pStatementsNoWS <* pCloseBrace
          <|> indent *> pStatementsWS <* dedent
          <|> (keyword "do" >> single <$> pStatement)
@@ -189,22 +189,21 @@ pFor = For <$ keyword "for" <*> pExpr <* keyword "in"
 pExprOrBlock :: Parser Expr
 pExprOrBlock = try (Block <$> pBlock) <|> pExpr
 
-pBody = try pBlock <|> (single <$> Expr <$> pExpr)
+pDefine = choice [pDefBinary Define, pDefFunction Define]
+pExtend = choice [pDefBinary Extend, pDefFunction Extend]
 
-pDefine = choice [pDefineBinary, pDefineFunction]
-
-pDefineFunction = try $ do
+pDefFunction f = try $ do
   name <- pIdent lower
   args <- many pTerm
   body <- exactSym "=" *> pExprOrBlock
-  return $ Define name $ foldr Lambda body args
+  return $ f name $ foldr Lambda body args
 
-pDefineBinary = try $ do
+pDefBinary f = try $ do
   arg1 <- pTerm
   op   <- pSymbol
   arg2 <- pTerm
   body <- exactSym "=" *> pExprOrBlock
-  return $ Define op $ Lambda (Tuple [arg1, arg2]) body
+  return $ f op $ Lambda (Tuple [arg1, arg2]) body
 
 pAssign = try $ Assign <$$ pExpr <* exactSym ":=" <*> pExprOrBlock
 
@@ -225,9 +224,16 @@ pThen = do keyword "then" <|> return "then"
            pBlockOrStatement
 pElse = keyword "else" *> pBlockOrStatement
 
+--pAfter :: Parser Statement
+--pAfter = do
+--  result <- pExpr
+--  keyword "after"
+--  block <- pBlock
+--  return $ Block $ block ++ [Expr result]
+
 pStatement :: Parser Statement
 pStatement = do
-  lexeme $ choice $ [ pDefine, pAssign
+  lexeme $ choice $ [ pDefine, pExtend, pAssign
                     , Expr <$> pExpr
                     , pWhile, pFor
                     , pIf]

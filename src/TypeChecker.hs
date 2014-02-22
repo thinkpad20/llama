@@ -3,7 +3,8 @@
 {-# LANGUAGE TypeSynonymInstances #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE NoMonomorphismRestriction #-}
-module TypeChecker where
+module TypeChecker ( Typable(..), Typing(..), TypeTable(..)
+                   , TypingState(..), runTyping) where
 
 import Prelude hiding (lookup, log)
 import System.IO.Unsafe
@@ -17,31 +18,32 @@ import qualified Data.Set as S
 class Typable a where
   typeOf :: a -> Typing Type
 
-newtype TypingError = TE [String]
 data TypeRecord = Type Type | TypeSet TypeSet deriving (Show)
 type TypeSet = S.Set Type
-type SymbolTable = M.Map Name TypeRecord
-data TypingState = TypingState { table ::[SymbolTable]
+type TypeTable = M.Map Name TypeRecord
+type NameSpace = [Name]
+data TypingState = TypingState { table ::[TypeTable]
                                , aliases :: M.Map Name Type
+                               , nameSpace :: [Name]
+                               , nameSpaceTable :: TypeTable
                                , freshName :: Name } deriving (Show)
-type Typing = ErrorT TypingError (StateT TypingState IO)
-
-instance Error TypingError where
-  strMsg = TE . pure
-
-instance Show TypingError where
-  show (TE msgs) = msgs ! concatMap ((++ "\n") . indentBy 4 . trim) ! line
+type Typing = ErrorT ErrorList (StateT TypingState IO)
 
 instance Render TypeRecord where
   render (Type typ) = render typ
   render (TypeSet ts) = "{" ++ (intercalate ", " $ map render $ S.elems ts) ++ "}"
 
 instance Render TypingState where
-  render state = line $ concat ["Table: ", render $ init $ table state, ", "
-                               , "Aliases: ", render $ aliases state]
+  render state =
+    let tbl = nameSpaceTable state
+        tbl' = M.filterWithKey (\k _ -> M.notMember k builtIns) tbl in
+    line $ concat ["Names: ", render tbl']
 
 instance Render [M.Map Name Type] where
   render mps = line $ "[" ++ (intercalate ", " $ map render mps) ++ "]"
+
+instance Render NameSpace where
+  render = intercalate "/" . reverse
 
 -- | Pulled this one out since the behavior is almost the same, but not
 -- identical, between `typeOf` and `litTypeOf`
@@ -73,9 +75,12 @@ typeOfApply typeOf func arg = do
       TFunction fromT returnT -> do
         unify argT fromT `catchError` uniError argT fromT
         refine returnT
-      -- here we can check if its type is Functionable?
-      funcT -> throwErrorC ["Expression `", render func, "' is not a function, "
-                           , "but of type `", render funcT, "'"]
+      -- here we can check if we can use the type "as a function"
+      funcT -> typeOf (Apply (Var "@call") (Tuple [func, arg]))
+        `catchError` \_ ->
+          throwErrorC ["No way to call the expression `", render func
+                      , "' as a function with argument `", render argT
+                      , "'. Define `@call` if desired."]
   where uniError typ typ' = addError' ["`", render func, "' takes `", render typ'
                                       , "' as its argument, but `", render arg
                                       , "' has the type `", render typ, "'"]
@@ -83,7 +88,7 @@ typeOfApply typeOf func arg = do
 getFirstCompatible argT funcName tList = go tList where
   go :: [Type] -> Typing Type
   go list = case list of
-    (TFunction fromT toT):rest -> 
+    (TFunction fromT toT):rest ->
       (unify argT fromT >> refine toT) `catchError` \_ -> go rest
     typ:rest -> throwErrorC ["Identifier `", funcName, "' has non-function "
                             , "type `", render typ, "'"]
@@ -99,6 +104,7 @@ instance Typable Expr where
     go = case expr of
       Number _ -> return numT
       String _ -> return strT
+      Block blk -> pushNameSpace "%b" *> typeOf blk <* popNameSpace
       Var name -> do
         log' ["instantiating expr var '", name, "'"]
         lookupAndInstantiate name >>= check
@@ -107,10 +113,10 @@ instance Typable Expr where
         lookupAndInstantiate name >>= check
       Array arr@(ArrayLiteral _) -> typeOfArrayLiteral typeOf arr
       Tuple vals -> tTuple <$> mapM typeOf vals
-      Lambda (Typed (Var name) argT) expr -> do
-        pushWith name argT
+      Lambda arg expr -> do
+        argT <- push *> pushNameSpace "%l" *> litTypeOf arg
         returnT <- typeOf expr
-        (refine (argT ==> returnT) >>= generalize) <* pop
+        (refine (argT ==> returnT) >>= generalize) <* pop <* popNameSpace
       Dot a b -> typeOf (Apply b a)
       Apply a b -> typeOfApply typeOf a b
       _ -> error $ "we can't handle expression `" ++ render expr ++ "'"
@@ -135,7 +141,9 @@ litTypeOf :: Expr -> Typing Type
 litTypeOf expr = case expr of
   Typed (Var name) typ -> do
     log' ["instantiating typed variable ", name, " as ", render typ]
-    instantiate typ >>= setType name
+    instantiated <- instantiate typ
+    setType name instantiated
+    addNsName name instantiated
   Number _ -> return numT
   String _ -> return strT
   Tuple exprs -> tTuple <$> mapM litTypeOf exprs
@@ -187,7 +195,11 @@ instance Typable Statement where
         refine tType
       Define name expr ->
         lookup1 name >>= \case
-          Nothing -> typeOf expr >>= setType name
+          -- If it's not defined, we proceed forward
+          Nothing -> do
+            pushNameSpace name
+            result <- typeOf expr >>= setType name
+            popNameSpace >> addNsName name result
           Just typ -> scopeError name
       Assign expr expr' -> do
         exprT <- typeOf expr
@@ -199,14 +211,22 @@ instance Typable Statement where
         cType <- typeOf cond
         cType `unify` boolT `catchError` condError
         typeOf block
-      For (Var name) container block -> do
+      For expr container block -> do
+        pushNameSpace "%for"
         -- need to make sure container contains things...
         contT <- typeOf container
         -- we probably want to do this via traits instead of this, but eh...
-        case contT of
-          TConst name [typ'] -> setType name typ' >> typeOf block
-          typ -> throwErrorC ["Non-container type `", render typ
-                             , "' used in a for loop"]
+        case (expr, contT) of
+          (Var name, TConst name' [typ']) -> do
+            setType name typ'
+            result <- typeOf block
+            popNameSpaceWith name result
+          (Typed (Var name) typ, TConst name' [typ']) | typ == typ' -> do
+            setType name typ'
+            result <- typeOf block
+            popNameSpaceWith name result
+          (_, typ) -> throwErrorC ["Non-container type `", render typ
+                                  , "' used in a for loop"]
 
 getTable = get <!> table
 getAliases = get <!> aliases
@@ -215,12 +235,25 @@ getAliases = get <!> aliases
 push, pop :: Typing ()
 push = modify $ \s -> s {table = mempty : table s}
 pop = modify $ \s -> s {table = tail $ table s}
-pushWith name typ = modify $ \s -> s {table = M.singleton name (Type typ) : table s}
-  
+pushWith name typ =
+  modify $ \s -> s {table = M.singleton name (Type typ) : table s}
+
+pushNameSpace :: Name -> Typing ()
+pushNameSpace name = modify $ \s -> s { nameSpace = name : nameSpace s }
+popNameSpace = modify $ \s -> s { nameSpace = tail $ nameSpace s }
+popNameSpaceWith name typ = popNameSpace *> addNsName name typ
+
 setType :: Name -> Type -> Typing Type
 setType name typ = do
   tbl:tbls <- getTable
-  modify $ \s -> s {table = M.insert name (Type typ) tbl : tbls}
+  modify $ \s -> s { table = M.insert name (Type typ) tbl : tbls}
+  return typ
+
+addNsName :: Name -> Type -> Typing Type
+addNsName name typ = do
+  nsName <- fullName name
+  nsTable <- M.insert nsName (Type typ) <$> nameSpaceTable <$> get
+  modify $ \s -> s { nameSpaceTable = nsTable }
   return typ
 
 unusedTypeVar :: Typing Type
@@ -253,14 +286,13 @@ lookup name = getTable >>= loop
 
 -- | looks up all of the functions in scope under the given name
 lookupFuncs :: Name -> Typing [Type]
-lookupFuncs name = do
-  table <- getTable
-  sets <- forM table go
-  return $ mconcat sets
-  where 
+lookupFuncs name = fmap mconcat $ getTable >>= mapM go
+  where
     go tbl = do
       case M.lookup name tbl of
         Just (Type t@(TFunction from to)) -> return [t]
+        Just (Type t) -> throwErrorC ["Identifier `", name, "' maps to non-"
+                                     , "function type `", render t, "'"]
         Just (TypeSet ts) -> return $ S.elems ts
         Nothing -> return mempty
 
@@ -269,11 +301,6 @@ lookupAndInstantiate name = lookup name >>= \case
   Just (Type typ) -> Type <$> instantiate typ
   Just (TypeSet ts) -> (TypeSet . S.fromList) <$> mapM instantiate (S.toList ts)
   Nothing -> throwErrorC ["Variable '", name, "' not defined in scope"]
-
-throwErrorC = throwError1 . concat
-throwError1 = throwError . TE . pure
-addError msg (TE msgs) = throwError $ TE $ msg : msgs
-addError' = addError . concat
 
 -- | adds to the type aliases map any substitutions needed to make
 -- its two arguments equivalent. Throws an error if such a substitution
@@ -336,7 +363,12 @@ refine typ = look mempty typ where
 
 defaultState = TypingState { table = [builtIns]
                            , aliases = mempty
+                           , nameSpace = []
+                           , nameSpaceTable = builtIns
                            , freshName = "a0"}
+
+fullName :: Name -> Typing String
+fullName name = get <!> nameSpace <!> (name:) <!> render
 
 builtIns = M.fromList [ ("+", nnnOrSss), ("-", nnn), ("*", nnn), ("/", nnn)
                       , ("%", nnn), (">", nnb), ("<", nnb), (">=", nnb)
@@ -345,7 +377,8 @@ builtIns = M.fromList [ ("+", nnnOrSss), ("-", nnn), ("*", nnn), ("/", nnn)
                       , ("~>", Type $ ab ==> bc ==> ac), ("<~", Type $ bc ==> ab ==> ac)
                       , ("print", Type $ a ==> unitT)
                       , ("Just", Type $ a ==> TConst "Maybe" [a])
-                      , ("Nothing", Type $ TConst "Maybe" [a]) ]
+                      , ("Nothing", Type $ TConst "Maybe" [a])
+                      , ("@call", nnnOrSss) ]
   where tup a b c = tTuple [a, b] ==> c
         nnn = Type $ tup numT numT numT
         sss = Type $ tup strT strT strT
@@ -360,7 +393,7 @@ builtIns = M.fromList [ ("+", nnnOrSss), ("-", nnn), ("*", nnn), ("/", nnn)
 
 -- NOTE: using unsafePerformIO for testing purposes only. This will
 -- all be pure code in the end.
-runTyping :: Typable a => a -> (Either TypingError Type, TypingState)
+runTyping :: Typable a => a -> (Either ErrorList Type, TypingState)
 runTyping a = unsafePerformIO $ runStateT (runErrorT $ typeOf a) defaultState
 
 typeIt :: String -> IO ()

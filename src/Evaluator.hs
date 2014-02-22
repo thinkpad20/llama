@@ -4,53 +4,20 @@
 {-# LANGUAGE LambdaCase #-}
 module Evaluator where
 
+import Prelude hiding (lookup)
 import System.IO.Unsafe
+import qualified Data.Map as M
+
 import Common
 import Parser
 import AST
-import qualified Data.Map as M
-
-{-
-In an imperative paradigm, a function is a list of instructions along with
-a maping of identifiers to values, with zero of more of those values unset.
-So we can know everything we need to know about a function if we have:
-  1. A list of instructions [Instruction]
-  2. a map from identifiers to values (M.Map Name Value)
-
-  How about args? For example if we have the function
-    foo = bar: Number => baz bar
-    Then do we need to store that it takes a value of type Num? Or
-    can we just look through its map and see that it contains
-    {bar: ArgRef (TConst "Number")} and get the type from there?
-    Seems good to me.
-  How about
-    foo = (bar: Number, baz: String) => show bar ++ baz
-    Its map would contain { bar: ArgTupleRef 0 (TConst "Number")
-                          , baz: ArgTupleRef 1 (TConst "String")}
-    So technically it contains all it needs, but it would be cleaner to
-    keep the type information in the function... then all we'd need is
-    that {bar: ArgTupleRef 0} and since the argument type of foo is a
-    (Number, String), we'd know bar: Number. Need more thinking tho.
-  How about
-    foo = ((bar: Number, baz: String), qux: Number) => bar + baz.length + qux
-    `bar` is the 0th index of the 0th index of the argument. So we need a
-    recursive method. As in, it's either "the argument itself", or an index
-    into an argument reference.
-    Then we'd have { bar: Index 0 (Index 0 ArgRef)
-                   , baz: Index 1 (Index 0 ArgRef)
-                   , qux: Index 1 ArgRef }
-    And the arg type of the function would be ((Number, String), Number)
-
-  BUT another view is, we can check types statically, and there's no need to
-  keep those types afterwards, because we already will have determined that
-  we are passing in the right types!
--}
+import TypeChecker
 
 data Value = VNumber Double
            | VString String
-           | VFunction Block SymbolTable
+           | VFunction Expr ValueTable
+           | VObject Name [Value]
            | VArray [Value]
-           | VTuple [Value]
            | VArg ArgRef
            deriving (Show, Eq)
 
@@ -59,32 +26,51 @@ data ArgRef = ArgRef -- meaning "the argument of this function"
             | Index Int ArgRef -- meaning an index into the argument
             deriving (Show, Eq)
 
--- might want to abstract out a stack frame?
-
 data StackFrame = StackFrame
   {
     argument :: Value
-  , locals   :: [Value]
-  , symTable :: SymbolTable
+  , vTable :: ValueTable
   } deriving (Show)
-type SymbolTable = M.Map Name Value
-data EvalState = EvalState {stack::[StackFrame]} deriving (Show)
-type EvalError = String
-type Eval = ErrorT EvalError (StateT EvalState IO)
+type ValueTable = M.Map Name Value
+data EvalState = EvalState {stack::[StackFrame]
+                           , sTable::TypeTable} deriving (Show)
+type Eval = ErrorT ErrorList (StateT EvalState IO)
+
+instance Render EvalState where
+  render s =  ""
+
+instance Render Value where
+  render val = case val of
+    VNumber n -> show n
+    VString s -> show s
+    VFunction res vtable -> render res ++ ", with " ++ render vtable
+    VObject "" vals -> "(" ++ (intercalate ", " $ map render vals) ++ ")"
+    VObject name vals ->
+      name ++ " (" ++ (intercalate ", " $ map render vals) ++ ")"
+    VArray vals -> render vals
+    VArg aref -> render aref
+
+instance Render ArgRef where
+  render aref = case aref of
+    ArgRef -> "argument"
+    Index i aref -> render aref ++ "[" ++ show i ++ "]"
 
 class Evalable a where
   eval :: a -> Eval Value
+
+vTuple :: [Value] -> Value
+vTuple = VObject ""
+unitV = vTuple []
 
 -- we probably won't end up using this, but...
 defaultFrame :: StackFrame
 defaultFrame = StackFrame
   {
-    argument = VTuple []
-  , locals   = mempty
-  , symTable = mempty
+    argument = unitV
+  , vTable = mempty
   }
 defaultState :: EvalState
-defaultState = EvalState {stack = []}
+defaultState = EvalState {stack = [defaultFrame], sTable = mempty}
 
 push :: Eval ()
 push = modify $ \s -> s {stack = defaultFrame : stack s}
@@ -94,15 +80,27 @@ pushWith :: StackFrame -> Eval ()
 pushWith frame = modify $ \s -> s {stack = frame : stack s}
 pushWithArg :: Value -> Eval ()
 pushWithArg arg = pushWith defaultFrame{argument = arg}
+
 addLocal :: Name -> Value -> Eval ()
 addLocal name val = do
   frame <- head <$> getStack
-  let frame' = frame { locals = locals frame ++ [val]
-                     , symTable = M.insert name val (symTable frame)}
+  let frame' = frame { vTable = M.insert name val (vTable frame) }
   modify $ \s -> s {stack = frame' : tail (stack s)}
 
 getStack = get <!> stack
-getSymTable = get <!> stack <!> head <!> symTable
+getSymTable = get <!> stack <!> head <!> vTable
+
+lookup name = getStack >>= loop
+  where loop [] = return Nothing
+        loop (frame:frames) = case M.lookup name (vTable frame) of
+          Just val -> return (Just val)
+          Nothing -> loop frames
+
+lookupAndError name = lookup name >>= \case
+  Just (VArg ArgRef) -> get <!> stack <!> head <!> argument
+  Just v@(VArg _) -> throwErrorC ["Can't deal with `", render v, "'"]
+  Just val-> return val
+  Nothing -> throwErrorC ["Variable '", name, "' not defined in scope"]
 
 instance Evalable Block where
   eval block = last <$> mapM eval block
@@ -110,9 +108,9 @@ instance Evalable Block where
 instance Evalable Statement where
   eval stmt = case stmt of
     Expr expr -> eval expr
-    Define (TVar name) block -> do
+    Define name block -> do
       eval block >>== addLocal name
-    Assign _ _ -> throwError "Assignment not yet supported"
+    Assign _ _ -> throwError1 "Assignment not yet supported"
     _ -> error "ruh roh"
 
 instance Evalable Expr where
@@ -120,6 +118,7 @@ instance Evalable Expr where
     Number n -> return $ VNumber n
     String s -> return $ VString s
     Dot a b -> eval $ Apply b a
+    Var name -> lookupAndError name
     Apply func arg -> do
       funcVal <- eval func
       -- need to figure out polymorphism here...
@@ -127,20 +126,39 @@ instance Evalable Expr where
         VFunction block env -> do
           argVal <- eval arg
           pushWithArg argVal *> eval block <* pop
-        _ -> throwError' ["`", render func, "' is not a function!"]
-    Lambda [(Typed (Var name) _, block)] -> do
-      symTable <- getSymTable
-      return $ VFunction block (M.insert name (VArg ArgRef) symTable)
-    Lambda _ -> throwError "Lambda alternatives not supported yet"
+        _ -> throwErrorC ["`", render func, "' is not a function!"]
+    Lambda expr block -> do
+      vTable <- getSymTable
+      names <- getNames expr
+      return $ VFunction block (M.union names vTable)
+    _ -> throwErrorC ["Can't evaluate `", render expr, "' yet"]
 
+getNames :: Expr -> Eval (M.Map Name Value)
+getNames expr = case expr of
+  Var name -> return (M.singleton name (VArg ArgRef))
+  Typed (Var name) _ -> return (M.singleton name (VArg ArgRef))
+  _ -> throwErrorC ["Whoopsie, we can't handle `", render expr, "' yet"]
 
-throwError' = throwError . concat
 
 -- NOTE: using unsafePerformIO for testing purposes only
-runEval :: Evalable a => a -> (Either EvalError Value, EvalState)
-runEval a = unsafePerformIO $ runStateT (runErrorT $ eval a) defaultState
+runEvalWith :: Evalable a => EvalState -> a -> (Either ErrorList Value, EvalState)
+runEvalWith state a = unsafePerformIO $ runStateT (runErrorT $ eval a) state
 
-evalIt :: String -> (Either EvalError Value, EvalState)
-evalIt input = case grab input of
+runEval :: Evalable a => a -> (Either ErrorList Value, EvalState)
+runEval = runEvalWith defaultState
+
+typeAndEval :: String -> (Either ErrorList Value, EvalState)
+typeAndEval input = case grab input of
   Left err -> error $ show err
-  Right block -> runEval block
+  Right block ->
+    case runTyping block of
+      (Left errs, _) -> error $ show errs
+      (Right _, tstate) ->
+        let state = defaultState {sTable = nameSpaceTable tstate} in
+        runEvalWith state block
+
+evalIt :: String -> IO ()
+evalIt input = case typeAndEval input of
+  (Left err, _) -> error $ show err
+  (Right val, state) ->
+    putStrLn $ render val ++ "\n" ++ render state
