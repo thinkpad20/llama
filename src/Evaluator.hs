@@ -16,10 +16,17 @@ import TypeChecker
 data Value = VNumber Double
            | VString String
            | VFunction Expr ValueTable
+           | Builtin Builtin
            | VObject Name [Value]
            | VArray [Value]
            | VArg ArgRef
            deriving (Show, Eq)
+
+type Builtin = Value -> Eval Value
+instance Show Builtin where
+  show bin = "(BUILTIN)"
+instance Eq Builtin where
+  bin == bin2 = False
 
 -- | References to as-yet-unset values, as in function args
 data ArgRef = ArgRef -- meaning "the argument of this function"
@@ -49,6 +56,7 @@ instance Render Value where
       name ++ " (" ++ (intercalate ", " $ map render vals) ++ ")"
     VArray vals -> render vals
     VArg aref -> render aref
+    Builtin _ -> show val
 
 instance Render ArgRef where
   render aref = case aref of
@@ -67,7 +75,7 @@ defaultFrame :: StackFrame
 defaultFrame = StackFrame
   {
     argument = unitV
-  , vTable = mempty
+  , vTable = builtins
   }
 defaultState :: EvalState
 defaultState = EvalState {stack = [defaultFrame], sTable = mempty}
@@ -125,12 +133,15 @@ instance Evalable Expr where
       case funcVal of
         VFunction block env -> do
           argVal <- eval arg
-          pushWithArg argVal *> eval block <* pop
+          pushWith StackFrame { argument = argVal, vTable = env }
+          eval block <* pop
+        Builtin f -> eval arg >>= f
         _ -> throwErrorC ["`", render func, "' is not a function!"]
     Lambda expr block -> do
       vTable <- getSymTable
       names <- getNames expr
       return $ VFunction block (M.union names vTable)
+    Tuple exprs -> vTuple <$> mapM eval exprs
     _ -> throwErrorC ["Can't evaluate `", render expr, "' yet"]
 
 getNames :: Expr -> Eval (M.Map Name Value)
@@ -162,3 +173,22 @@ evalIt input = case typeAndEval input of
   (Left err, _) -> error $ show err
   (Right val, state) ->
     putStrLn $ render val ++ "\n" ++ render state
+
+------------- BUILTIN FUNCTIONS --------------
+illegalArgErr name arg = throwErrorC $
+  ["Illegal arguments to BUILTIN/", name, ": `", render arg, "'"]
+
+numNumOp :: (Double -> Double -> Double) -> Name -> Builtin
+numNumOp op name arg = case arg of
+  VObject "" [VNumber n, VNumber m] -> return $ VNumber (op n m)
+  _ -> illegalArgErr name arg
+
+addNumber, subtractNumber, multiplyNumber, divideNumber :: Builtin
+addNumber = numNumOp (+) "addNumber"
+subtractNumber = numNumOp (-) "subtractNumber"
+multiplyNumber = numNumOp (*) "multiplyNumber"
+divideNumber = numNumOp (/) "divideNumber"
+
+builtins = M.fromList
+  [ ("+", Builtin addNumber)
+  ]
