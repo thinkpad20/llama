@@ -6,14 +6,14 @@ Input:
 poop (n: Num) (m: Num) = n + m
 foo (n: Num) (m: Num) = qux bar baz after
   bar = 3
-  baz = 5 after prNum "wazzup"
+  baz = 5 after print "wazzup"
   qux (n : Num) =
     x = 1
     m: Num => poop n (m x)
 ```
 
 ```
-"poop (n: Num) (m: Num) = n + m; foo (n: Num) (m: Num) = { bar = 3; baz = { prNum \"wazzup\"; 5 }; qux (n : Num) = { x = 1; m: Num => poop n (m * x) }; qux bar baz}"
+"poop (n: Num) (m: Num) = n + m; foo (n: Num) (m: Num) = { bar = 3; baz = { print \"wazzup\"; 5 }; qux (n : Num) = { x = 1; m: Num => poop n (m * x) }; qux bar baz}"
 ```
 
 Desugars to:
@@ -24,7 +24,7 @@ foo = n: Num =>
   m: Num =>
     bar = 3
     baz =
-      prNum "wazzup"
+      print "wazzup"
       5
     qux = n: Num =>
       x = 1
@@ -37,7 +37,7 @@ Namespace:
 
 ```
 +: (Num, Num) -> Num
-prNum: a -> ()
+print: a -> ()
 
 poop: Num -> Num -> Num
 poop/n: Num

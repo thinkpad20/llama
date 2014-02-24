@@ -1,7 +1,7 @@
 {-# LANGUAGE LambdaCase #-}
 module Tests (Test(..), runTests) where
 
-import Common hiding (line)
+import Common hiding (line, addError)
 import System.IO
 import Data.List (intercalate)
 import System.Console.ANSI

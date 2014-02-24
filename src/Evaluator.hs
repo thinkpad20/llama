@@ -5,80 +5,16 @@
 module Evaluator where
 
 import Prelude hiding (lookup)
+import System.Console.Haskeline
 import System.IO.Unsafe
+import System.IO
 import qualified Data.Map as M
 
 import Common
 import Parser
 import AST
 import TypeChecker
-
-data Value = VNumber Double
-           | VString String
-           | VFunction Expr ValueTable
-           | Builtin Builtin
-           | VObject Name [Value]
-           | VArray [Value]
-           | VArg ArgRef
-           deriving (Show, Eq)
-
-type Builtin = Value -> Eval Value
-instance Show Builtin where
-  show bin = "(BUILTIN)"
-instance Eq Builtin where
-  bin == bin2 = False
-
--- | References to as-yet-unset values, as in function args
-data ArgRef = ArgRef -- meaning "the argument of this function"
-            | Index Int ArgRef -- meaning an index into the argument
-            deriving (Show, Eq)
-
-data StackFrame = StackFrame
-  {
-    argument :: Value
-  , vTable :: ValueTable
-  } deriving (Show)
-type ValueTable = M.Map Name Value
-data EvalState = EvalState {stack::[StackFrame]
-                           , sTable::TypeTable} deriving (Show)
-type Eval = ErrorT ErrorList (StateT EvalState IO)
-
-instance Render EvalState where
-  render s =  ""
-
-instance Render Value where
-  render val = case val of
-    VNumber n -> show n
-    VString s -> show s
-    VFunction res vtable -> render res ++ ", with " ++ render vtable
-    VObject "" vals -> "(" ++ (intercalate ", " $ map render vals) ++ ")"
-    VObject name vals ->
-      name ++ " (" ++ (intercalate ", " $ map render vals) ++ ")"
-    VArray vals -> render vals
-    VArg aref -> render aref
-    Builtin _ -> show val
-
-instance Render ArgRef where
-  render aref = case aref of
-    ArgRef -> "argument"
-    Index i aref -> render aref ++ "[" ++ show i ++ "]"
-
-class Evalable a where
-  eval :: a -> Eval Value
-
-vTuple :: [Value] -> Value
-vTuple = VObject ""
-unitV = vTuple []
-
--- we probably won't end up using this, but...
-defaultFrame :: StackFrame
-defaultFrame = StackFrame
-  {
-    argument = unitV
-  , vTable = builtins
-  }
-defaultState :: EvalState
-defaultState = EvalState {stack = [defaultFrame], sTable = mempty}
+import EvaluatorLib
 
 push :: Eval ()
 push = modify $ \s -> s {stack = defaultFrame : stack s}
@@ -95,23 +31,57 @@ addLocal name val = do
   let frame' = frame { vTable = M.insert name val (vTable frame) }
   modify $ \s -> s {stack = frame' : tail (stack s)}
 
+getStack :: Eval [StackFrame]
 getStack = get <!> stack
-getSymTable = get <!> stack <!> head <!> vTable
+--getSymTable = get <!> stack <!> head <!> vTable
 
+lookup :: Name -> Eval (Maybe Value)
 lookup name = getStack >>= loop
   where loop [] = return Nothing
         loop (frame:frames) = case M.lookup name (vTable frame) of
           Just val -> return (Just val)
           Nothing -> loop frames
 
+computeClosure :: Eval ValueTable
+computeClosure = do
+  stack <- getStack
+  case stack of
+    [] -> return mempty
+    s:_ -> fmap M.fromList $ forM (M.toList $ vTable s) $ \(k, v) -> do
+      case v of
+        VArg ref -> derefArg ref >>= \v -> return (k, v)
+        _ -> return (k, v)
+
+derefArg :: ArgRef -> Eval Value
+derefArg argRef = do
+  arg <- get <!> stack <!> head <!> argument
+  go arg argRef
+  where
+    go :: Value -> ArgRef -> Eval Value
+    go arg argRef = case argRef of
+      ArgRef -> return arg
+      Index n ref -> do
+        arg' <- go arg ref
+        case arg' of
+          VObject _ as | length as > n -> return (as !! n)
+          _ -> throwErrorC ["Invalid index `", show n, "' into "
+                           , "argument `", render arg, "'"]
+
 lookupAndError name = lookup name >>= \case
-  Just (VArg ArgRef) -> get <!> stack <!> head <!> argument
-  Just v@(VArg _) -> throwErrorC ["Can't deal with `", render v, "'"]
+  Just (VArg ref) -> derefArg ref
   Just val-> return val
   Nothing -> throwErrorC ["Variable '", name, "' not defined in scope"]
 
 instance Evalable Block where
-  eval block = last <$> mapM eval block
+  eval block = case block of
+    [] -> throwError1 "Empty block"
+    [stmt] -> eval stmt
+    Break:_ -> return unitV
+    stmt:stmts -> eval stmt >>= \case
+      -- this works for now, but we need to thinking about how to propagate
+      -- `return`s, how to respond to `break`s, `continue`s, etc.
+      VReturn val -> return $ VReturn val
+      _ -> eval stmts
 
 instance Evalable Statement where
   eval stmt = case stmt of
@@ -119,7 +89,16 @@ instance Evalable Statement where
     Define name block -> do
       eval block >>== addLocal name
     Assign _ _ -> throwError1 "Assignment not yet supported"
-    _ -> error "ruh roh"
+    If cond true false -> do
+      condV <- eval cond
+      case condV of
+        v | v == trueV -> eval true
+        v | v == falseV -> eval false
+        _ -> error $ concat ["An if condition must have the type `"
+                            , "Bool'; this should have been caught "
+                            , "by the type checker"]
+    Return expr -> VReturn <$> eval expr
+    _ -> throwErrorC ["We can't handle statement `", render stmt, "'"]
 
 instance Evalable Expr where
   eval expr = case expr of
@@ -127,6 +106,10 @@ instance Evalable Expr where
     String s -> return $ VString s
     Dot a b -> eval $ Apply b a
     Var name -> lookupAndError name
+    Block blk -> eval blk
+    --Apply (Var name) arg -> do
+      -- type <- look up arg's type
+      -- look up (name ++ filter (notElem " \n\t") (show type))
     Apply func arg -> do
       funcVal <- eval func
       -- need to figure out polymorphism here...
@@ -135,20 +118,28 @@ instance Evalable Expr where
           argVal <- eval arg
           pushWith StackFrame { argument = argVal, vTable = env }
           eval block <* pop
-        Builtin f -> eval arg >>= f
+        VBuiltin (Builtin _ f) -> eval arg >>= f
         _ -> throwErrorC ["`", render func, "' is not a function!"]
     Lambda expr block -> do
-      vTable <- getSymTable
+      --fixSymTable
+      vTable <- computeClosure
       names <- getNames expr
-      return $ VFunction block (M.union names vTable)
+      -- need to store the current argument if there is one
+      return $ VFunction block $ M.union names vTable
     Tuple exprs -> vTuple <$> mapM eval exprs
     _ -> throwErrorC ["Can't evaluate `", render expr, "' yet"]
 
-getNames :: Expr -> Eval (M.Map Name Value)
-getNames expr = case expr of
-  Var name -> return (M.singleton name (VArg ArgRef))
-  Typed (Var name) _ -> return (M.singleton name (VArg ArgRef))
-  _ -> throwErrorC ["Whoopsie, we can't handle `", render expr, "' yet"]
+getNames :: Expr -> Eval ValueTable
+getNames expr = go ArgRef expr where
+  go :: ArgRef -> Expr -> Eval ValueTable
+  go ref expr = case expr of
+    Var name -> return (M.singleton name (VArg ref))
+    Typed (Var name) _ -> return (M.singleton name (VArg ref))
+    Tuple es -> do
+      let pairs = zip [0..] es
+          go' (index, e) = go (Index index ref) e
+      mconcat <$> mapM go' pairs
+    _ -> throwErrorC ["Whoopsie, we can't handle `", render expr, "' yet"]
 
 
 -- NOTE: using unsafePerformIO for testing purposes only
@@ -158,37 +149,32 @@ runEvalWith state a = unsafePerformIO $ runStateT (runErrorT $ eval a) state
 runEval :: Evalable a => a -> (Either ErrorList Value, EvalState)
 runEval = runEvalWith defaultState
 
-typeAndEval :: String -> (Either ErrorList Value, EvalState)
+typeAndEval :: String -> (Either ErrorList Value, EvalState, TypingState)
 typeAndEval input = case grab input of
-  Left err -> error $ show err
+  Left err ->
+    ( Left $ TE ["Syntax error:\n" ++ show err]
+    , defaultState, defaultTypingState)
   Right block ->
     case runTyping block of
-      (Left errs, _) -> error $ show errs
-      (Right _, tstate) ->
-        let state = defaultState {sTable = nameSpaceTable tstate} in
-        runEvalWith state block
+      (Left errs, _) ->
+        ( Left $ TE ["Type check error:\n" ++ show errs]
+        , defaultState, defaultTypingState)
+      (Right _, tState) ->
+        let state = defaultState {sTable = nameSpaceTable tState}
+            (result, eState) = runEvalWith state block in
+        (result, eState, tState)
+
 
 evalIt :: String -> IO ()
 evalIt input = case typeAndEval input of
-  (Left err, _) -> error $ show err
-  (Right val, state) ->
-    putStrLn $ render val ++ "\n" ++ render state
+  (Left err, _, _) -> print err
+  (Right val, eState, tState) ->
+    putStrLn $ render val ++ "\n" ++ render eState
 
-------------- BUILTIN FUNCTIONS --------------
-illegalArgErr name arg = throwErrorC $
-  ["Illegal arguments to BUILTIN/", name, ": `", render arg, "'"]
+repl = runInputT defaultSettings loop where
+  loop = forever $ do
+    getInputLine "> " >>= \case
+      Nothing -> return ()
+      Just input -> lift $ evalIt input
 
-numNumOp :: (Double -> Double -> Double) -> Name -> Builtin
-numNumOp op name arg = case arg of
-  VObject "" [VNumber n, VNumber m] -> return $ VNumber (op n m)
-  _ -> illegalArgErr name arg
-
-addNumber, subtractNumber, multiplyNumber, divideNumber :: Builtin
-addNumber = numNumOp (+) "addNumber"
-subtractNumber = numNumOp (-) "subtractNumber"
-multiplyNumber = numNumOp (*) "multiplyNumber"
-divideNumber = numNumOp (/) "divideNumber"
-
-builtins = M.fromList
-  [ ("+", Builtin addNumber)
-  ]
+main = repl

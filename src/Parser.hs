@@ -13,8 +13,9 @@ skip = many (oneOf " \t") *> option () lineComment
   where lineComment = do char '#'
                          many (noneOf "\n")
                          (char '\n' >> return ()) <|> eof
-keywords = ["if", "do", "else", "case", "of", "infix", "typedef",
-            "object", "while", "for", "in", "then", "after"]
+keywords = ["if", "do", "else", "case", "of", "infix", "typedef"
+           , "object", "while", "for", "in", "then", "after"
+           , "return"]
 keySyms =  ["->", "|", "=", ";", "..", "=>", "?", ":", "#", "{!"]
 
 keyword k = lexeme . try $ string k <* notFollowedBy (alphaNum <|> char '_')
@@ -60,7 +61,7 @@ pDouble = lexeme $ do
     return $ read (ds ++ "." ++ ds')
 
 pType :: Parser Type
-pType = choice [pTApply, pTTuple]
+pType = choice [pTApply, pTTuple, pTVar]
 pTVar = TVar Rigid <$> many1 lower
 pTConst = (\n -> TConst n []) <$> pIdent upper
 pTParens = schar '(' *> sepBy pType (schar ',') <* schar ')'
@@ -88,10 +89,11 @@ unusedName = return "(arg)"
 pArgBody = (,) <$$ pTerm <* exactSym "=>" <*> pExprOrBlock
 
 pParens :: Parser Expr
-pParens = schar '(' *> expr <* schar ')'
-  where expr = pExpr `sepBy` schar ',' >>= \case
-                 [e] -> return e
-                 es  -> return $ Tuple es
+pParens = schar '(' *> exprs <* schar ')'
+  where exprs = expr `sepBy` schar ',' >>= \case
+                  [e] -> return e
+                  es  -> return $ Tuple es
+        expr = choice [pExpr, Var <$> pSymbol]
 
 pString :: Parser String
 pString = char '"' >> pString'
@@ -187,22 +189,24 @@ pFor = For <$ keyword "for" <*> pExpr <* keyword "in"
            <*> pExpr <*> pBlock
 
 pExprOrBlock :: Parser Expr
-pExprOrBlock = try (Block <$> pBlock) <|> pExpr
+pExprOrBlock = choice [ try (Block <$> pBlock)
+                      , Block . pure <$> pIf
+                      , pExpr]
 
-pDefine = choice [pDefBinary Define, pDefFunction Define]
-pExtend = choice [pDefBinary Extend, pDefFunction Extend]
+pDefine = choice [pDefBinary "=" Define, pDefFunction "=" Define]
+pExtend = choice [pDefBinary "&=" Extend, pDefFunction "&=" Extend]
 
-pDefFunction f = try $ do
-  name <- pIdent lower
+pDefFunction sym f = try $ do
+  name <- pIdent lower <|> (schar '(' *> pSymbol <* schar ')')
   args <- many pTerm
-  body <- exactSym "=" *> pExprOrBlock
+  body <- exactSym sym *> pExprOrBlock
   return $ f name $ foldr Lambda body args
 
-pDefBinary f = try $ do
+pDefBinary sym f = try $ do
   arg1 <- pTerm
   op   <- pSymbol
   arg2 <- pTerm
-  body <- exactSym "=" *> pExprOrBlock
+  body <- exactSym sym *> pExprOrBlock
   return $ f op $ Lambda (Tuple [arg1, arg2]) body
 
 pAssign = try $ Assign <$$ pExpr <* exactSym ":=" <*> pExprOrBlock
@@ -212,6 +216,7 @@ pStatementsNoWS = pStatement `sepEndBy1` (schar ';')
 pStatementsWS = pStatement `sepEndBy1` getSame
 pStatements = pStatement `sepEndBy1` (getSame <|> schar'  ';')
 
+pIf :: Parser Statement
 pIf = do
   keyword "if"
   cond <- pExpr
@@ -219,10 +224,22 @@ pIf = do
   false <- pElse
   return $ If cond true false
 
+pIfOrIf' :: Parser Statement
+pIfOrIf' = do
+  keyword "if"
+  cond <- pExpr
+  true <- pThen
+  option (If' cond true) $ do
+    false <- pElse
+    return $ If cond true false
+
 pBlockOrStatement = try pBlock <|> fmap single pStatement
 pThen = do keyword "then" <|> return "then"
            pBlockOrStatement
 pElse = keyword "else" *> pBlockOrStatement
+
+pReturn = do keyword "return"
+             option (Return $ Tuple []) $ Return <$> pExpr
 
 --pAfter :: Parser Statement
 --pAfter = do
@@ -235,8 +252,8 @@ pStatement :: Parser Statement
 pStatement = do
   lexeme $ choice $ [ pDefine, pExtend, pAssign
                     , Expr <$> pExpr
-                    , pWhile, pFor
-                    , pIf]
+                    , pWhile, pFor, pReturn
+                    , pIfOrIf']
 
 pExpr :: Parser Expr
 pExpr = lexeme $ choice [ pLambda, pBinary ]

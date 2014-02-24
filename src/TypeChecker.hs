@@ -4,7 +4,9 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE NoMonomorphismRestriction #-}
 module TypeChecker ( Typable(..), Typing(..), TypeTable(..)
-                   , TypingState(..), runTyping) where
+                   , TypingState(..)
+                   , runTyping, runTypingWith
+                   , defaultTypingState) where
 
 import Prelude hiding (lookup, log)
 import System.IO.Unsafe
@@ -88,7 +90,8 @@ typeOfApply typeOf func arg = do
 getFirstCompatible argT funcName tList = go tList where
   go :: [Type] -> Typing Type
   go list = case list of
-    (TFunction fromT toT):rest ->
+    (TFunction fromT toT):rest -> do
+      log' ["Trying to unify `", render argT, "' with `", render fromT, "'"]
       (unify argT fromT >> refine toT) `catchError` \_ -> go rest
     typ:rest -> throwErrorC ["Identifier `", funcName, "' has non-function "
                             , "type `", render typ, "'"]
@@ -227,6 +230,7 @@ instance Typable Statement where
             popNameSpaceWith name result
           (_, typ) -> throwErrorC ["Non-container type `", render typ
                                   , "' used in a for loop"]
+      Return expr -> typeOf expr
 
 getTable = get <!> table
 getAliases = get <!> aliases
@@ -271,7 +275,7 @@ unusedTypeVar = do
       else map (\_ -> 'a') name ++ "0"
 
 log :: String -> Typing ()
-log s = return ()-- lift . lift . putStrLn
+log s = return () -- lift $ lift $ putStrLn s
 log' = concat ~> log
 
 lookup, lookup1 :: Name -> Typing (Maybe TypeRecord)
@@ -306,13 +310,17 @@ lookupAndInstantiate name = lookup name >>= \case
 -- its two arguments equivalent. Throws an error if such a substitution
 -- is impossible (todo: throw an error if there's a cycle)
 unify type1 type2 | type1 == type2 = return ()
-                  | otherwise =
+                  | otherwise = do
+  log' ["Unifying `", render type1, "' with `", render type2, "'"]
   case (type1, type2) of
     (TVar Polymorphic name, typ) -> addTypeAlias name typ
     (typ, TVar Polymorphic name) -> addTypeAlias name typ
     (TConst name ts, TConst name' ts')
       | name == name' -> mapM_ (uncurry unify) $ zip ts ts'
-    _ -> throwErrorC ["Incompatible types: `", render type1, "' and `", render type2, "'"]
+    (TFunction a b, TFunction a' b') -> unify a a' >> unify b b'
+    _ -> do
+      log' ["Incompatible types: `", show type1, "' and `", show type2, "'"]
+      throwErrorC ["Incompatible types: `", render type1, "' and `", render type2, "'"]
   where
     operandsError which = addError' ["When unifying the", which, "operands of `"
                                     , render type1, "' and `", render type2]
@@ -361,11 +369,11 @@ refine typ = look mempty typ where
         Just typ' -> look (S.insert name seenNames) typ'
     TFunction a b -> TFunction <$$ look seenNames a <*> look seenNames b
 
-defaultState = TypingState { table = [builtIns]
-                           , aliases = mempty
-                           , nameSpace = []
-                           , nameSpaceTable = builtIns
-                           , freshName = "a0"}
+defaultTypingState = TypingState { table = [builtIns]
+                                 , aliases = mempty
+                                 , nameSpace = []
+                                 , nameSpaceTable = builtIns
+                                 , freshName = "a0"}
 
 fullName :: Name -> Typing String
 fullName name = get <!> nameSpace <!> (name:) <!> render
@@ -373,8 +381,8 @@ fullName name = get <!> nameSpace <!> (name:) <!> render
 builtIns = M.fromList [ ("+", nnnOrSss), ("-", nnn), ("*", nnn), ("/", nnn)
                       , ("%", nnn), (">", nnb), ("<", nnb), (">=", nnb)
                       , ("<=", nnb), ("==", nnbOrSsb), ("!=", nnbOrSsb)
-                      , ("<|", Type $ ab ==> a ==> b), ("|>", Type $ a ==> ab ==> b)
-                      , ("~>", Type $ ab ==> bc ==> ac), ("<~", Type $ bc ==> ab ==> ac)
+                      , ("<|", Type $ tup ab a b), ("|>", Type $ tup a ab b)
+                      , ("~>", Type $ tup ab bc ac), ("<~", Type $ tup bc ab ac)
                       , ("print", Type $ a ==> unitT)
                       , ("Just", Type $ a ==> TConst "Maybe" [a])
                       , ("Nothing", Type $ TConst "Maybe" [a])
@@ -393,12 +401,15 @@ builtIns = M.fromList [ ("+", nnnOrSss), ("-", nnn), ("*", nnn), ("/", nnn)
 
 -- NOTE: using unsafePerformIO for testing purposes only. This will
 -- all be pure code in the end.
+runTypingWith :: Typable a => TypingState -> a -> (Either ErrorList Type, TypingState)
+runTypingWith state a = unsafePerformIO $ runStateT (runErrorT $ typeOf a) state
+
 runTyping :: Typable a => a -> (Either ErrorList Type, TypingState)
-runTyping a = unsafePerformIO $ runStateT (runErrorT $ typeOf a) defaultState
+runTyping = runTypingWith defaultTypingState
 
 typeIt :: String -> IO ()
 typeIt input = case grab input of
-  Left err -> error $ show err
+  Left err -> putStrLn $ "Type error:\n" ++ show err
   Right block -> case runTyping block of
     (Left err, _) -> error $ show err
     (Right block, state) -> putStrLn $ render block ++ "\n" ++ render state

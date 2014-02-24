@@ -51,6 +51,7 @@ data Statement = Expr Expr
                | Return Expr
                | Throw Expr
                | Break
+               | Continue
                deriving (Show, Eq)
 
 instance Render Expr where
@@ -125,9 +126,10 @@ instance Render Block where
 
 instance Render Type where
   render t = case t of
-    TVar _ name -> name
-    TConst name [] -> name
+    TVar Rigid name -> name
+    TVar Polymorphic name -> "(some " ++ name ++ ")"
     TConst "" ts -> "(" ++ (intercalate ", " $ map render ts) ++ ")"
+    TConst name [] -> name
     TConst "[]" [t] -> "[" ++ render t ++ "]"
     TConst "[!]" [t] -> "[!" ++ render t ++ "]"
     TConst name [t] -> name ++ " " ++ render' t

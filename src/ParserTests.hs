@@ -135,8 +135,13 @@ typingTests = TestGroup "Typed expressions"
   [
     Test "typing an identifier" "foo: Foo"
          (expr $ Typed foo (tConst "Foo"))
+  , Test "typing an identifier with a variable type" "foo: a"
+         (expr $ Typed foo (TVar Rigid "a"))
   , Test "typing with 2nd order type" "bar: Option Foo"
          (expr $ Typed bar (TConst "Option" [fooT]))
+  , Test "typing with 2nd order type using a variable"
+         "bar: Bloop a"
+         (expr $ Typed bar (TConst "Bloop" [TVar Rigid "a"]))
   , Test "typing with type tuple" "foo: (Foo, Bar)"
          (expr $ Typed foo (tTuple [fooT, barT]))
   , Test "a typed tuple" "(foo: Foo, bar: Bar)"
@@ -180,6 +185,26 @@ functionTests = TestGroup "Functions"
                                  , (two, three)
                                  , (foo, Apply bar baz)]) three)
     ]
+  , TestGroup "Defined functions" [
+      Test "should make a function definition"
+           "foo(bar: Bar) = bar"
+           [Define "foo" $ Lambda (Typed bar barT) bar]
+    , Test "should make a function definition with multiple args"
+           "foo(bar: Bar) (baz: Baz) = bar + baz"
+           [Define "foo" $ Lambda (Typed bar barT)
+                         $ Lambda (Typed baz bazT)
+                         $ plus bar baz]
+    , Test "should make a function definition with polymorphic args"
+           "foo(bar: a) (baz: b) = bar baz"
+           [Define "foo" $ Lambda (Typed bar (TVar Rigid "a"))
+                         $ Lambda (Typed baz (TVar Rigid "b"))
+                         $ Apply bar baz]
+    , Test "should make a function definition with a symbol"
+           "(bar: a) <*> (baz: b) = bar baz"
+           [Define "<*>" $ Lambda (Tuple [ Typed bar (TVar Rigid "a")
+                                         , Typed baz (TVar Rigid "b")])
+                         $ Apply bar baz]
+    ]
   ]
   where tup1 = Tuple [Typed foo fooT, Typed bar barT]
         eLambda arg body = expr $ Lambda arg body
@@ -205,12 +230,30 @@ blockTests = TestGroup "Blocks"
          [Expr foo, Expr bar, Expr $ Apply baz qux]
   ]
 
+flowTests = TestGroup "Program flow"
+  [
+    Test "return" "return" [Return $ Tuple []]
+  , Test "return with expr" "return 3" [Return three]
+  , Test "return in a series of statements"
+         "foo bar; return 3; baz qux"
+         [Expr $ Apply foo bar, Return three, Expr $ Apply baz qux]
+  ]
+
 ifTests = TestGroup "If statements"
   [
     Test "basic one-line" "if 1 then 2 else 3" [If one (expr two) (expr three)]
   , Test "basic block" "if 1 { 2 } else { 3 }" [If one (expr two) (expr three)]
+  , Test "basic block" "if 1 { 2 } else { 3 }" [If one (expr two) (expr three)]
   , Test "basic mixed 1" "if 1 then 2 else { 3 }" [If one (expr two) (expr three)]
   , Test "basic mixed 2" "if 1 { 2 } else 3" [If one (expr two) (expr three)]
+  , Test "without else" "if 1 { 2 }; if 2 then 3"
+    [If' one (expr two), If' two (expr three)]
+  , Test "used in lambda" "n: Num => if n then 2 else 3"
+    (expr $ Lambda (Typed (Var "n") (TConst "Num" [])) $
+          Block [If (Var "n") (expr two) (expr three)])
+  , Test "used in define" "foo (n: Num) = if n then 2 else 3"
+    [Define "foo" $ Lambda (Typed (Var "n") (TConst "Num" [])) $
+          Block [If (Var "n") (expr two) (expr three)]]
   ]
 
 whileTests = TestGroup "While statements"
@@ -296,6 +339,7 @@ doTests = runTests grab [ expressionTests
                         , typingTests
                         , functionTests
                         , ifTests
+                        , flowTests
                         ]
 
 main = doTests

@@ -7,7 +7,8 @@ module Common ( (!), (<!>), (<$>), (<$), (<*), (*>), (<*>), pure
               , (<>), StateT(..), State(..), ErrorT(..), indentBy, Name(..)
               , intercalate, Identity(..), runState, (>>==), trim, line
               , throwError, catchError, (~>), (<$$), Render(..), isInt
-              , ErrorList(..), throwError1, throwErrorC, addError, addError')  where
+              , ErrorList(..), throwError1, throwErrorC, addError, addError'
+              , forever)  where
 
 import Control.Monad
 import Control.Monad.State
