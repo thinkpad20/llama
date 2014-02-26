@@ -13,6 +13,46 @@ find (needle: a, haystack: [a]) =
   for a in v do if a == needle then break True else continue False
 ```
 
+Of course, it's not clear what this would do if `haystack` were empty...
+
+```
+find (needle: a, haystack: [a]) =
+  for a in v do if a == needle then break True else continue False
+```
+
+We could wrap them in a `Maybe`! That would mean that `break` would yield a `Just` value, and `continue` or finishing the loop a `Nothing`. `return` would work as normal.
+
+```
+find (needle: a, haystack: [a]) = result || False after
+  result = for a in v, if a == needle then break True
+```
+
+This is more like the first definition we had, and essentially equivalent. However, it doesn't rely on `return`, and is more general then (for example, we use this in a variable assignment easily). We could do the same thing with `while`:
+
+```
+import sys
+
+game (questions: [(Str, Int, @hint: Str)]) =
+  score = mut 0
+  quit = block
+    print "Your score: #{score}"
+    sys/exit 0
+  ask (question: Str, answer: Int, @hint: Str) =
+    forever 
+      case prompt "Question: #[question]" of
+        a if a.parseInt == Just answer => break True
+        "exit" => quit "User exited"
+        "hint" => case hint of
+          Nothing => "There's no hint for this."
+          Just hint => println hint
+        _ => break False
+  quit after
+    for (q,a, h=@hint) in questions do case ask (q, a, @hint=h) of
+      Just True => println "Correct! (#{++score} so far)"
+      Just True => println "Wrong!"
+      Nothing => throw Exception ()
+```
+
 We can use binary search
 
 ```

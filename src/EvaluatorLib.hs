@@ -5,6 +5,7 @@
 module EvaluatorLib where
 
 import Control.Monad.Reader
+import Data.IORef
 import qualified Data.Map as M
 
 import Common
@@ -18,11 +19,15 @@ data Value = VNumber Double
            | VObject Name [Value]
            | VArray [Value]
            | VLocal LocalRef
+           | VMutable (IORef Value)
            | VReturn Value
            | VThrow Value
            deriving (Show, Eq)
 
 data Builtin = Builtin Name (Value -> Eval Value)
+
+instance Show (IORef Value) where
+  show _ = "(mutable value)"
 instance Show Builtin where
   show (Builtin n _) = "(BUILTIN/" ++ n ++ ")"
 instance Eq Builtin where

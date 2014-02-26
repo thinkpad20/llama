@@ -77,7 +77,7 @@ expressionTests = TestGroup "Expressions"
     , Test "dots work on numbers" "1 . foo" (expr $ Dot one foo)
     , Test "dots work on decimals" "2.34 . foo" (expr $ Dot (Number 2.34) foo)
     ]
-  , TestGroup "Tuples" $ [
+  , TestGroup "Tuples" [
       Test "tuples" "(foo, bar)" (expr $ Tuple [foo, bar])
     , Test "tuples 2" "(foo, bar, baz)" (expr $ Tuple [foo, bar, baz])
     , Test "empty tuple" "()" (expr $ Tuple [])
@@ -180,7 +180,7 @@ functionTests = TestGroup "Functions"
            (eLambdas [(one, two), (two, three)])
     , Test "should be able to handle complex lambdas"
            "(1 => 2 | 2 => 3 | foo => bar baz) 3"
-           [Apply (Lambda (Var "(arg)") $ Case (Var "(arg)") $
+           [Apply (Lambda (Var "(arg)") $ Case (Var "(arg)")
                                  [ (one, two)
                                  , (two, three)
                                  , (foo, Apply bar baz)]) three]
@@ -241,79 +241,78 @@ flowTests = TestGroup "Program flow"
 
 ifTests = TestGroup "If statements"
   [
-    Test "basic one-line" "if 1 then 2 else 3" [If one [two] [three]]
-  , Test "basic block" "if 1 { 2 } else { 3 }" [If one [two] [three]]
-  , Test "basic block" "if 1 { 2 } else { 3 }" [If one [two] [three]]
-  , Test "basic mixed 1" "if 1 then 2 else { 3 }" [If one [two] [three]]
-  , Test "basic mixed 2" "if 1 { 2 } else 3" [If one [two] [three]]
+    Test "basic one-line" "if 1 then 2 else 3" [If one two three]
+  , Test "basic block" "if 1 { 2 } else { 3 }" [If one two three]
+  , Test "basic block" "if 1 { 2 } else { 3 }" [If one two three]
+  , Test "basic mixed 1" "if 1 then 2 else { 3 }" [If one two three]
+  , Test "basic mixed 2" "if 1 { 2 } else 3" [If one two three]
   , Test "without else" "if 1 { 2 }; if 2 then 3"
-    [If' one [two], If' two [three]]
+    [If' one two, If' two three]
   , Test "without else then with" "if 1 { 2 }; if 2 then 3 else 1"
-    [If' one [two], If two [three] [one]]
+    [If' one two, If two three one]
   , Test "used in lambda" "n: Num => if n then 2 else 3"
-    [Lambda (Typed (Var "n") (TConst "Num" [])) $ Block [If (Var "n") [two] [three]]]
+    [Lambda (Typed (Var "n") (TConst "Num" [])) $ If (Var "n") two three]
   , Test "used in define" "foo (n: Num) = if n then 2 else 3"
-    [Define "foo" $ Lambda (Typed (Var "n") (TConst "Num" [])) $
-          Block [If (Var "n") [two] [three]]]
+    [Define "foo" $ Lambda (Typed (Var "n") (TConst "Num" [])) $ If (Var "n") two three]
   ]
 
 whileTests = TestGroup "While statements"
  [
     TestGroup "single statements" [
       Test "while block via 'do'" "while foo do bar;"
-           [While foo [bar]]
+           [While foo bar]
     , SkipTest "while block via 'do' with following expression"
            "while foo do bar\nbaz"
-           [While foo [bar], baz]
+           [While foo bar, baz]
     , Test "while block via 'do' with following expression, split by semicolon"
            "while foo do bar; baz"
-           [While foo [bar], baz]
+           [While foo bar, baz]
   ]
   , TestGroup "using curly braces" [
       Test "basic" "while foo {2}"
-           [While foo [two]]
+           [While foo two]
     , Test "multiple statements"
            "while foo {2; 3}"
-           [While foo [two, three]]
+           [While foo $ Block [two, three]]
     , SkipTest "complex statements"
            "while foo {bar 2; baz 3}"
-           [While foo [Apply bar two, Apply baz three]]
+           [While foo $ Block [Apply bar two, Apply baz three]]
     , Test "followed by other statement, using semicolon"
            "while foo { bar }; baz"
-           [While foo [bar], baz]
+           [While foo bar, baz]
     , Test "nested while statements 1"
            "while foo { while bar {3}}"
-           [ While foo [While bar [three]]]
+           [ While foo (While bar three)]
     , Test "nested while statements 2"
-           "while foo {2; while bar{ 3}; baz}"
-           [While foo [two, While bar [three], baz]]
+           "while foo {2; while bar{ 3}; baz}; qux"
+           [While foo $ Block [two, While bar three, baz], qux]
   ]
   , SkipTestGroup "using whitespace" [
       Test "basic" "while foo\n  2"
-           [While foo [two]]
+           [While foo two]
     , Test "multiple statements" "while foo\n  2\n  3"
-           [While foo [two, three]]
+           [While foo $ Block [two, three]]
     , Test "trailing newline" "while foo\n  2\n"
-           [While foo [two]]
+           [While foo two]
     , Test "binary condition" "while foo < 2\n  bar 3\n"
-           [While (lt foo two) [Apply bar three]]
+           [While (lt foo two) $ Apply bar three]
     , Test "followed by other statement"
            "while foo\n  bar\nbaz"
-           [While foo [bar], baz]
+           [While foo bar, baz]
     , Test "followed by two other statements"
            "while foo\n  bar\nbaz\nqux"
-           [While foo [bar], baz, qux]
+           [While foo bar, baz, qux]
     , Test "nested while statements 1"
            "while foo\n  while bar\n    3\n"
-           [ While foo [While bar [three]]]
+           [ While foo $ While bar three]
     , Test "nested while statements 2"
            "while foo\n  2\n  while bar\n    3\n  baz"
-           [While foo [two, While bar $ expr three, baz]]
+           [While foo $ Block [two, While bar three, baz]]
     ]
   , SkipTestGroup "using both" [
          Test "followed by other statement"
          "while foo { bar }\nbaz"
-         [While foo $ expr bar, baz]
+         [While foo bar, baz]
 
     ]
   ]
@@ -321,10 +320,10 @@ whileTests = TestGroup "While statements"
 forTests = TestGroup "For statements" tests where
   tests =
     [
-      Test "basic" "for foo in bar { baz }" [For foo bar [baz]]
-    , Test "basic one-line" "for foo in bar do baz" [For foo bar [baz]]
+      Test "basic" "for foo in bar { baz }" [For foo bar baz]
+    , Test "basic one-line" "for foo in bar do baz" [For foo bar baz]
     , Test "nested via one-line" "for foo in bar do for baz in qux do 1"
-      [For foo bar [For baz qux [one]]]
+      [For foo bar (For baz qux one)]
     ]
 
 doTests = runTests grab [ expressionTests

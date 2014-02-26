@@ -178,17 +178,16 @@ pTerm = lexeme $ choice [ Number <$> pDouble
 pOpenBrace = schar'  '{' >> notFollowedBy (oneOf "!j")
 pCloseBrace = schar'  '}'
 
-pBlock :: Parser Block
-pBlock = pOpenBrace *> pExpressionsNoWS <* pCloseBrace
-         <|> indent *> pExpressionsWS <* dedent
-         <|> (keyword "do" >> single <$> pExpression)
+pBlock :: Parser Expr
+pBlock =  choice [ pOpenBrace *> pExpressionsNoWS <* pCloseBrace
+                 , (keyword "do" <|> return "") >> pExpression ]
 
 pWhile = While <$ keyword "while" <*> pExpr <*> pBlock
 pFor = For <$ keyword "for" <*> pExpr <* keyword "in"
            <*> pExpr <*> pBlock
 
 pExprOrBlock :: Parser Expr
-pExprOrBlock = choice [ try (Block <$> pBlock), pIf, pExpr ]
+pExprOrBlock = choice [ try pBlock, pIf, pExpr ]
 
 pDefine = choice [pDefBinary "=" Define, pDefFunction "=" Define]
 pExtend = choice [pDefBinary "&=" Extend, pDefFunction "&=" Extend]
@@ -196,7 +195,7 @@ pExtend = choice [pDefBinary "&=" Extend, pDefFunction "&=" Extend]
 pDefFunction sym f = try $ do
   name <- pIdent lower <|> (schar '(' *> pSymbol <* schar ')')
   args <- many pTerm
-  body <- exactSym sym *> pExprOrBlock
+  body <- exactSym sym *> pBlock
   return $ f name $ foldr Lambda body args
 
 pDefBinary sym f = try $ do
@@ -209,8 +208,12 @@ pDefBinary sym f = try $ do
 pAssign = try $ Assign <$$ pExpr <* exactSym ":=" <*> pExprOrBlock
 
 getSame = same
-pExpressionsNoWS = pExpression `sepEndBy1` (schar ';')
-pExpressionsWS = pExpression `sepEndBy1` getSame
+pExpressionsNoWS = do
+  exprs <- pExpression `sepEndBy1` (schar ';')
+  case exprs of
+    [expr] -> return expr
+    exprs -> return $ Block exprs
+
 pExpressions = pExpression `sepEndBy1` (getSame <|> schar'  ';')
 
 pIf :: Parser Expr
@@ -230,10 +233,10 @@ pIfOrIf' = do
     false <- pElse
     return $ If cond true false
 
-pBlockOrExpression = try pBlock <|> fmap single pExpression
-pThen = do keyword "then" <|> return "then"
-           pBlockOrExpression
-pElse = keyword "else" *> pBlockOrExpression
+pBlockOrExpression = try pBlock <|> pExpression
+pThen = pBlock <|> do keyword "then" <|> return "then"
+                      pExpression
+pElse = keyword "else" *> pBlock
 
 pReturn = do keyword "return"
              option (Return $ Tuple []) $ Return <$> pExpr
@@ -241,20 +244,20 @@ pReturn = do keyword "return"
 pExpression :: Parser Expr
 pExpression = do
   expr <- lexeme $ choice $ [ pDefine, pExtend, pAssign
-                            , pExpr
-                            , pWhile, pFor, pReturn
-                            , pIfOrIf']
+                            , pWhile, pFor, pReturn, pIfOrIf', pExpr ]
   option expr $ do
     rest <- keyword "after" >> pBlock
-    return $ Block (rest ++ [expr])
+    case rest of
+      Block exprs -> return $ Block $ exprs ++ [expr]
+      _ -> return $ Block [rest, expr]
 
 pExpr :: Parser Expr
 pExpr = lexeme $ choice [ pLambda, pBinary ]
 
 single = pure
 
-testE = parse pExpr
-testS = parse pExpressionsWS
+testE = parse pExpression
+testS = parse pExpressions
 
 grab :: String -> Either ParseError [Expr]
 grab = parse (pExpressions <* eof)
