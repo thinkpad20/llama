@@ -15,7 +15,7 @@ skip = many (oneOf " \t") *> option () lineComment
 keywords = ["if", "do", "else", "case", "of", "infix", "typedef"
            , "object", "while", "for", "in", "then", "after"
            , "return"]
-keySyms =  ["->", "|", "=", ";", "..", "=>", "?", ":", "#", "{!"]
+keySyms =  ["->", "|", "=", ";", "..", "=>", "?", ":", "#"]
 
 keyword k = lexeme . try $ string k <* notFollowedBy (alphaNum <|> char '_')
 
@@ -175,7 +175,7 @@ pTerm = lexeme $ choice [ Number <$> pDouble
                         , pParens
                         , pArray ]
 
-pOpenBrace = schar'  '{' >> notFollowedBy (char '!')
+pOpenBrace = schar'  '{' >> notFollowedBy (oneOf "!j")
 pCloseBrace = schar'  '}'
 
 pBlock :: Parser Block
@@ -188,9 +188,7 @@ pFor = For <$ keyword "for" <*> pExpr <* keyword "in"
            <*> pExpr <*> pBlock
 
 pExprOrBlock :: Parser Expr
-pExprOrBlock = choice [ try (Block <$> pBlock)
-                      , Block . pure <$> pIf
-                      , pExpr]
+pExprOrBlock = choice [ try (Block <$> pBlock), pIf, pExpr ]
 
 pDefine = choice [pDefBinary "=" Define, pDefFunction "=" Define]
 pExtend = choice [pDefBinary "&=" Extend, pDefFunction "&=" Extend]
@@ -240,19 +238,15 @@ pElse = keyword "else" *> pBlockOrExpression
 pReturn = do keyword "return"
              option (Return $ Tuple []) $ Return <$> pExpr
 
---pAfter :: Parser Expression
---pAfter = do
---  result <- pExpr
---  keyword "after"
---  block <- pBlock
---  return $ Block $ block ++ [Expr result]
-
 pExpression :: Parser Expr
 pExpression = do
-  lexeme $ choice $ [ pDefine, pExtend, pAssign
-                    , pExpr
-                    , pWhile, pFor, pReturn
-                    , pIfOrIf']
+  expr <- lexeme $ choice $ [ pDefine, pExtend, pAssign
+                            , pExpr
+                            , pWhile, pFor, pReturn
+                            , pIfOrIf']
+  option expr $ do
+    rest <- keyword "after" >> pBlock
+    return $ Block (rest ++ [expr])
 
 pExpr :: Parser Expr
 pExpr = lexeme $ choice [ pLambda, pBinary ]
