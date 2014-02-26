@@ -75,16 +75,20 @@ instance Evalable Block where
   eval block = case block of
     [] -> throwError1 "Empty block"
     [stmt] -> eval stmt
-    Break:_ -> return unitV
+    Break expr:_ -> eval expr
     stmt:stmts -> eval stmt >>= \case
       -- this works for now, but we need to thinking about how to propagate
       -- `return`s, how to respond to `break`s, `continue`s, etc.
       VReturn val -> return $ VReturn val
       _ -> eval stmts
 
-instance Evalable Statement where
-  eval stmt = case stmt of
-    Expr expr -> eval expr
+instance Evalable Expr where
+  eval expr = case expr of
+    Number n -> return $ VNumber n
+    String s -> return $ VString s
+    Dot a b -> eval $ Apply b a
+    Var name -> lookupAndError name
+    Block blk -> eval blk
     Define name block -> do
       eval block >>== addLocal name
     Assign _ _ -> throwError1 "Assignment not yet supported"
@@ -97,18 +101,6 @@ instance Evalable Statement where
                             , "Bool'; this should have been caught "
                             , "by the type checker"]
     Return expr -> VReturn <$> eval expr
-    _ -> throwErrorC ["We can't handle statement `", render stmt, "'"]
-
-instance Evalable Expr where
-  eval expr = case expr of
-    Number n -> return $ VNumber n
-    String s -> return $ VString s
-    Dot a b -> eval $ Apply b a
-    Var name -> lookupAndError name
-    Block blk -> eval blk
-    --Apply (Var name) arg -> do
-      -- type <- look up arg's type
-      -- look up (name ++ filter (notElem " \n\t") (show type))
     Apply func arg -> do
       funcVal <- eval func
       -- need to figure out polymorphism here...

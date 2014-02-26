@@ -19,6 +19,17 @@ data Expr = Var Name
           | Array ArrayLiteral
           | Ref Expr Expr
           | Typed Expr Type
+          | If Expr Block Block
+          | If' Expr Block
+          | While Expr Block
+          | For Expr Expr Block
+          | Define Name Expr
+          | Extend Name Expr
+          | Assign Expr Expr
+          | Return Expr
+          | Throw Expr
+          | Break Expr
+          | Continue
           deriving (Show, Eq)
 
 -- | A variable can be rigid (fixed in scope), or polymorphic (free to take on
@@ -33,59 +44,32 @@ data Type = TVar TVarType Name
 data ArrayLiteral = ArrayLiteral [Expr]
                   | ArrayRange Expr Expr deriving (Show, Eq)
 
-type Block = [Statement]
-data Statement = Expr Expr
-               | If Expr Block Block
-               | If' Expr Block
-               | While Expr Block
-               | For Expr Expr Block
-               | Define Name Expr
-               | Extend Name Expr
-               | Assign Expr Expr
-               | Return Expr
-               | Throw Expr
-               | Break
-               | Continue
-               deriving (Show, Eq)
+type Block = [Expr]
 
 instance Render Expr where
-  render expr = case expr of
-    Var name -> name
-    Constructor name -> name
-    Number n | isInt n -> show $ floor n
-    Number n -> show n
-    Block blk -> render'' blk
-    String s -> show s
-    Dot e1 e2 -> render' e1 ++ "." ++ render' e2
-    Apply (Var op) (Tuple [e1, e2])
-      | isSymbol op -> render' e1 ++ " " ++ op ++ " " ++ render' e2
-    Apply (Var "~") e -> "-" ++ render' e
-    Apply (Var op) e | isSymbol op ->  op ++ " " ++ render' e
-    Apply e1 e2 -> render' e1 ++ " " ++ render' e2
-    Tuple es -> "(" ++ (intercalate "," . map render) es ++ ")"
-    Array (ArrayLiteral exprs) -> '[' : intercalate ", " (map render exprs) ++ "]"
-    Array (ArrayRange start stop) -> '[' : render start ++ ".." ++ render stop ++ "]"
-    Ref object index -> render' object ++ "[:" ++ render index ++ "]"
-    Lambda arg expr -> render' arg ++ " => " ++ render expr
-    Case expr alts -> "case " ++ render expr ++ " of " ++ intercalate " | " rPairs
-      where rPairs = map (\(p, r) -> render p ++ " => " ++ render r) alts
-    Typed expr typ -> render' expr ++ ": " ++ render typ
-    where
-      render'' [stmt] = render stmt
-      render'' stmts = "{" ++ render stmts ++ "}"
-      render' expr = case expr of
-        Apply _ _ -> parens
-        Dot _ _ -> parens
-        Lambda _ _ -> parens
-        _ -> render expr
-        where parens = "(" ++ render expr ++ ")"
-
-
-instance Render Statement where
-  render stmt = evalState (render' stmt) 0 where
-    render' :: Statement -> State Int String
+  render e = evalState (render' e) 0 where
+    render' :: Expr -> State Int String
     render' stmt = case stmt of
-      Expr expr -> line $ render expr
+      Var name -> return name
+      Constructor name -> return name
+      Number n | isInt n -> return $ show $ floor n
+      Number n -> return $ show n
+      Block blk -> concat <$> block blk
+      String s -> return $ show s
+      Dot e1 e2 -> return $ render'' e1 ++ "." ++ render'' e2
+      Apply (Var op) (Tuple [e1, e2])
+        | isSymbol op -> return $ render'' e1 ++ " " ++ op ++ " " ++ render'' e2
+      Apply (Var "~") e -> return $ "-" ++ render'' e
+      Apply (Var op) e | isSymbol op -> return $ op ++ " " ++ render'' e
+      Apply e1 e2 -> return $ render'' e1 ++ " " ++ render'' e2
+      Tuple es -> return $ "(" ++ (intercalate "," . map render) es ++ ")"
+      Array (ArrayLiteral exprs) -> return $ '[' : intercalate ", " (map render exprs) ++ "]"
+      Array (ArrayRange start stop) -> return $ '[' : render start ++ ".." ++ render stop ++ "]"
+      Ref object index -> return $ render'' object ++ "[:" ++ render index ++ "]"
+      Lambda arg expr -> return $ render'' arg ++ " => " ++ render expr
+      Case expr alts -> return $ "case " ++ render expr ++ " of " ++ intercalate " | " rPairs
+        where rPairs = map (\(p, r) -> render p ++ " => " ++ render r) alts
+      Typed expr typ -> return $ render'' expr ++ ": " ++ render typ
       If c t f -> do
         if' <- line $ "if " ++ render c
         else' <- line "else"
@@ -107,13 +91,19 @@ instance Render Statement where
       Define name expr -> line $ name ++ " = " ++ render expr
       Extend name expr -> line $ name ++ " &= " ++ render expr
       Assign e1 block -> line $ render e1 ++ " := " ++ render block
-      Break -> line "break"
+      Break e -> line $ "break " ++ render e
       Throw e -> line $ "throw " ++ render e
       Return e -> line $ "return " ++ render e
     line str = get >>= \i -> return $ replicate i ' ' ++ str
     join = return . intercalate "\n"
     block blk = up *> mapM render' blk <* down
     (up, down) = (modify (+2), modify (\n -> n - 2))
+    render'' expr = case expr of
+      Apply _ _ -> parens
+      Dot _ _ -> parens
+      Lambda _ _ -> parens
+      _ -> render expr
+      where parens = "(" ++ render expr ++ ")"
 
 instance Render Block where
   render b = "{" ++ (line . trim . intercalate "; " . map render) b ++ "}"

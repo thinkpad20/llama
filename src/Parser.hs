@@ -1,6 +1,5 @@
 {-# LANGUAGE LambdaCase #-}
-module Parser ( grab, Expr(..), Statement(..), Block(..)
-              , single, ArrayLiteral(..)) where
+module Parser ( grab, Expr(..), Block(..), single, ArrayLiteral(..)) where
 
 import Common
 import AST
@@ -180,9 +179,9 @@ pOpenBrace = schar'  '{' >> notFollowedBy (char '!')
 pCloseBrace = schar'  '}'
 
 pBlock :: Parser Block
-pBlock = pOpenBrace *> pStatementsNoWS <* pCloseBrace
-         <|> indent *> pStatementsWS <* dedent
-         <|> (keyword "do" >> single <$> pStatement)
+pBlock = pOpenBrace *> pExpressionsNoWS <* pCloseBrace
+         <|> indent *> pExpressionsWS <* dedent
+         <|> (keyword "do" >> single <$> pExpression)
 
 pWhile = While <$ keyword "while" <*> pExpr <*> pBlock
 pFor = For <$ keyword "for" <*> pExpr <* keyword "in"
@@ -212,11 +211,11 @@ pDefBinary sym f = try $ do
 pAssign = try $ Assign <$$ pExpr <* exactSym ":=" <*> pExprOrBlock
 
 getSame = same
-pStatementsNoWS = pStatement `sepEndBy1` (schar ';')
-pStatementsWS = pStatement `sepEndBy1` getSame
-pStatements = pStatement `sepEndBy1` (getSame <|> schar'  ';')
+pExpressionsNoWS = pExpression `sepEndBy1` (schar ';')
+pExpressionsWS = pExpression `sepEndBy1` getSame
+pExpressions = pExpression `sepEndBy1` (getSame <|> schar'  ';')
 
-pIf :: Parser Statement
+pIf :: Parser Expr
 pIf = do
   keyword "if"
   cond <- pExpr
@@ -224,7 +223,7 @@ pIf = do
   false <- pElse
   return $ If cond true false
 
-pIfOrIf' :: Parser Statement
+pIfOrIf' :: Parser Expr
 pIfOrIf' = do
   keyword "if"
   cond <- pExpr
@@ -233,25 +232,25 @@ pIfOrIf' = do
     false <- pElse
     return $ If cond true false
 
-pBlockOrStatement = try pBlock <|> fmap single pStatement
+pBlockOrExpression = try pBlock <|> fmap single pExpression
 pThen = do keyword "then" <|> return "then"
-           pBlockOrStatement
-pElse = keyword "else" *> pBlockOrStatement
+           pBlockOrExpression
+pElse = keyword "else" *> pBlockOrExpression
 
 pReturn = do keyword "return"
              option (Return $ Tuple []) $ Return <$> pExpr
 
---pAfter :: Parser Statement
+--pAfter :: Parser Expression
 --pAfter = do
 --  result <- pExpr
 --  keyword "after"
 --  block <- pBlock
 --  return $ Block $ block ++ [Expr result]
 
-pStatement :: Parser Statement
-pStatement = do
+pExpression :: Parser Expr
+pExpression = do
   lexeme $ choice $ [ pDefine, pExtend, pAssign
-                    , Expr <$> pExpr
+                    , pExpr
                     , pWhile, pFor, pReturn
                     , pIfOrIf']
 
@@ -261,10 +260,10 @@ pExpr = lexeme $ choice [ pLambda, pBinary ]
 single = pure
 
 testE = parse pExpr
-testS = parse pStatementsWS
+testS = parse pExpressionsWS
 
-grab :: String -> Either ParseError [Statement]
-grab = parse (pStatements <* eof)
+grab :: String -> Either ParseError [Expr]
+grab = parse (pExpressions <* eof)
 
 grab' input = case grab input of
   Right statements -> map show statements ! intercalate "\n"

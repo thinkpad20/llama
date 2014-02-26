@@ -103,6 +103,9 @@ addTypeAlias name typ =
 
 instance Typable Expr where
   typeOf expr = go `catchError` err where
+    condError = addError "Condition should be a Bool"
+    branchError = addError "Parallel branches must resolve to the same type"
+    scopeError name = throwErrorC ["'", name, "' is already defined in scope"]
     go = case expr of
       Number _ -> return numT
       String _ -> return strT
@@ -122,6 +125,49 @@ instance Typable Expr where
         (refine (argT ==> returnT) >>= generalize) <* popNameSpace
       Dot a b -> typeOf (Apply b a)
       Apply a b -> typeOfApply typeOf a b
+      If cond tBranch fBranch -> do
+        cType <- typeOf cond
+        cType `unify` boolT `catchError` condError
+        tType <- typeOf tBranch
+        fType <- typeOf fBranch
+        tType `unify` fType `catchError` branchError
+        refine tType
+      Define name expr ->
+        lookup1 name >>= \case
+          -- If it's not defined, we proceed forward
+          Nothing -> do
+            pushNameSpace name
+            result <- typeOf expr
+            popNameSpace
+            record name result
+          Just typ -> scopeError name
+      Assign expr expr' -> do
+        exprT <- typeOf expr
+        -- check mutability of exprT here?
+        exprT' <- typeOf expr'
+        exprT `unify` exprT'
+        refine exprT
+      While cond block -> do
+        cType <- typeOf cond
+        cType `unify` boolT `catchError` condError
+        typeOf block
+      For expr container block -> do
+        pushNameSpace "%for"
+        -- need to make sure container contains things...
+        contT <- typeOf container
+        -- we probably want to do this via traits instead of this, but eh...
+        case (expr, contT) of
+          (Var name, TConst name' [typ']) -> do
+            record name typ'
+            result <- typeOf block
+            popNameSpaceWith name result
+          (Typed (Var name) typ, TConst name' [typ']) | typ == typ' -> do
+            record name typ'
+            result <- typeOf block
+            popNameSpaceWith name result
+          (_, typ) -> throwErrorC ["Non-container type `", render typ
+                                  , "' used in a for loop"]
+      Return expr -> typeOf expr
       _ -> error $ "we can't handle expression `" ++ render expr ++ "'"
     err = addError' ["When typing the expression `", render expr, "'"]
 
@@ -167,73 +213,73 @@ instance Typable Block where
       err = addError' ["When typing the block `", render block, "'"]
       go = case block of
         [] -> return unitT -- shouldn't encounter this, but...
-        Break:_ -> return unitT
-        [stmt] -> typeOf stmt
+        (Break expr):_ -> typeOf expr
+        [expr] -> typeOf expr
         (Return expr):_ -> typeOf expr
-        (If' expr blk1):blk2 | any isReturn blk1 -> do
+        If' expr blk1:blk2 | any isReturn blk1 -> do
           blk1Type <- typeOf blk1
           blk2Type <- typeOf blk2
           case blk1Type == blk2Type of
             True -> return blk1Type
             False -> throwErrorC ["Two branches have different types: `"
                                  , render blk1Type, "' and `", render blk1Type, "'"]
-        stmt:block -> typeOf stmt *> typeOf block
+        expr:block -> typeOf expr *> typeOf block
       isReturn (Return _) = True
       isReturn _ = False
 
-instance Typable Statement where
-  typeOf statement = go `catchError` err where
-    err = case statement of
-      Expr expr -> throwError
-      _ -> addError' ["When typing the statement `", render statement, "'"]
-    condError = addError "Condition should be a Bool"
-    branchError = addError "Parallel branches must resolve to the same type"
-    scopeError name = throwErrorC ["'", name, "' is already defined in scope"]
-    go = case statement of
-      Expr expr -> typeOf expr
-      If cond tBranch fBranch -> do
-        cType <- typeOf cond
-        cType `unify` boolT `catchError` condError
-        tType <- typeOf tBranch
-        fType <- typeOf fBranch
-        tType `unify` fType `catchError` branchError
-        refine tType
-      Define name expr ->
-        lookup1 name >>= \case
-          -- If it's not defined, we proceed forward
-          Nothing -> do
-            pushNameSpace name
-            result <- typeOf expr
-            popNameSpace
-            record name result
-          Just typ -> scopeError name
-      Assign expr expr' -> do
-        exprT <- typeOf expr
-        -- check mutability of exprT here?
-        exprT' <- typeOf expr'
-        exprT `unify` exprT'
-        refine exprT
-      While cond block -> do
-        cType <- typeOf cond
-        cType `unify` boolT `catchError` condError
-        typeOf block
-      For expr container block -> do
-        pushNameSpace "%for"
-        -- need to make sure container contains things...
-        contT <- typeOf container
-        -- we probably want to do this via traits instead of this, but eh...
-        case (expr, contT) of
-          (Var name, TConst name' [typ']) -> do
-            record name typ'
-            result <- typeOf block
-            popNameSpaceWith name result
-          (Typed (Var name) typ, TConst name' [typ']) | typ == typ' -> do
-            record name typ'
-            result <- typeOf block
-            popNameSpaceWith name result
-          (_, typ) -> throwErrorC ["Non-container type `", render typ
-                                  , "' used in a for loop"]
-      Return expr -> typeOf expr
+--instance Typable Statement where
+--  typeOf statement = go `catchError` err where
+--    err = case statement of
+--      Expr expr -> throwError
+--      _ -> addError' ["When typing the statement `", render statement, "'"]
+--    condError = addError "Condition should be a Bool"
+--    branchError = addError "Parallel branches must resolve to the same type"
+--    scopeError name = throwErrorC ["'", name, "' is already defined in scope"]
+--    go = case statement of
+--      Expr expr -> typeOf expr
+--      If cond tBranch fBranch -> do
+--        cType <- typeOf cond
+--        cType `unify` boolT `catchError` condError
+--        tType <- typeOf tBranch
+--        fType <- typeOf fBranch
+--        tType `unify` fType `catchError` branchError
+--        refine tType
+--      Define name expr ->
+--        lookup1 name >>= \case
+--          -- If it's not defined, we proceed forward
+--          Nothing -> do
+--            pushNameSpace name
+--            result <- typeOf expr
+--            popNameSpace
+--            record name result
+--          Just typ -> scopeError name
+--      Assign expr expr' -> do
+--        exprT <- typeOf expr
+--        -- check mutability of exprT here?
+--        exprT' <- typeOf expr'
+--        exprT `unify` exprT'
+--        refine exprT
+--      While cond block -> do
+--        cType <- typeOf cond
+--        cType `unify` boolT `catchError` condError
+--        typeOf block
+--      For expr container block -> do
+--        pushNameSpace "%for"
+--        -- need to make sure container contains things...
+--        contT <- typeOf container
+--        -- we probably want to do this via traits instead of this, but eh...
+--        case (expr, contT) of
+--          (Var name, TConst name' [typ']) -> do
+--            record name typ'
+--            result <- typeOf block
+--            popNameSpaceWith name result
+--          (Typed (Var name) typ, TConst name' [typ']) | typ == typ' -> do
+--            record name typ'
+--            result <- typeOf block
+--            popNameSpaceWith name result
+--          (_, typ) -> throwErrorC ["Non-container type `", render typ
+--                                  , "' used in a for loop"]
+--      Return expr -> typeOf expr
 
 getAliases = get <!> aliases
 
@@ -308,28 +354,6 @@ lookupFuncs funcName = do
                                    , "function type `", render t, "'"]
       Just (TypeSet ts) -> return $ S.elems ts
       Nothing -> return mempty
-
---lookupFuncs :: Name -> Typing [Type]
---lookupFuncs name = do
---  tbl <- getTable
---  names <- getNameSpace
---  results <- go tbl [] names
---  return $ mconcat results
---  where
---    go :: TypeTable -> [Type] -> [Name] -> Typing [Type]
---    go tbl acc [] = do
---      t <- check tbl name
---      return $ reverse $ t ++ acc
---    go tbl acc (n:ns) = do
---      t <- check tbl $ render $ name ++ n : ns
---      go tbl (t:acc) ns
---    check :: TypeTable -> Name -> Typing [Type]
---    check tbl fullName = case M.lookup fullName tbl of
---      Just (Type t@(TFunction from to)) -> return [t]
---      Just (Type t) -> throwErrorC ["Identifier `", name, "' maps to non-"
---                                   , "function type `", render t, "'"]
---      Just (TypeSet ts) -> return $ S.elems ts
---      Nothing -> return mempty
 
 lookupAndInstantiate :: Name -> Typing TypeRecord
 lookupAndInstantiate name = lookup name >>= \case
