@@ -30,12 +30,6 @@ data Type = TVar TVarType Name
           | TFunction Type Type
           deriving (Show, Eq, Ord)
 
-tTuple = TConst ""
-tConst name = TConst name []
-
-(==>) = TFunction
-infixr 4 ==>
-
 data ArrayLiteral = ArrayLiteral [Expr]
                   | ArrayRange Expr Expr deriving (Show, Eq)
 
@@ -69,7 +63,7 @@ instance Render Expr where
     Apply (Var op) e | isSymbol op ->  op ++ " " ++ render' e
     Apply e1 e2 -> render' e1 ++ " " ++ render' e2
     Tuple es -> "(" ++ (intercalate "," . map render) es ++ ")"
-    Array (ArrayLiteral exprs) -> '[' : (intercalate ", " $ map render exprs) ++ "]"
+    Array (ArrayLiteral exprs) -> '[' : intercalate ", " (map render exprs) ++ "]"
     Array (ArrayRange start stop) -> '[' : render start ++ ".." ++ render stop ++ "]"
     Ref object index -> render' object ++ "[:" ++ render index ++ "]"
     Lambda arg expr -> render' arg ++ " => " ++ render expr
@@ -88,7 +82,7 @@ instance Render Expr where
 
 
 instance Render Statement where
-  render stmt = fst $ runState (render' stmt) 0 where
+  render stmt = evalState (render' stmt) 0 where
     render' :: Statement -> State Int String
     render' stmt = case stmt of
       Expr expr -> line $ render expr
@@ -101,15 +95,15 @@ instance Render Statement where
       If' c t -> do
         if' <- line $ "if " ++ render c
         t' <- block t
-        join $ [if'] ++ t'
+        join $ if' : t'
       While e blk -> do
         while <- line $ "while " ++ render e
         blk' <- block blk
-        join $ [while] ++ blk'
+        join $ while : blk'
       For pat expr blk -> do
         for <- line $ "for " ++ render pat ++ " in " ++ render expr
         blk' <- block blk
-        join $ [for] ++ blk'
+        join $ for : blk'
       Define name expr -> line $ name ++ " = " ++ render expr
       Extend name expr -> line $ name ++ " &= " ++ render expr
       Assign e1 block -> line $ render e1 ++ " := " ++ render block
@@ -122,18 +116,18 @@ instance Render Statement where
     (up, down) = (modify (+2), modify (\n -> n - 2))
 
 instance Render Block where
-  render b = "{" ++ (line . trim . (intercalate "; ") . map render) b ++ "}"
+  render b = "{" ++ (line . trim . intercalate "; " . map render) b ++ "}"
 
 instance Render Type where
   render t = case t of
     TVar Rigid name -> name
     TVar Polymorphic name -> "(some " ++ name ++ ")"
-    TConst "" ts -> "(" ++ (intercalate ", " $ map render ts) ++ ")"
+    TConst "" ts -> "(" ++ intercalate ", " (map render ts) ++ ")"
     TConst name [] -> name
     TConst "[]" [t] -> "[" ++ render t ++ "]"
     TConst "[!]" [t] -> "[!" ++ render t ++ "]"
     TConst name [t] -> name ++ " " ++ render' t
-    TConst name ts -> name ++ " " ++ "(" ++ (intercalate ", " $ map render ts) ++ ")"
+    TConst name ts -> name ++ " " ++ "(" ++ intercalate ", " (map render ts) ++ ")"
     TFunction t1 t2 -> render'' t1 ++ " -> " ++ render t2
     where render' typ = case typ of
             TConst _ _ -> "(" ++ render typ ++ ")"
@@ -142,13 +136,29 @@ instance Render Type where
             TFunction _ _ -> "(" ++ render typ ++ ")"
             _ -> render typ
 
+symChars :: String
 symChars = "><=+-*/^~!%@&$:.#|?"
+
+isSymbol :: String -> Bool
 isSymbol = all (`elem` symChars)
+
+binary :: Name -> Expr -> Expr -> Expr
 binary name e1 e2 = Apply (Var name) $ Tuple [e1, e2]
 
+boolT, numT, strT, unitT :: Type
 boolT = tConst "Bool"
 numT = tConst "Num"
 strT = tConst "Str"
+unitT = tTuple []
+
+arrayOf, listOf :: Type -> Type
 arrayOf a = TConst "[]" [a]
 listOf a = TConst "[!]" [a]
-unitT = tTuple []
+tTuple :: [Type] -> Type
+tTuple = TConst ""
+tConst :: Name -> Type
+tConst name = TConst name []
+
+(==>) :: Type -> Type -> Type
+(==>) = TFunction
+infixr 4 ==>

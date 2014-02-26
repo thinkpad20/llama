@@ -5,14 +5,13 @@
 module Evaluator where
 
 import Prelude hiding (lookup)
+import Control.Monad.Reader
 import System.Console.Haskeline
 import System.IO.Unsafe
-import System.IO
 import qualified Data.Map as M
 
 import Common
 import Parser
-import AST
 import TypeChecker
 import EvaluatorLib
 
@@ -49,15 +48,15 @@ computeClosure = do
     [] -> return mempty
     s:_ -> fmap M.fromList $ forM (M.toList $ vTable s) $ \(k, v) -> do
       case v of
-        VArg ref -> derefArg ref >>= \v -> return (k, v)
+        VLocal ref -> derefArg ref >>= \v -> return (k, v)
         _ -> return (k, v)
 
-derefArg :: ArgRef -> Eval Value
+derefArg :: LocalRef -> Eval Value
 derefArg argRef = do
   arg <- get <!> stack <!> head <!> argument
   go arg argRef
   where
-    go :: Value -> ArgRef -> Eval Value
+    go :: Value -> LocalRef -> Eval Value
     go arg argRef = case argRef of
       ArgRef -> return arg
       Index n ref -> do
@@ -68,7 +67,7 @@ derefArg argRef = do
                            , "argument `", render arg, "'"]
 
 lookupAndError name = lookup name >>= \case
-  Just (VArg ref) -> derefArg ref
+  Just (VLocal ref) -> derefArg ref
   Just val-> return val
   Nothing -> throwErrorC ["Variable '", name, "' not defined in scope"]
 
@@ -131,10 +130,10 @@ instance Evalable Expr where
 
 getNames :: Expr -> Eval ValueTable
 getNames expr = go ArgRef expr where
-  go :: ArgRef -> Expr -> Eval ValueTable
+  go :: LocalRef -> Expr -> Eval ValueTable
   go ref expr = case expr of
-    Var name -> return (M.singleton name (VArg ref))
-    Typed (Var name) _ -> return (M.singleton name (VArg ref))
+    Var name -> return (M.singleton name (VLocal ref))
+    Typed (Var name) _ -> return (M.singleton name (VLocal ref))
     Tuple es -> do
       let pairs = zip [0..] es
           go' (index, e) = go (Index index ref) e
@@ -143,38 +142,56 @@ getNames expr = go ArgRef expr where
 
 
 -- NOTE: using unsafePerformIO for testing purposes only
-runEvalWith :: Evalable a => EvalState -> a -> (Either ErrorList Value, EvalState)
-runEvalWith state a = unsafePerformIO $ runStateT (runErrorT $ eval a) state
+runEvalWith :: Evalable a =>
+               EvalState ->
+               TypingState ->
+               a ->
+               (Either ErrorList Value, EvalState)
+runEvalWith state tstate a =
+  unsafePerformIO $ runStateT (runReaderT (runErrorT $ eval a) tstate) state
 
 runEval :: Evalable a => a -> (Either ErrorList Value, EvalState)
-runEval = runEvalWith defaultState
+runEval = runEvalWith defaultState defaultTypingState
 
-typeAndEval :: String -> (Either ErrorList Value, EvalState, TypingState)
-typeAndEval input = case grab input of
+typeAndEval :: EvalState ->
+               TypingState ->
+               String ->
+               (Either ErrorList Value, EvalState, TypingState)
+typeAndEval eState tState input = case grab input of
   Left err ->
-    ( Left $ TE ["Syntax error:\n" ++ show err]
-    , defaultState, defaultTypingState)
+    (Left $ TE ["Syntax error:\n" ++ show err], eState, tState)
   Right block ->
-    case runTyping block of
+    case runTypingWith tState block of
       (Left errs, _) ->
-        ( Left $ TE ["Type check error:\n" ++ show errs]
-        , defaultState, defaultTypingState)
-      (Right _, tState) ->
-        let state = defaultState {sTable = nameSpaceTable tState}
-            (result, eState) = runEvalWith state block in
-        (result, eState, tState)
+        (Left $ TE ["Type check error:\n" ++ show errs], eState, tState)
+      (Right _, tState') ->
+        let (result, eState') = runEvalWith eState tState' block in
+        (result, eState', tState')
 
 
-evalIt :: String -> IO ()
-evalIt input = case typeAndEval input of
-  (Left err, _, _) -> print err
-  (Right val, eState, tState) ->
-    putStrLn $ render val ++ "\n" ++ render eState
+evalIt :: EvalState -> TypingState -> String -> IO (EvalState, TypingState)
+evalIt eState tState input = case typeAndEval eState tState input of
+  (Left err, _, _) -> do
+    print err
+    return (eState, tState)
+  (Right val, eState, tState) -> do
+    putStrLn $ render val -- ++ "\n" ++ render eState
+    return (eState, tState)
 
-repl = runInputT defaultSettings loop where
-  loop = forever $ do
-    getInputLine "> " >>= \case
-      Nothing -> return ()
-      Just input -> lift $ evalIt input
+repl = do
+  putStrLn "Welcome to the Llama REPL."
+  runInputT defaultSettings loop'
+  where
+    loop' = loop defaultState defaultTypingState
+    loop eState tState = forever $ do
+      --lift $ putStrLn $ "Values: " ++ render eState ++ "\nTypes: " ++ render tState
+      getInputLine "llama> " >>= \case
+        Nothing -> return ()
+        Just "clear" -> do
+          lift $ putStrLn "Cleared variables"
+          loop defaultState defaultTypingState
+        Just input -> do
+          (eState', tState') <- lift $ evalIt eState tState input
+          loop eState' tState'
 
 main = repl

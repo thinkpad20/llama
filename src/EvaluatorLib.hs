@@ -9,7 +9,6 @@ import qualified Data.Map as M
 
 import Common
 import Parser
-import AST
 import TypeChecker
 
 data Value = VNumber Double
@@ -18,21 +17,21 @@ data Value = VNumber Double
            | VBuiltin Builtin
            | VObject Name [Value]
            | VArray [Value]
-           | VArg ArgRef
+           | VLocal LocalRef
            | VReturn Value
            | VThrow Value
            deriving (Show, Eq)
 
 data Builtin = Builtin Name (Value -> Eval Value)
 instance Show Builtin where
-  show (Builtin n _) = "(BUILTIN/" ++ n ++")"
+  show (Builtin n _) = "(BUILTIN/" ++ n ++ ")"
 instance Eq Builtin where
   (Builtin n _) == (Builtin n' _) = n == n'
 
 -- | References to as-yet-unset values, as in function args
-data ArgRef = ArgRef -- meaning "the argument of this function"
-            | Index Int ArgRef -- meaning an index into the argument
-            deriving (Show, Eq)
+data LocalRef = ArgRef -- meaning "the argument of this function"
+              | Index Int LocalRef -- meaning an index into the argument
+              deriving (Show, Eq)
 
 data StackFrame = StackFrame
   {
@@ -40,31 +39,35 @@ data StackFrame = StackFrame
   , vTable :: ValueTable
   } deriving (Show)
 type ValueTable = M.Map Name Value
-data EvalState = EvalState {stack::[StackFrame]
-                           , sTable::TypeTable} deriving (Show)
-type Eval = ErrorT ErrorList (StateT EvalState IO)
-type Eval' = ErrorT ErrorList (ReaderT TypingState (StateT EvalState IO))
+data EvalState = EvalState {stack::[StackFrame]} deriving (Show)
+--type Eval = ErrorT ErrorList (StateT EvalState IO)
+type Eval = ErrorT ErrorList (ReaderT TypingState (StateT EvalState IO))
 
+instance Render StackFrame where
+  render frame = line $ concat ["Argument: ", render (argument frame)
+                               , ", Names: ", render tbl'] where
+    tbl' = M.filterWithKey (\k _ -> M.notMember k builtins) (vTable frame)
 
 instance Render EvalState where
-  render s =  ""
+  render s = render $ stack s
 
 instance Render Value where
   render val = case val of
     VNumber n | isInt n -> show $ floor n
     VNumber n -> show n
     VString s -> show s
-    VFunction res vtable -> render res ++ ", with " ++ render vtable
+    VFunction res vtable -> render res ++ ", with " ++ render vtable'
+      where vtable' = M.filterWithKey (\k _ -> M.notMember k builtins) vtable
     VObject "" vals -> "(" ++ (intercalate ", " $ map render vals) ++ ")"
     VObject name vals ->
       name ++ " (" ++ (intercalate ", " $ map render vals) ++ ")"
     VArray vals -> render vals
-    VArg aref -> render aref
+    VLocal local -> render local
     VBuiltin bi -> show bi
     VReturn val -> render val
     VThrow val -> "throw " ++ render val
 
-instance Render ArgRef where
+instance Render LocalRef where
   render aref = case aref of
     ArgRef -> "argument"
     Index i aref -> render aref ++ "[" ++ show i ++ "]"
@@ -86,7 +89,7 @@ defaultFrame = StackFrame
   , vTable = builtins
   }
 defaultState :: EvalState
-defaultState = EvalState {stack = [defaultFrame], sTable = mempty}
+defaultState = EvalState {stack = [defaultFrame]}
 
 ------------- BUILTIN FUNCTIONS --------------
 illegalArgErr name arg = throwErrorC $
@@ -118,33 +121,33 @@ neqNumber = numBoolOp (/=) "neqNumber"
 printVal :: Builtin
 printVal = Builtin "genericPrint" $ \val -> do
   case val of
-    VString s -> lift $ lift $ putStrLn s
-    val -> lift $ lift $ putStrLn $ render val
+    VString s -> lift $ lift $ lift $ putStrLn s
+    val -> lift $ lift $ lift $ putStrLn $ render val
   return unitV
 
 printStr :: Builtin
 printStr = Builtin "printStr" $ \case
-  VString str -> do lift $ lift $ putStrLn str
+  VString str -> do lift $ lift $ lift $ putStrLn str
                     return unitV
   val -> illegalArgErr "printStr" val
 
 lApply, rApply, lComp, rComp :: Value
 lApply = VFunction body mp where
-  mp = M.fromList [ ("f", VArg (Index 0 ArgRef))
-                  , ("x", VArg (Index 1 ArgRef))]
+  mp = M.fromList [ ("f", VLocal (Index 0 ArgRef))
+                  , ("x", VLocal (Index 1 ArgRef))]
   body = Apply (Var "f") (Var "x")
 rApply = VFunction body mp where
-  mp = M.fromList [ ("x", VArg (Index 0 ArgRef))
-                  , ("f", VArg (Index 1 ArgRef))]
+  mp = M.fromList [ ("x", VLocal (Index 0 ArgRef))
+                  , ("f", VLocal (Index 1 ArgRef))]
   body = Apply (Var "f") (Var "x")
 lComp = VFunction body mp where
-  mp = M.fromList [ ("f", VArg (Index 0 ArgRef))
-                  , ("g", VArg (Index 1 ArgRef))]
+  mp = M.fromList [ ("f", VLocal (Index 0 ArgRef))
+                  , ("g", VLocal (Index 1 ArgRef))]
   body = Lambda (Var "x")
            $ Apply (Var "f") (Apply (Var "g") (Var "x"))
 rComp = VFunction body mp where
-  mp = M.fromList [ ("g", VArg (Index 0 ArgRef))
-                  , ("f", VArg (Index 1 ArgRef))]
+  mp = M.fromList [ ("g", VLocal (Index 0 ArgRef))
+                  , ("f", VLocal (Index 1 ArgRef))]
   body = Lambda (Var "x")
            $ Apply (Var "f") (Apply (Var "g") (Var "x"))
 

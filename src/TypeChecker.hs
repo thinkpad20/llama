@@ -24,8 +24,7 @@ data TypeRecord = Type Type | TypeSet TypeSet deriving (Show)
 type TypeSet = S.Set Type
 type TypeTable = M.Map Name TypeRecord
 type NameSpace = [Name]
-data TypingState = TypingState { table ::[TypeTable]
-                               , aliases :: M.Map Name Type
+data TypingState = TypingState { aliases :: M.Map Name Type
                                , nameSpace :: [Name]
                                , nameSpaceTable :: TypeTable
                                , freshName :: Name } deriving (Show)
@@ -109,7 +108,8 @@ instance Typable Expr where
       String _ -> return strT
       Block blk -> pushNameSpace "%b" *> typeOf blk <* popNameSpace
       Var name -> do
-        log' ["instantiating expr var '", name, "'"]
+        env <- get
+        log' ["instantiating expr var '", name, "' in environment ", render env]
         lookupAndInstantiate name >>= check
       Constructor name -> do
         log' ["instantiating expr constructor '", name, "'"]
@@ -117,9 +117,9 @@ instance Typable Expr where
       Array arr@(ArrayLiteral _) -> typeOfArrayLiteral typeOf arr
       Tuple vals -> tTuple <$> mapM typeOf vals
       Lambda arg expr -> do
-        argT <- push *> pushNameSpace "%l" *> litTypeOf arg
+        argT <- pushNameSpace "%l" *> litTypeOf arg
         returnT <- typeOf expr
-        (refine (argT ==> returnT) >>= generalize) <* pop <* popNameSpace
+        (refine (argT ==> returnT) >>= generalize) <* popNameSpace
       Dot a b -> typeOf (Apply b a)
       Apply a b -> typeOfApply typeOf a b
       _ -> error $ "we can't handle expression `" ++ render expr ++ "'"
@@ -145,8 +145,7 @@ litTypeOf expr = case expr of
   Typed (Var name) typ -> do
     log' ["instantiating typed variable ", name, " as ", render typ]
     instantiated <- instantiate typ
-    setType name instantiated
-    addNsName name instantiated
+    record name instantiated
   Number _ -> return numT
   String _ -> return strT
   Tuple exprs -> tTuple <$> mapM litTypeOf exprs
@@ -160,7 +159,10 @@ litTypeOf expr = case expr of
 
 instance Typable Block where
   -- Returns the type of the last statement. Operates in a new context.
-  typeOf block = push *> go `catchError` err <* pop
+  typeOf block = do
+    env <- get
+    log' ["typing the block `", render block, "' with environment `", render env, "'"]
+    go `catchError` err
     where
       err = addError' ["When typing the block `", render block, "'"]
       go = case block of
@@ -201,8 +203,9 @@ instance Typable Statement where
           -- If it's not defined, we proceed forward
           Nothing -> do
             pushNameSpace name
-            result <- typeOf expr >>= setType name
-            popNameSpace >> addNsName name result
+            result <- typeOf expr
+            popNameSpace
+            record name result
           Just typ -> scopeError name
       Assign expr expr' -> do
         exprT <- typeOf expr
@@ -221,40 +224,26 @@ instance Typable Statement where
         -- we probably want to do this via traits instead of this, but eh...
         case (expr, contT) of
           (Var name, TConst name' [typ']) -> do
-            setType name typ'
+            record name typ'
             result <- typeOf block
             popNameSpaceWith name result
           (Typed (Var name) typ, TConst name' [typ']) | typ == typ' -> do
-            setType name typ'
+            record name typ'
             result <- typeOf block
             popNameSpaceWith name result
           (_, typ) -> throwErrorC ["Non-container type `", render typ
                                   , "' used in a for loop"]
       Return expr -> typeOf expr
 
-getTable = get <!> table
 getAliases = get <!> aliases
-
--- | self-explanatory
-push, pop :: Typing ()
-push = modify $ \s -> s {table = mempty : table s}
-pop = modify $ \s -> s {table = tail $ table s}
-pushWith name typ =
-  modify $ \s -> s {table = M.singleton name (Type typ) : table s}
 
 pushNameSpace :: Name -> Typing ()
 pushNameSpace name = modify $ \s -> s { nameSpace = name : nameSpace s }
 popNameSpace = modify $ \s -> s { nameSpace = tail $ nameSpace s }
-popNameSpaceWith name typ = popNameSpace *> addNsName name typ
+popNameSpaceWith name typ = popNameSpace *> record name typ
 
-setType :: Name -> Type -> Typing Type
-setType name typ = do
-  tbl:tbls <- getTable
-  modify $ \s -> s { table = M.insert name (Type typ) tbl : tbls}
-  return typ
-
-addNsName :: Name -> Type -> Typing Type
-addNsName name typ = do
+record :: Name -> Type -> Typing Type
+record name typ = do
   nsName <- fullName name
   nsTable <- M.insert nsName (Type typ) <$> nameSpaceTable <$> get
   modify $ \s -> s { nameSpaceTable = nsTable }
@@ -278,27 +267,69 @@ log :: String -> Typing ()
 log s = return () -- lift $ lift $ putStrLn s
 log' = concat ~> log
 
+getNameSpace :: Typing [Name]
+getNameSpace = get <!> nameSpace
+getTable = get <!> nameSpaceTable
+
 lookup, lookup1 :: Name -> Typing (Maybe TypeRecord)
 -- | local lookup, searches head of table list
-lookup1 name = getTable >>= head ~> M.lookup name ~> return
+lookup1 name = do
+  fullName <- getNameSpace <!> (name :) <!> render
+  table <- getTable
+  return $ M.lookup name table
 -- | recursive lookup, searches up through all symbol tables
-lookup name = getTable >>= loop
-  where loop [] = return Nothing
-        loop (tbl:tbls) = case M.lookup name tbl of
+lookup name = do
+  ns <- get <!> nameSpace
+  tbl <- get <!> nameSpaceTable
+  loop tbl ns
+  where loop tbl [] = return $ M.lookup name tbl
+        loop tbl (n:ns) = case M.lookup (render $ name:n:ns) tbl of
           Just typ -> return (Just typ)
-          Nothing -> loop tbls
+          Nothing -> loop tbl ns
 
 -- | looks up all of the functions in scope under the given name
 lookupFuncs :: Name -> Typing [Type]
-lookupFuncs name = fmap mconcat $ getTable >>= mapM go
+lookupFuncs funcName = do
+  tbl <- getTable
+  names <- getNameSpace
+  go tbl [] names
   where
-    go tbl = do
-      case M.lookup name tbl of
-        Just (Type t@(TFunction from to)) -> return [t]
-        Just (Type t) -> throwErrorC ["Identifier `", name, "' maps to non-"
-                                     , "function type `", render t, "'"]
-        Just (TypeSet ts) -> return $ S.elems ts
-        Nothing -> return mempty
+    go :: TypeTable -> [Type] -> [Name] -> Typing [Type]
+    go tbl acc nspace = case nspace of
+      [] -> fmap (++acc) $ check tbl funcName
+      nspace -> do
+        types <- check tbl (render $ funcName : nspace)
+        go tbl (types ++ acc) (tail nspace)
+
+    check :: TypeTable -> Name -> Typing [Type]
+    check tbl name = case M.lookup name tbl of
+      Just (Type t@(TFunction from to)) -> return [t]
+      Just (Type t) -> throwErrorC ["Identifier `", name, "' maps to non-"
+                                   , "function type `", render t, "'"]
+      Just (TypeSet ts) -> return $ S.elems ts
+      Nothing -> return mempty
+
+--lookupFuncs :: Name -> Typing [Type]
+--lookupFuncs name = do
+--  tbl <- getTable
+--  names <- getNameSpace
+--  results <- go tbl [] names
+--  return $ mconcat results
+--  where
+--    go :: TypeTable -> [Type] -> [Name] -> Typing [Type]
+--    go tbl acc [] = do
+--      t <- check tbl name
+--      return $ reverse $ t ++ acc
+--    go tbl acc (n:ns) = do
+--      t <- check tbl $ render $ name ++ n : ns
+--      go tbl (t:acc) ns
+--    check :: TypeTable -> Name -> Typing [Type]
+--    check tbl fullName = case M.lookup fullName tbl of
+--      Just (Type t@(TFunction from to)) -> return [t]
+--      Just (Type t) -> throwErrorC ["Identifier `", name, "' maps to non-"
+--                                   , "function type `", render t, "'"]
+--      Just (TypeSet ts) -> return $ S.elems ts
+--      Nothing -> return mempty
 
 lookupAndInstantiate :: Name -> Typing TypeRecord
 lookupAndInstantiate name = lookup name >>= \case
@@ -369,8 +400,7 @@ refine typ = look mempty typ where
         Just typ' -> look (S.insert name seenNames) typ'
     TFunction a b -> TFunction <$$ look seenNames a <*> look seenNames b
 
-defaultTypingState = TypingState { table = [builtIns]
-                                 , aliases = mempty
+defaultTypingState = TypingState { aliases = mempty
                                  , nameSpace = []
                                  , nameSpaceTable = builtIns
                                  , freshName = "a0"}
