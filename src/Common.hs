@@ -33,6 +33,8 @@ type Name = String
 
 class Show a => Render a where
   render :: a -> String
+  renderIO :: a -> IO String
+  renderIO = return . render
 
 instance Render a => Render [a] where
   render as = "[" ++ intercalate ", " (map render as) ++ "]"

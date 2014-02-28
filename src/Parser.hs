@@ -202,8 +202,10 @@ pDefBinary sym f = try $ do
   arg1 <- pTerm
   op   <- pSymbol
   arg2 <- pTerm
-  body <- exactSym sym *> pExprOrBlock
+  body <- exactSym sym *> pBlock
   return $ f op $ Lambda (Tuple [arg1, arg2]) body
+
+pMut = Mut <$ keyword "mut" <*> pExpr
 
 pAssign = try $ Assign <$$ pExpr <* exactSym ":=" <*> pExprOrBlock
 
@@ -252,7 +254,7 @@ pExpression = do
       _ -> return $ Block [rest, expr]
 
 pExpr :: Parser Expr
-pExpr = lexeme $ choice [ pLambda, pBinary ]
+pExpr = lexeme $ choice [ pMut, pLambda, pBinary ]
 
 single = pure
 

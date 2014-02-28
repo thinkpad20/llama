@@ -32,10 +32,16 @@ read_n_bytes (h: mut FileHandle, n: Int) = finish after
 
 (note to self: much as I'm loathe to admit it, reviewing C++'s pass by value vs pass by reference is probably a good thing to do, since I'm thinking about something like that for Llama. Also similarly, we have the idea of const references vs mutable, etc).
 
-Musing: should lambdas take a single statement, rather than a single expression? The reason I ask is that having that `return result after h.close` is pretty nice, and `return` is strictly a statement (need it be? we once again question the need to separate statements and expressions...)
-
-An example of a lambda taking a statement:
+Blocks would be very nice for separating out nested loops:
 
 ```
-dumb () = forever do println "hello!!"
+countCharsInLines (s: Str, c: Char) = counts after
+  counts = mut []
+  block getCounts (line: Str) = 
+    count = mut {c => 0 | c in ['a'..'z']}
+    for ch in line 
+      if 'a' <= ch.lower <= 'z' then return []
+      count[:ch.lower]++
+    counts.push! (line, count)
+  for line in s.splitLines do getCounts line
 ```

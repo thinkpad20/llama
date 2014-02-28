@@ -30,6 +30,7 @@ data Expr = Var Name
           | Throw Expr
           | Break Expr
           | Continue
+          | Mut Expr
           deriving (Show, Eq)
 
 -- | A variable can be rigid (fixed in scope), or polymorphic (free to take on
@@ -39,6 +40,7 @@ data TVarType = Rigid | Polymorphic deriving (Show, Eq, Ord)
 data Type = TVar TVarType Name
           | TConst Name [Type]
           | TFunction Type Type
+          | TMut Type
           deriving (Show, Eq, Ord)
 
 data ArrayLiteral = ArrayLiteral [Expr]
@@ -114,12 +116,13 @@ instance Render Type where
     TVar Rigid name -> name
     TVar Polymorphic name -> "(some " ++ name ++ ")"
     TConst "" ts -> "(" ++ intercalate ", " (map render ts) ++ ")"
-    TConst name [] -> name
     TConst "[]" [t] -> "[" ++ render t ++ "]"
     TConst "[!]" [t] -> "[!" ++ render t ++ "]"
     TConst name [t] -> name ++ " " ++ render' t
+    TConst name [] -> name
     TConst name ts -> name ++ " " ++ "(" ++ intercalate ", " (map render ts) ++ ")"
     TFunction t1 t2 -> render'' t1 ++ " -> " ++ render t2
+    TMut typ -> "mut " ++ render typ
     where render' typ = case typ of
             TConst _ _ -> "(" ++ render typ ++ ")"
             _ -> render typ
@@ -142,9 +145,10 @@ numT = tConst "Num"
 strT = tConst "Str"
 unitT = tTuple []
 
-arrayOf, listOf :: Type -> Type
+arrayOf, listOf, maybeT :: Type -> Type
 arrayOf a = TConst "[]" [a]
 listOf a = TConst "[!]" [a]
+maybeT a = TConst "Maybe" [a]
 tTuple :: [Type] -> Type
 tTuple = TConst ""
 tConst :: Name -> Type

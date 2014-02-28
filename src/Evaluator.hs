@@ -6,6 +6,7 @@ module Evaluator where
 
 import Prelude hiding (lookup)
 import Control.Monad.Reader
+import Data.IORef
 import System.Console.Haskeline
 import System.IO.Unsafe
 import qualified Data.Map as M
@@ -88,28 +89,34 @@ instance Evalable Expr where
     String s -> return $ VString s
     Dot a b -> eval $ Apply b a
     Var name -> lookupAndError name
+    Mut expr -> eval expr >>= newMutable
     Block blk -> eval blk
+    Constructor name -> return $ VObject name []
     Define name block -> do
       eval block >>== addLocal name
-    Assign _ _ -> throwError1 "Assignment not yet supported"
-    If cond true false -> do
-      condV <- eval cond
-      case condV of
-        v | v == trueV -> eval true
-        v | v == falseV -> eval false
-        _ -> error $ concat ["An if condition must have the type `"
-                            , "Bool'; this should have been caught "
-                            , "by the type checker"]
+    Assign dest expr -> eval dest >>= \case
+      VMutable ref -> eval expr >>= modMutable ref
+      val -> throwErrorC ["Expression `", render dest, "' evaluates to `"
+                         , render val, "', which is not a reference." ]
+    If' cond true -> eval cond >>= \case
+      v | v == trueV -> justV <$> eval true
+        | v == falseV -> return nothingV
+        | otherwise -> condError
+    If cond true false -> eval cond >>= \case
+      v | v == trueV -> eval true
+        | v == falseV -> eval false
+        | otherwise -> condError
     Return expr -> VReturn <$> eval expr
     Apply func arg -> do
       funcVal <- eval func
       -- need to figure out polymorphism here...
       case funcVal of
         VFunction block env -> do
-          argVal <- eval arg
+          argVal <- eval arg >>= snapshot
           pushWith StackFrame { argument = argVal, vTable = env }
           eval block <* pop
-        VBuiltin (Builtin _ f) -> eval arg >>= f
+        VBuiltin (Builtin _ f) ->
+          eval arg >>= snapshot >>= f
         _ -> throwErrorC ["`", render func, "' is not a function!"]
     Lambda expr block -> do
       --fixSymTable
@@ -118,7 +125,16 @@ instance Evalable Expr where
       -- need to store the current argument if there is one
       return $ VFunction block $ M.union names vTable
     Tuple exprs -> vTuple <$> mapM eval exprs
+    While cond e -> do
+      eval cond >>= \case
+        v | v == trueV -> eval e >> eval expr
+          | v == falseV -> return nothingV
+          | otherwise -> condError
     _ -> throwErrorC ["Can't evaluate `", render expr, "' yet"]
+
+condError = error $ concat ["An if condition must have the type `"
+                           , "Bool'; this should have been caught "
+                           , "by the type checker"]
 
 getNames :: Expr -> Eval ValueTable
 getNames expr = go ArgRef expr where
@@ -167,7 +183,7 @@ evalIt eState tState input = case typeAndEval eState tState input of
     print err
     return (eState, tState)
   (Right val, eState, tState) -> do
-    putStrLn $ render val -- ++ "\n" ++ render eState
+    renderIO val >>= putStrLn
     return (eState, tState)
 
 repl = do
@@ -176,7 +192,6 @@ repl = do
   where
     loop' = loop defaultState defaultTypingState
     loop eState tState = forever $ do
-      --lift $ putStrLn $ "Values: " ++ render eState ++ "\nTypes: " ++ render tState
       getInputLine "llama> " >>= \case
         Nothing -> return ()
         Just "clear" -> do

@@ -4,6 +4,7 @@
 {-# LANGUAGE LambdaCase #-}
 module EvaluatorLib where
 
+import Prelude hiding (log)
 import Control.Monad.Reader
 import Data.IORef
 import qualified Data.Map as M
@@ -71,6 +72,10 @@ instance Render Value where
     VBuiltin bi -> show bi
     VReturn val -> render val
     VThrow val -> "throw " ++ render val
+    VMutable ref -> "(mutable reference)"
+  renderIO val = case val of
+    VMutable ref -> render <$> readIORef ref
+    val -> return $ render val
 
 instance Render LocalRef where
   render aref = case aref of
@@ -166,3 +171,30 @@ builtins = M.fromList
   , ("<~", lComp), ("~>", rComp)
   , ("print", VBuiltin printVal), ("print(Str)", VBuiltin printVal)
   ]
+
+
+newMutable :: Value -> Eval Value
+newMutable val = fmap VMutable $ lift3 $ newIORef val
+
+modMutable :: (IORef Value) -> Value -> Eval Value
+modMutable ref val = do
+  lift3 $ writeIORef ref val
+  return val
+
+-- | Converts any mutable variables to immutables
+snapshot :: Value -> Eval Value
+snapshot val = case val of
+  VMutable ref -> lift3 $ readIORef ref
+  VObject name vals -> VObject name <$> mapM snapshot vals
+  _ -> return val
+
+lift3 = lift . lift . lift
+
+log :: String -> Eval ()
+log s = lift3 $ putStrLn s
+
+log' :: [String] -> Eval ()
+log' = concat ~> log
+
+justV val = VObject "Just" [val]
+nothingV = VObject "Nothing" []
