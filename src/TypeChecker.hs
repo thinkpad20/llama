@@ -320,9 +320,6 @@ unify type1 type2 | type1 == type2 = return ()
     _ -> do
       log' ["Incompatible types: `", show type1, "' and `", show type2, "'"]
       throwErrorC ["Incompatible types: `", render type1, "' and `", render type2, "'"]
-  where
-    operandsError which = addError' ["When unifying the", which, "operands of `"
-                                    , render type1, "' and `", render type2]
 
 -- | takes a type and replaces any type variables in the type with unused
 -- variables. Note: in Hindley-Milner, there are two distinct types, Type and

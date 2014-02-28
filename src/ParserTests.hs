@@ -17,9 +17,9 @@ arrayE exprs = Array $ ArrayLiteral exprs
 rangeS start stop = rangeE start stop ! expr
 rangeE start stop = ArrayRange start stop ! Array
 ops = [ "+", "*", "-", "/", "^", "%", "<", ">", "<="
-      , ">=", "==", "!=", "<|", "|>", "<~", "~>"]
+      , ">=", "==", "!=", "<|", "|>", "<~", "~>", "||", "&&"]
 [ plus, times, minus, divide, expon, mod, lt, gt, leq, geq
- , eq, neq, bAp, fAp, bComp, fComp] = map binary ops
+ , eq, neq, bAp, fAp, bComp, fComp, _or, _and] = map binary ops
 opsFuncs = M.fromList [("+", plus), ("*", times), ("-", minus)
                       , ("/", divide), ("^", expon), ("%", mod)
                       , ("<", lt), (">", gt), ("<=", leq), (">=", geq)
@@ -51,6 +51,12 @@ expressionTests = TestGroup "Expressions"
     , Test "observes associativity rules 2"
             "foo ^ bar ^ baz"
             (expr $ expon foo (expon bar baz))
+    , Test "observes associativity rules 3"
+            "foo || bar || baz"
+            (expr $ _or foo (_or bar baz))
+    , Test "observes associativity rules 4"
+            "foo && bar && baz"
+            (expr $ _and foo (_and bar baz))
   ] ++ binOpsTests)
   , Test "apply" "foo bar" (expr $ Apply foo bar)
   , Test "apply associates to the left"

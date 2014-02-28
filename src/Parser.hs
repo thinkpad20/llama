@@ -131,9 +131,10 @@ pBinary = pBackwardApply where
   pBinOp chain higherPrec op = higherPrec `chain` getOp where
     getOp = op >>= \name -> return (\e1 e2 -> binary name e1 e2)
   fold first = foldl (pBinOp chainl1) first . map exactSym
+  fold' first = foldl (pBinOp chainr1) first . map exactSym
   pBackwardApply = pBinOp chainr1 pForwardApply (exactSym "<|")
   pForwardApply = pBinOp chainl1 pLogical (exactSym "|>")
-  pLogical = fold pComp ["&&", "||"]
+  pLogical = fold' pComp ["&&", "||"]
   pComp = fold pAdd ["<=", ">=", "<", ">", "==", "!="]
   pAdd = fold pMult ["+", "-"]
   pMult = fold pExp ["*", "/", "%"]

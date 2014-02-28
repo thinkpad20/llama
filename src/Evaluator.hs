@@ -119,7 +119,6 @@ instance Evalable Expr where
           eval arg >>= snapshot >>= f
         _ -> throwErrorC ["`", render func, "' is not a function!"]
     Lambda expr block -> do
-      --fixSymTable
       vTable <- computeClosure
       names <- getNames expr
       -- need to store the current argument if there is one
