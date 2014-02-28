@@ -3,9 +3,7 @@ module Tests (Test(..), runTests) where
 
 import Common hiding (line, addError)
 import System.IO
-import Data.List (intercalate)
 import System.Console.ANSI
-import Control.Exception
 
 import qualified Data.Map as M
 data TestResult = TestSuccess [Name]
@@ -44,8 +42,8 @@ runTests' :: (Eq result, Show input, Show result, Show error) =>
             (input -> Either error result) ->
             [Test input result] ->
             Tester ()
-runTests' function tests = do
-  forM_ (zip [1..] tests) $ \(count, test) -> do
+runTests' function tests =
+  forM_ (zip [1..] tests) $ \(count, test) ->
     runTest function count test
 
 runTest :: (Eq result, Show input, Show result, Show error) =>

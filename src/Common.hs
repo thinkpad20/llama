@@ -4,6 +4,7 @@
 {-# LANGUAGE TypeSynonymInstances #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE KindSignatures #-}
+{-# LANGUAGE OverloadedStrings #-}
 module Common ( (!), (<!>), (<$>), (<$), (<*), (*>), (<*>), pure
               , get, modify, put, lift, forM_, forM, when, Monoid(..)
               , (<>), StateT(..), State, ErrorT(..), indentBy, Name
@@ -16,6 +17,7 @@ import Control.Monad
 import Control.Monad.State
 import Control.Monad.Error
 import Data.Monoid
+import qualified Data.Text as T
 import Control.Applicative hiding (many, (<|>))
 import Data.List (intercalate)
 import Control.Monad.Identity
@@ -27,20 +29,21 @@ newtype ErrorList = TE [String]
 instance Error ErrorList where
   strMsg = TE . pure
 instance Show ErrorList where
-  show (TE msgs) = msgs ! concatMap ((++ "\n") . indentBy 4 . trim) ! line
+  show (TE msgs) = show msgs
+  --show (TE msgs) = msgs ! concatMap ((<> "\n") . indentBy 4 . trim) ! line
 
-type Name = String
+type Name = T.Text
 
 class Show a => Render a where
-  render :: a -> String
-  renderIO :: a -> IO String
+  render :: a -> T.Text
+  renderIO :: a -> IO T.Text
   renderIO = return . render
 
 instance Render a => Render [a] where
-  render as = "[" ++ intercalate ", " (map render as) ++ "]"
+  render as = "[" <> T.intercalate ", " (map render as) <> "]"
 
 instance Render a => Render (M.Map Name a) where
-  render mp = line $ "{" ++ intercalate ", " pairs ++ "}" where
+  render mp = line $ "{" <> T.intercalate ", " pairs <> "}" where
     pairs = mp ! M.toList ! map (\(n, t) -> n ++ ": " ++ render t)
 
 instance Render a => Render (S.Set a) where
@@ -65,16 +68,21 @@ a <$$ f = pure a <*> f
 (>>==) :: forall (m :: * -> *) b a. Monad m => m b -> (b -> m a) -> m b
 action1 >>== action2 = action1 >>= \r -> action2 r >> return r
 
-trim :: String -> String
+trim :: T.Text -> T.Text
 trim = f . f
-   where f = reverse . dropWhile isSpace
+   where f = T.reverse . T.dropWhile isSpace
 
-indentBy :: Int -> String -> String
+indentBy :: Int -> T.Text -> T.Text
 indentBy amount str =
-  str ! lines ! map (replicate amount ' ' ++) ! intercalate "\n"
+  str ! T.lines ! T.map (T.replicate amount " " <>) ! T.intercalate "\n"
 
-line :: String -> String
-line s = if '\n' `elem` s then "\n" ++ s else s
+contains :: T.Text -> Char -> Bool
+text `contains` char = case T.find (==char) text of
+  Nothing -> False
+  Just _ -> True
+
+line :: T.Text -> T.Text
+line s = if s `contains` '\n' then "\n" <> s else s
 
 --Returns if x is an int to n decimal places
 isIntTo :: (Integral a, RealFrac b) => b -> Int -> Bool

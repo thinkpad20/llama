@@ -5,46 +5,46 @@ module AST where
 
 import Common
 
-data Expr = Var Name
-          | Number Double
-          | String String
-          | Constructor Name
-          | Block Block
-          | Dot Expr Expr
-          | Apply Expr Expr
-          | Unary String Expr
-          | Lambda Expr Expr
-          | Case Expr [(Expr, Expr)]
-          | Tuple [Expr]
-          | Array ArrayLiteral
-          | Ref Expr Expr
-          | Typed Expr Type
-          | If Expr Expr Expr
-          | If' Expr Expr
-          | While Expr Expr
-          | For Expr Expr Expr
-          | Define Name Expr
-          | Extend Name Expr
-          | Assign Expr Expr
-          | Return Expr
-          | Throw Expr
-          | Break Expr
+data Expr = Var !Name
+          | Number !Double
+          | String !String
+          | Constructor !Name
+          | Block !Block
+          | Dot !Expr !Expr
+          | Apply !Expr !Expr
+          | Unary !String !Expr
+          | Lambda !Expr !Expr
+          | Case !Expr ![(Expr, Expr)]
+          | Tuple ![Expr]
+          | Array !ArrayLiteral
+          | Ref !Expr !Expr
+          | Typed !Expr !Type
+          | If !Expr !Expr !Expr
+          | If' !Expr !Expr
+          | While !Expr !Expr
+          | For !Expr !Expr !Expr
+          | Define !Name !Expr
+          | Extend !Name !Expr
+          | Assign !Expr !Expr
+          | Return !Expr
+          | Throw !Expr
+          | Break !Expr
           | Continue
-          | Mut Expr
+          | Mut !Expr
           deriving (Show, Eq)
 
 -- | A variable can be rigid (fixed in scope), or polymorphic (free to take on
 -- multiple forms in the same scope).
 data TVarType = Rigid | Polymorphic deriving (Show, Eq, Ord)
 
-data Type = TVar TVarType Name
-          | TConst Name [Type]
-          | TFunction Type Type
-          | TMut Type
+data Type = TVar !TVarType !Name
+          | TConst !Name ![Type]
+          | TFunction !Type !Type
+          | TMut !Type
           deriving (Show, Eq, Ord)
 
-data ArrayLiteral = ArrayLiteral [Expr]
-                  | ArrayRange Expr Expr deriving (Show, Eq)
+data ArrayLiteral = ArrayLiteral ![Expr]
+                  | ArrayRange !Expr !Expr deriving (Show, Eq)
 
 type Block = [Expr]
 
@@ -116,9 +116,9 @@ instance Render Type where
     TVar Rigid name -> name
     TVar Polymorphic name -> "(some " ++ name ++ ")"
     TConst "" ts -> "(" ++ intercalate ", " (map render ts) ++ ")"
-    TConst "[]" [t] -> "[" ++ render t ++ "]"
-    TConst "[!]" [t] -> "[!" ++ render t ++ "]"
-    TConst name [t] -> name ++ " " ++ render' t
+    TConst "[]" [typ] -> "[" ++ render typ ++ "]"
+    TConst "[!]" [typ] -> "[!" ++ render typ ++ "]"
+    TConst name [typ] -> name ++ " " ++ render' typ
     TConst name [] -> name
     TConst name ts -> name ++ " " ++ "(" ++ intercalate ", " (map render ts) ++ ")"
     TFunction t1 t2 -> render'' t1 ++ " -> " ++ render t2

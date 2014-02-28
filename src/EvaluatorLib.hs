@@ -13,19 +13,19 @@ import Common
 import Parser
 import TypeChecker
 
-data Value = VNumber Double
-           | VString String
-           | VFunction Expr ValueTable
-           | VBuiltin Builtin
-           | VObject Name [Value]
-           | VArray [Value]
-           | VLocal LocalRef
-           | VMutable (IORef Value)
-           | VReturn Value
-           | VThrow Value
+data Value = VNumber !Double
+           | VString !String
+           | VFunction !Expr !ValueTable
+           | VBuiltin !Builtin
+           | VObject !Name ![Value]
+           | VArray ![Value]
+           | VLocal !LocalRef
+           | VMutable !(IORef Value)
+           | VReturn !Value
+           | VThrow !Value
            deriving (Show, Eq)
 
-data Builtin = Builtin Name (Value -> Eval Value)
+data Builtin = Builtin !Name !(Value -> Eval Value)
 
 instance Show (IORef Value) where
   show _ = "(mutable value)"
