@@ -1,6 +1,6 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
-module Parser ( grab, Expr(..), Block(..), single, ArrayLiteral(..)) where
+module Parser ( grab, Expr(..), Block(..), ArrayLiteral(..)) where
 
 import Text.Parsec hiding (Parser, parse, State)
 import Control.Applicative hiding (many, (<|>))
@@ -66,16 +66,14 @@ pDouble = lexeme $ do
     return $ read (ds ++ "." ++ ds')
 
 pType :: Parser Type
-pType = choice [pTApply, pTTuple, pTVar]
-pTVar = TVar Rigid <$> fmap T.pack (many1 lower)
-pTConst = (\n -> TConst n []) <$> pIdent upper
+pType = pTApply
+pTTerm = choice [pTVar, pTConst, pTTuple]
+pTVar = TRigidVar <$> fmap T.pack (many1 lower)
+pTConst = TConst <$> pIdent upper
 pTParens = schar '(' *> sepBy pType (schar ',') <* schar ')'
 pTTuple = tTuple <$> pTParens
-pTApply = pIdent upper >>= getArgs where
-  getArgs name =
-    TConst name [] `option` do
-      args <- choice [ single <$> (pTVar <|> pTConst), pTParens ]
-      return $ TConst name args
+pTApply = chainl1 pTTerm (pure TApply)
+
 
 pTypedVar :: Parser Expr
 pTypedVar = try $ Typed <$$ pVar <* exactSym ":" <*> pType
@@ -262,8 +260,6 @@ pExpression = do
 
 pExpr :: Parser Expr
 pExpr = lexeme $ choice [ pMut, pLambda, pBinary ]
-
-single = pure
 
 testE = parse pExpression
 testS = parse pExpressions

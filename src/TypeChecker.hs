@@ -95,7 +95,7 @@ getFirstCompatible argT funcName tList = go tList where
     (TFunction fromT toT):rest -> do
       log' ["Trying to unify `", render argT, "' with `", render fromT, "'"]
       (unify argT fromT >> refine toT) `catchError` \_ -> go rest
-    funcT@(TVar Polymorphic _):_ -> do
+    funcT@(TPolyVar _):_ -> do
       returnT <- unusedTypeVar
       unify funcT (TFunction argT returnT)
       refine returnT
@@ -174,12 +174,13 @@ instance Typable Expr where
         contT <- typeOf container
         -- we probably want to do this via traits instead of this, but eh...
         case (expr, contT) of
-          (Var name, TConst name' [typ']) -> do
-            record name typ'
+          (Var name, TApply contT itemT) -> do
+            record name itemT
             result <- typeOf block
             popNameSpaceWith name result
-          (Typed (Var name) typ, TConst name' [typ']) | typ == typ' -> do
-            record name typ'
+          (Typed (Var name) typ, TApply contT itemT) -> do
+            unify typ itemT `catchError` itemError name
+            refine itemT >>= record name
             result <- typeOf block
             popNameSpaceWith name result
           (_, typ) -> throwErrorC ["Non-container type `", render typ
@@ -191,6 +192,9 @@ instance Typable Expr where
       addError' ["When attempting to unify the perceived type of '", name, "' "
                 , "(as determined from its declared arguments) with how it is "
                 , "used recursively in its definition."]
+    itemError name =
+      addError' ["When unifying declared type of iterating variable '", name
+                , "' with what its container contains"]
 
 instance Typable (Expr, Block) where
   typeOf (arg, block) = do
@@ -262,7 +266,7 @@ unusedTypeVar = do
   -- increment the freshName
   modify $ \s -> s { freshName = T.pack $ next var }
   -- wrap it in a type variable and return it
-  return $ TVar Polymorphic var
+  return $ TPolyVar var
   where
     next n = let name = T.unpack n
                  (c:cs) = reverse name in
@@ -307,7 +311,8 @@ lookupFuncs funcName = do
     check :: TypeTable -> Name -> Typing [Type]
     check tbl name = case M.lookup name tbl of
       Just (Type t@(TFunction from to)) -> return [t]
-      Just (Type t@(TVar _ name)) -> return [t]
+      Just (Type t@(TRigidVar name)) -> return [t]
+      Just (Type t@(TPolyVar name)) -> return [t]
       Just (Type t) -> throwErrorC ["Identifier `", name, "' maps to non-"
                                    , "function type `", render t, "'"]
       Just (TypeSet ts) -> return $ S.elems ts
@@ -328,10 +333,11 @@ unify type1 type2 | type1 == type2 = return ()
   case (type1, type2) of
     (TMut mtyp, typ) -> unify mtyp typ
     (typ, TMut mtyp) -> unify mtyp typ
-    (TVar Polymorphic name, typ) -> addTypeAlias name typ
-    (typ, TVar Polymorphic name) -> addTypeAlias name typ
-    (TConst name ts, TConst name' ts')
-      | name == name' -> mapM_ (uncurry unify) $ zip ts ts'
+    (TPolyVar name, typ) -> addTypeAlias name typ
+    (typ, TPolyVar name) -> addTypeAlias name typ
+    (TConst name, TConst name') | name == name' -> return ()
+    (TTuple ts, TTuple ts') -> mapM_ (uncurry unify) $ zip ts ts'
+    (TApply a b, TApply a' b') -> unify a a' >> unify b b'
     (TFunction a b, TFunction a' b') -> do
       unify a a' `catchError` argError
       unify b b' `catchError` returnError
@@ -351,8 +357,9 @@ instantiate :: Type -> Typing Type
 instantiate typ = fst <$> runStateT (inst typ) mempty where
   inst :: Type -> StateT (M.Map Name Type) Typing Type
   inst typ = case typ of
-    TVar Rigid name -> return typ
-    TVar Polymorphic name -> do
+    TRigidVar name -> return typ
+    TConst name -> return typ
+    TPolyVar name -> do
       M.lookup name <$> get >>= \case
         -- if we haven't yet seen this variable, create a new one
         Nothing -> do typ' <- lift unusedTypeVar
@@ -360,7 +367,7 @@ instantiate typ = fst <$> runStateT (inst typ) mempty where
                       return typ'
         -- otherwise, return what we already created
         Just typ' -> return typ'
-    TConst name types -> TConst name <$> mapM inst types
+    TApply a b -> TApply <$$ inst a <*> inst b
     TFunction a b -> TFunction <$$ inst a <*> inst b
     TMut typ -> TMut <$> inst typ
 
@@ -368,9 +375,10 @@ instantiate typ = fst <$> runStateT (inst typ) mempty where
 -- so that they can be polymorphic in future uses.
 generalize :: Type -> Typing Type
 generalize typ = case typ of
-  TVar Rigid name -> return $ TVar Polymorphic name
-  TVar Polymorphic name -> return typ
-  TConst name types -> TConst name <$> mapM generalize types
+  TRigidVar name -> return $ TPolyVar name
+  TPolyVar name -> return typ
+  TConst name -> return typ
+  TApply a b -> TApply <$$ generalize a <*> generalize b
   TFunction a b -> TFunction <$$ generalize a <*> generalize b
 
 -- | follows the type aliases and returns the fully qualified type (as
@@ -378,16 +386,17 @@ generalize typ = case typ of
 refine typ = look mempty typ where
   look :: S.Set Name -> Type -> Typing Type
   look seenNames typ = case typ of
-    TConst name types -> TConst name <$> mapM (look seenNames) types
-    TVar Rigid _ -> return typ
+    TConst _ -> return typ
+    TRigidVar _ -> return typ
     TMut typ' -> look seenNames typ'
-    TVar Polymorphic name
+    TPolyVar name
       | name `S.member` seenNames -> throwError1 "Cycle in type aliases"
       | otherwise -> do
       M.lookup name <$> getAliases >>= \case
         Nothing -> return typ
         Just typ' -> look (S.insert name seenNames) typ'
     TFunction a b -> TFunction <$$ look seenNames a <*> look seenNames b
+    TApply a b -> TApply <$$ look seenNames a <*> look seenNames b
 
 defaultTypingState = TypingState { aliases = mempty
                                  , nameSpace = []
@@ -403,8 +412,8 @@ builtIns = M.fromList [ ("+", nnnOrSss), ("-", nnn), ("*", nnn), ("/", nnn)
                       , ("<|", Type $ tup ab a b), ("|>", Type $ tup a ab b)
                       , ("~>", Type $ tup ab bc ac), ("<~", Type $ tup bc ab ac)
                       , ("print", Type $ a ==> unitT)
-                      , ("Just", Type $ a ==> TConst "Maybe" [a])
-                      , ("Nothing", Type $ TConst "Maybe" [a])
+                      , ("Just", Type $ a ==> maybeT a)
+                      , ("Nothing", Type $ maybeT a)
                       , ("@call", nnnOrSss), ("True", Type $ tConst "Bool")
                       , ("False", Type $ tConst "Bool") ]
   where tup a b c = tTuple [a, b] ==> c
@@ -416,7 +425,7 @@ builtIns = M.fromList [ ("+", nnnOrSss), ("-", nnn), ("*", nnn), ("/", nnn)
         ssb = Type $ tup strT strT boolT
         nnbOrSsb = TypeSet $ S.fromList [ tup strT strT boolT
                                         , tup numT numT boolT ]
-        [a, b, c] = TVar Polymorphic <$> ["a", "b", "c"]
+        [a, b, c] = TPolyVar <$> ["a", "b", "c"]
         (ab, bc, ac) = (a ==> b, b ==> c, a ==> c)
 
 -- NOTE: using unsafePerformIO for testing purposes only. This will

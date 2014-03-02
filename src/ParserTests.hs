@@ -145,11 +145,11 @@ typingTests = TestGroup "Typed expressions"
          [Typed foo (tConst "Foo")]
   , Test "typing an identifier with a variable type" "foo: a"
          [Typed foo (TVar Rigid "a")]
-  , Test "typing with 2nd order type" "bar: Option Foo"
-         [Typed bar (TConst "Option" [fooT])]
+  , Test "typing with 2nd order type" "bar: Maybe Foo"
+         [Typed bar (maybeT fooT)]
   , Test "typing with 2nd order type using a variable"
-         "bar: Bloop a"
-         [Typed bar (TConst "Bloop" [TVar Rigid "a"])]
+         "bar: Maybe a"
+         [Typed bar (maybeT $ TVar Rigid "a")]
   , Test "typing with type tuple" "foo: (Foo, Bar)"
          [Typed foo (tTuple [fooT, barT])]
   , Test "a typed tuple" "(foo: Foo, bar: Bar)"
@@ -259,9 +259,9 @@ ifTests = TestGroup "If statements"
   , Test "without else then with" "if 1 { 2 }; if 2 then 3 else 1"
     [If' one two, If two three one]
   , Test "used in lambda" "n: Num => if n then 2 else 3"
-    [Lambda (Typed (Var "n") (TConst "Num" [])) $ If (Var "n") two three]
+    [Lambda (Typed (Var "n") numT) $ If (Var "n") two three]
   , Test "used in define" "foo (n: Num) = if n then 2 else 3"
-    [Define "foo" $ Lambda (Typed (Var "n") (TConst "Num" [])) $ If (Var "n") two three]
+    [Define "foo" $ Lambda (Typed (Var "n") numT) $ If (Var "n") two three]
   ]
 
 whileTests = TestGroup "While statements"

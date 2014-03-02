@@ -37,10 +37,11 @@ data Expr = Var !Name
 
 -- | A variable can be rigid (fixed in scope), or polymorphic (free to take on
 -- multiple forms in the same scope).
-data TVarType = Rigid | Polymorphic deriving (Show, Eq, Ord)
-
-data Type = TVar !TVarType !Name
-          | TConst !Name ![Type]
+data Type = TRigidVar !Name
+          | TPolyVar !Name
+          | TConst !Name
+          | TTuple ![Type]
+          | TApply !Type !Type
           | TFunction !Type !Type
           | TMut !Type
           deriving (Show, Eq, Ord)
@@ -114,18 +115,17 @@ instance Render Block where
 
 instance Render Type where
   render t = case t of
-    TVar Rigid name -> name
-    TVar Polymorphic name -> "(some " <> name <> ")"
-    TConst "" ts -> "(" <> T.intercalate ", " (map render ts) <> ")"
-    TConst "[]" [typ] -> "[" <> render typ <> "]"
-    TConst "[!]" [typ] -> "[!" <> render typ <> "]"
-    TConst name [typ] -> name <> " " <> render' typ
-    TConst name [] -> name
-    TConst name ts -> name <> " " <> "(" <> T.intercalate ", " (map render ts) <> ")"
+    TRigidVar name -> name
+    TPolyVar name -> "(some " <> name <> ")"
+    TConst name -> name
+    TTuple ts -> "(" <> T.intercalate ", " (map render ts) <> ")"
+    TApply (TConst "[]") typ -> "[" <> render typ <> "]"
+    TApply (TConst "[!]") typ -> "[!" <> render typ <> "]"
+    TApply a b -> render a <> " " <> render' b
     TFunction t1 t2 -> render'' t1 <> " -> " <> render t2
     TMut typ -> "mut " <> render typ
     where render' typ = case typ of
-            TConst _ _ -> "(" <> render typ <> ")"
+            TApply _ _ -> "(" <> render typ <> ")"
             _ -> render typ
           render'' typ = case typ of
             TFunction _ _ -> "(" <> render typ <> ")"
@@ -147,13 +147,13 @@ strT = tConst "Str"
 unitT = tTuple []
 
 arrayOf, listOf, maybeT :: Type -> Type
-arrayOf a = TConst "[]" [a]
-listOf a = TConst "[!]" [a]
-maybeT a = TConst "Maybe" [a]
+arrayOf = TApply (TConst "[]")
+listOf = TApply (TConst "[!]")
+maybeT = TApply (TConst "Maybe")
 tTuple :: [Type] -> Type
-tTuple = TConst ""
+tTuple = TTuple
 tConst :: Name -> Type
-tConst name = TConst name []
+tConst = TConst
 
 (==>) :: Type -> Type -> Type
 (==>) = TFunction
