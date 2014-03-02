@@ -1,11 +1,16 @@
 {-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE OverloadedStrings #-}
 module Parser ( grab, Expr(..), Block(..), single, ArrayLiteral(..)) where
+
+import Text.Parsec hiding (Parser, parse, State)
+import Control.Applicative hiding (many, (<|>))
+import qualified Data.Text as T
 
 import Common
 import AST
-import Text.Parsec hiding (Parser, parse, State)
 import Indent
-import Control.Applicative hiding (many, (<|>))
+
+instance Render ParseError
 
 skip :: Parser ()
 skip = many (oneOf " \t") *> option () lineComment
@@ -13,17 +18,18 @@ skip = many (oneOf " \t") *> option () lineComment
                          many (noneOf "\n")
                          (char '\n' >> return ()) <|> eof
 keywords = ["if", "do", "else", "case", "of", "infix", "typedef"
-           , "object", "while", "for", "in", "then", "after"
-           , "return"]
+           , "object", "while", "for", "in", "then", "after", "return"]
 keySyms =  ["->", "|", "=", ";", "..", "=>", "?", ":", "#"]
 
-keyword k = lexeme . try $ string k <* notFollowedBy (alphaNum <|> char '_')
+keyword k = fmap T.pack go where
+  go = lexeme . try $ string k <* notFollowedBy (alphaNum <|> char '_')
 
-exactSym k = lexeme . try $ string k <* notFollowedBy (oneOf symChars)
+exactSym k = fmap T.pack go where
+  go = lexeme . try $ string k <* notFollowedBy (oneOf symChars)
 
 lexeme p = p <* skip
-sstring = lexeme . string
-schar = lexeme . char
+sstring s = fmap T.pack (lexeme $ string s)
+schar c = lexeme $ char c
 schar' c = lexeme (char c) >> return ()
 
 check p = lexeme . try $ do
@@ -32,11 +38,11 @@ check p = lexeme . try $ do
     then unexpected $ "reserved word " ++ show s
     else return s
 
-pSymbol :: Parser String
-pSymbol = check $ many1 $ oneOf symChars
+pSymbol :: Parser T.Text
+pSymbol = fmap T.pack $ check $ many1 $ oneOf symChars
 
-pIdent :: Parser Char -> Parser String
-pIdent firstChar = check $ do
+pIdent :: Parser Char -> Parser T.Text
+pIdent firstChar = fmap T.pack $ check $ do
   first <- firstChar
   rest <- many $ alphaNum <|> char '_'
   bangs <- many $ char '!' <|> char '\''
@@ -61,7 +67,7 @@ pDouble = lexeme $ do
 
 pType :: Parser Type
 pType = choice [pTApply, pTTuple, pTVar]
-pTVar = TVar Rigid <$> many1 lower
+pTVar = TVar Rigid <$> fmap T.pack (many1 lower)
 pTConst = (\n -> TConst n []) <$> pIdent upper
 pTParens = schar '(' *> sepBy pType (schar ',') <* schar ')'
 pTTuple = tTuple <$> pTParens
@@ -94,10 +100,10 @@ pParens = schar '(' *> exprs <* schar ')'
                   es  -> return $ Tuple es
         expr = choice [pExpr, Var <$> pSymbol]
 
-pString :: Parser String
+pString, pString' :: Parser T.Text
 pString = char '"' >> pString'
 pString' = do
-  str <- anyChar `manyTill` (lookAhead $ oneOf "\\\"")
+  str <- fmap T.pack (anyChar `manyTill` (lookAhead $ oneOf "\\\""))
   oneOf "\\\"" >>= \case
     '\\' -> anyChar >>= \case
       'n'  -> escape '\n'
@@ -108,8 +114,8 @@ pString' = do
       '"'  -> escape '"'
       c | c `elem` [' ', '\n', '\t'] -> consume
       c -> unexpected $ "Unrecognized escape character `" ++ [c] ++ "'"
-      where escape c = pString' >>= \rest -> return $ str ++ [c] ++ rest
-            consume = spaces >> pString' >>= \s -> return (str ++ s)
+      where escape c = pString' >>= \rest -> return $ str <> T.singleton c <> rest
+            consume = spaces >> pString' >>= \s -> return (str <> s)
     '"' -> return str
     c -> error $ "wtf is " ++ [c]
 

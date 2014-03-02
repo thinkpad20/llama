@@ -1,6 +1,8 @@
+{-# LANGUAGE OverloadedStrings #-}
 module ParserTests (doTests) where
 
 import qualified Data.Map as M
+import qualified Data.Text as T
 import Prelude hiding (mod)
 
 import Common
@@ -27,10 +29,10 @@ opsFuncs = M.fromList [("+", plus), ("*", times), ("-", minus)
                       , ("~>", fComp), ("<~", bComp)]
 (one, two, three) = (Number 1, Number 2, Number 3)
 
-binOpsTests = [test op | op <- ops] where
+binOpsTests = [test (T.unpack op) | op <- ops] where
   test op = Test ("can parse `" ++ op ++ "'")
                  ("1 " ++ op ++ " 2")
-                 (expr $ binary op one two)
+                 (expr $ binary (T.pack op) one two)
 
 expressionTests = TestGroup "Expressions"
   [

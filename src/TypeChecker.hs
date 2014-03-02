@@ -3,6 +3,7 @@
 {-# LANGUAGE TypeSynonymInstances #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE NoMonomorphismRestriction #-}
+{-# LANGUAGE OverloadedStrings #-}
 module TypeChecker ( Typable(..), Typing, TypeTable, TypingState(..)
                    , runTyping, runTypingWith, defaultTypingState) where
 
@@ -14,6 +15,7 @@ import AST
 import Parser (grab)
 import qualified Data.Map as M
 import qualified Data.Set as S
+import qualified Data.Text as T
 
 class Typable a where
   typeOf :: a -> Typing Type
@@ -30,19 +32,19 @@ type Typing = ErrorT ErrorList (StateT TypingState IO)
 
 instance Render TypeRecord where
   render (Type typ) = render typ
-  render (TypeSet ts) = "{" ++ (intercalate ", " $ map render $ S.elems ts) ++ "}"
+  render (TypeSet ts) = "{" <> (T.intercalate ", " $ map render $ S.elems ts) <> "}"
 
 instance Render TypingState where
   render state =
     let tbl = nameSpaceTable state
         tbl' = M.filterWithKey (\k _ -> M.notMember k builtIns) tbl in
-    line $ concat ["Names: ", render tbl']
+    line $ mconcat ["Names: ", render tbl']
 
 instance Render [M.Map Name Type] where
-  render mps = line $ "[" ++ (intercalate ", " $ map render mps) ++ "]"
+  render mps = line $ "[" <> (T.intercalate ", " $ map render mps) <> "]"
 
 instance Render NameSpace where
-  render = intercalate "/" . reverse
+  render = T.intercalate "/" . reverse
 
 -- | Pulled this one out since the behavior is almost the same, but not
 -- identical, between `typeOf` and `litTypeOf`
@@ -68,18 +70,21 @@ typeOfApply typeOf func arg = do
   case func of
     Var name -> do
       tList <- lookupFuncs name
+      log' ["function is a name, '", name, "' lookup returned `", render tList, "'"]
       when (length tList == 0) $ throwErrorC ["`", name, "' is not defined in scope"]
       getFirstCompatible argT name tList
-    _ -> typeOf func >>= \case
-      TFunction fromT returnT -> do
-        unify argT fromT `catchError` uniError argT fromT
-        refine returnT
-      -- here we can check if we can use the type "as a function"
-      funcT -> typeOf (Apply (Var "@call") (Tuple [func, arg]))
-        `catchError` \_ ->
-          throwErrorC ["No way to call the expression `", render func
-                      , "' as a function with argument `", render argT
-                      , "'. Define `@call` if desired."]
+    _ -> do
+      log' ["not a name, but `", T.pack $ show func, "'"]
+      typeOf func >>= \case
+        TFunction fromT returnT -> do
+          unify argT fromT `catchError` uniError argT fromT
+          refine returnT
+        -- here we can check if we can use the type "as a function"
+        funcT -> typeOf (Apply (Var "@call") (Tuple [func, arg]))
+          `catchError` \_ ->
+            throwErrorC ["No way to call the expression `", render func
+                        , "' as a function with argument `", render argT
+                        , "'. Define `@call` if desired."]
   where uniError typ typ' = addError' ["`", render func, "' takes `", render typ'
                                       , "' as its argument, but `", render arg
                                       , "' has the type `", render typ, "'"]
@@ -90,6 +95,10 @@ getFirstCompatible argT funcName tList = go tList where
     (TFunction fromT toT):rest -> do
       log' ["Trying to unify `", render argT, "' with `", render fromT, "'"]
       (unify argT fromT >> refine toT) `catchError` \_ -> go rest
+    funcT@(TVar Polymorphic _):_ -> do
+      returnT <- unusedTypeVar
+      unify funcT (TFunction argT returnT)
+      refine returnT
     typ:rest -> throwErrorC ["Identifier `", funcName, "' has non-function "
                             , "type `", render typ, "'"]
     [] -> throwErrorC ["Function `", funcName, "' can accept types "
@@ -110,7 +119,7 @@ instance Typable Expr where
       Block blk -> pushNameSpace "%b" *> typeOf blk <* popNameSpace
       Var name -> do
         env <- get
-        log' ["instantiating expr var '", name, "' in environment ", render env]
+        --log' ["instantiating expr var '", name, "' in environment ", render env]
         lookupAndInstantiate name >>= check
       Constructor name -> do
         log' ["instantiating expr constructor '", name, "'"]
@@ -137,12 +146,17 @@ instance Typable Expr where
         refine tType
       Define name expr ->
         lookup1 name >>= \case
-          -- If it's not defined, we proceed forward
+          -- If it's not defined in this scope, we proceed forward.
           Nothing -> do
-            pushNameSpace name
-            result <- typeOf expr
-            popNameSpace
-            record name result
+            -- Initialize this name as an unknown type variable, for in case
+            -- this is a recursive definition
+            var <- unusedTypeVar
+            record name var
+            result <- pushNameSpace name *> typeOf expr <* popNameSpace
+            var' <- refine var
+            -- Make sure the types unify
+            unify var' result `catchError` definitionError name
+            refine result >>= record name
           Just typ -> scopeError name
       Assign expr expr' -> do
         exprT <- typeOf expr
@@ -171,8 +185,12 @@ instance Typable Expr where
           (_, typ) -> throwErrorC ["Non-container type `", render typ
                                   , "' used in a for loop"]
       Return expr -> typeOf expr
-      _ -> error $ "we can't handle expression `" ++ render expr ++ "'"
+      _ -> error $ T.unpack $ "we can't handle expression `" <> render expr <> "'"
     err = addError' ["When typing the expression `", render expr, "'"]
+    definitionError name =
+      addError' ["When attempting to unify the perceived type of '", name, "' "
+                , "(as determined from its declared arguments) with how it is "
+                , "used recursively in its definition."]
 
 instance Typable (Expr, Block) where
   typeOf (arg, block) = do
@@ -242,18 +260,15 @@ unusedTypeVar = do
   -- get the current state
   var <- get <!> freshName
   -- increment the freshName
-  modify $ \s -> s { freshName = next var }
+  modify $ \s -> s { freshName = T.pack $ next var }
   -- wrap it in a type variable and return it
   return $ TVar Polymorphic var
   where
-    next name = let (c:cs) = reverse name in
+    next n = let name = T.unpack n
+                 (c:cs) = reverse name in
       if c < '9' then reverse $ succ c : cs
       else if (head name) < 'z' then (succ $ head name) : "0"
-      else map (\_ -> 'a') name ++ "0"
-
-log :: String -> Typing ()
-log s = return () -- lift $ lift $ putStrLn s
-log' = concat ~> log
+      else map (\_ -> 'a') name <> "0"
 
 getNameSpace :: Typing [Name]
 getNameSpace = get <!> nameSpace
@@ -284,14 +299,15 @@ lookupFuncs funcName = do
   where
     go :: TypeTable -> [Type] -> [Name] -> Typing [Type]
     go tbl acc nspace = case nspace of
-      [] -> fmap (++acc) $ check tbl funcName
+      [] -> fmap (<>acc) $ check tbl funcName
       nspace -> do
         types <- check tbl (render $ funcName : nspace)
-        go tbl (types ++ acc) (tail nspace)
+        go tbl (types <> acc) (tail nspace)
 
     check :: TypeTable -> Name -> Typing [Type]
     check tbl name = case M.lookup name tbl of
       Just (Type t@(TFunction from to)) -> return [t]
+      Just (Type t@(TVar _ name)) -> return [t]
       Just (Type t) -> throwErrorC ["Identifier `", name, "' maps to non-"
                                    , "function type `", render t, "'"]
       Just (TypeSet ts) -> return $ S.elems ts
@@ -316,10 +332,16 @@ unify type1 type2 | type1 == type2 = return ()
     (typ, TVar Polymorphic name) -> addTypeAlias name typ
     (TConst name ts, TConst name' ts')
       | name == name' -> mapM_ (uncurry unify) $ zip ts ts'
-    (TFunction a b, TFunction a' b') -> unify a a' >> unify b b'
+    (TFunction a b, TFunction a' b') -> do
+      unify a a' `catchError` argError
+      unify b b' `catchError` returnError
     _ -> do
-      log' ["Incompatible types: `", show type1, "' and `", show type2, "'"]
+      --log' ["Incompatible types: `", show type1, "' and `", show type2, "'"]
       throwErrorC ["Incompatible types: `", render type1, "' and `", render type2, "'"]
+  where argError = addError' ["When attempting to unify the argument types of `"
+                             , render type1, "' and `", render type2, "'"]
+        returnError = addError' ["When attempting to unify the return types of `"
+                                , render type1, "' and `", render type2, "'"]
 
 -- | takes a type and replaces any type variables in the type with unused
 -- variables. Note: in Hindley-Milner, there are two distinct types, Type and
@@ -372,7 +394,7 @@ defaultTypingState = TypingState { aliases = mempty
                                  , nameSpaceTable = builtIns
                                  , freshName = "a0"}
 
-fullName :: Name -> Typing String
+fullName :: Name -> Typing T.Text
 fullName name = get <!> nameSpace <!> (name:) <!> render
 
 builtIns = M.fromList [ ("+", nnnOrSss), ("-", nnn), ("*", nnn), ("/", nnn)
@@ -407,7 +429,13 @@ runTyping = runTypingWith defaultTypingState
 
 typeIt :: String -> IO ()
 typeIt input = case grab input of
-  Left err -> putStrLn $ "Type error:\n" ++ show err
+  Left err -> putStrLn $ "Parse error:\n" <> show err
   Right block -> case runTyping block of
-    (Left err, _) -> error $ show err
-    (Right block, state) -> putStrLn $ render block ++ "\n" ++ render state
+    (Left err, _) -> error $ T.unpack $ render err
+    (Right block, state) -> putStrLn $ T.unpack (render block <> "\n" <> render state)
+
+log :: T.Text -> Typing ()
+log s = lift2 $ putStrLn $ T.unpack s
+log' = mconcat ~> log
+
+lift2 = lift . lift

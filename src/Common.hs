@@ -25,9 +25,12 @@ import Data.Char (isSpace)
 import qualified Data.Map as M
 import qualified Data.Set as S
 
-newtype ErrorList = TE [String]
+newtype ErrorList = TE [T.Text]
 instance Error ErrorList where
-  strMsg = TE . pure
+  strMsg = TE . pure . T.pack
+
+instance Render ErrorList
+
 instance Show ErrorList where
   show (TE msgs) = show msgs
   --show (TE msgs) = msgs ! concatMap ((<> "\n") . indentBy 4 . trim) ! line
@@ -36,6 +39,7 @@ type Name = T.Text
 
 class Show a => Render a where
   render :: a -> T.Text
+  render = show ~> T.pack
   renderIO :: a -> IO T.Text
   renderIO = return . render
 
@@ -44,10 +48,10 @@ instance Render a => Render [a] where
 
 instance Render a => Render (M.Map Name a) where
   render mp = line $ "{" <> T.intercalate ", " pairs <> "}" where
-    pairs = mp ! M.toList ! map (\(n, t) -> n ++ ": " ++ render t)
+    pairs = mp ! M.toList ! map (\(n, t) -> n <> ": " <> render t)
 
 instance Render a => Render (S.Set a) where
-  render set = line $ "{" ++ intercalate ", " elems ++ "}" where
+  render set = line $ "{" <> T.intercalate ", " elems <> "}" where
     elems = set ! S.elems ! map render
 
 (!) :: forall b c. b -> (b -> c) -> c
@@ -74,7 +78,7 @@ trim = f . f
 
 indentBy :: Int -> T.Text -> T.Text
 indentBy amount str =
-  str ! T.lines ! T.map (T.replicate amount " " <>) ! T.intercalate "\n"
+  str ! T.lines ! map (T.replicate amount " " <>) ! T.intercalate "\n"
 
 contains :: T.Text -> Char -> Bool
 text `contains` char = case T.find (==char) text of
@@ -91,7 +95,7 @@ isIntTo x n = round (10 ^ fromIntegral n * (x- fromIntegral (round x))) == 0
 isInt :: forall b. RealFrac b => b -> Bool
 isInt x = isIntTo x 10
 
-throwErrorC = throwError1 . concat
+throwErrorC = throwError1 . mconcat
 throwError1 = throwError . TE . pure
 addError msg (TE msgs) = throwError $ TE $ msg : msgs
-addError' = addError . concat
+addError' = addError . mconcat

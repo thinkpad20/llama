@@ -11,7 +11,7 @@ To something like this JavaScript
 var foo;
 foo = function(vec, pred) {
   var _result = Nothing;
-  for (var _iter = getVectorIterator(vec); _iter.valid(); _iter.forward()) {
+  for (var _iter = VectorIterator(vec); _iter.valid(); _iter.forward()) {
     var a = _iter.get();
     if (unBool(pred(a))) {
       _result = Just("woohoo");
@@ -32,9 +32,9 @@ object VectorIterator a =
   VectorIterator [a]
   index = 0
 
-valid (iter is VectorIterator vec) = iter.index < vec.length
-get (iter is VectorIterator vec) = vec i.index
-forward! (ref iter is VectorIterator _) = iter.index++
+valid (iter = VectorIterator vec) = iter.index < vec.length
+get (iter = VectorIterator vec) = vec i.index
+forward! (ref iter = VectorIterator _) = iter.index++
 
 foo (vec: [a], pred: a -> Bool) = 
   iter = mut VectorIterator vec

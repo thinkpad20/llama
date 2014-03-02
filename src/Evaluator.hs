@@ -2,6 +2,7 @@
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE TypeSynonymInstances #-}
 {-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE OverloadedStrings #-}
 module Evaluator where
 
 import Prelude hiding (lookup)
@@ -10,6 +11,7 @@ import Data.IORef
 import System.Console.Haskeline
 import System.IO.Unsafe
 import qualified Data.Map as M
+import qualified Data.Text as T
 
 import Common
 import Parser
@@ -64,7 +66,7 @@ derefArg argRef = do
         arg' <- go arg ref
         case arg' of
           VObject _ as | length as > n -> return (as !! n)
-          _ -> throwErrorC ["Invalid index `", show n, "' into "
+          _ -> throwErrorC ["Invalid index `", T.pack $ show n, "' into "
                            , "argument `", render arg, "'"]
 
 lookupAndError name = lookup name >>= \case
@@ -166,11 +168,11 @@ typeAndEval :: EvalState ->
                (Either ErrorList Value, EvalState, TypingState)
 typeAndEval eState tState input = case grab input of
   Left err ->
-    (Left $ TE ["Syntax error:\n" ++ show err], eState, tState)
+    (Left $ TE ["Syntax error:\n" <> render err], eState, tState)
   Right block ->
     case runTypingWith tState block of
       (Left errs, _) ->
-        (Left $ TE ["Type check error:\n" ++ show errs], eState, tState)
+        (Left $ TE ["Type check error:\n" <> render errs], eState, tState)
       (Right _, tState') ->
         let (result, eState') = runEvalWith eState tState' block in
         (result, eState', tState')
@@ -182,7 +184,7 @@ evalIt eState tState input = case typeAndEval eState tState input of
     print err
     return (eState, tState)
   (Right val, eState, tState) -> do
-    renderIO val >>= putStrLn
+    fmap T.unpack (renderIO val) >>= putStrLn
     return (eState, tState)
 
 repl = do
@@ -193,11 +195,14 @@ repl = do
     loop eState tState = forever $ do
       getInputLine "llama> " >>= \case
         Nothing -> return ()
+        Just "" -> return ()
         Just "clear" -> do
           lift $ putStrLn "Cleared variables"
           loop defaultState defaultTypingState
+        --Just "exit" -> do
+        --  lift $ putStrLn "Goodbye"
+        --  --lift $ exit
         Just input -> do
           (eState', tState') <- lift $ evalIt eState tState input
           loop eState' tState'
 
-main = repl

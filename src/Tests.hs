@@ -1,11 +1,12 @@
 {-# LANGUAGE LambdaCase #-}
 module Tests (Test(..), runTests) where
 
-import Common hiding (line, addError)
+import Common hiding (line, addError, Name)
 import System.IO
 import System.Console.ANSI
 
 import qualified Data.Map as M
+type Name = String
 data TestResult = TestSuccess [Name]
                 | TestFailure [Name] String String String
                 | TestError [Name] String String

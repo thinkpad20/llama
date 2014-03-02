@@ -20,7 +20,7 @@ assert myList == [l 1, 2, 3]
 assert myList.show == "[l 1, 2, 3]"
 ```
 
-
+```
 > mutVec = mut [1, 2, 3] # clojure-style
 > mutArr = mut [a 1, 2, 3] # c-style
 > mutList = mut [l 1, 2, 3] # linked list
@@ -39,3 +39,4 @@ assert myList.show == "[l 1, 2, 3]"
 [5, 6, 3, 4]
 > v
 [5, 2, 3, 4]
+```

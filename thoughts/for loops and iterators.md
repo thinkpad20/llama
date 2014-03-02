@@ -7,11 +7,9 @@ for x in y do z x
 Is equivalent to the following code:
 
 ```
-iter = y.iter
-while iter.valid
+for iter = mut y.iter; iter.valid; iter.forward!
   x = iter.get
   z x
-  iter.forward!
 ```
 
 This is similar to Java's `for (_ : _)` pattern. Similarly, it suggests an iterator trait:
@@ -61,3 +59,20 @@ VectorIterator [a] as Iterator [a] =
 Hmm, this might be doable, possibly with great effort. It's quite possible, of course, that we'll be able to handle all of this if we insist on enough type annotations (and we can always do this to start with, and beef it up as it goes forward). Regardless, though, this makes it clear that we need higher-order types.
 
 One thing that gets a little fuzzy though, is that our definition of the Iterable trait suggests a type with kind `* -> *`, but the `Iterator` trait suggests a type with kind `* -> * -> *`. And yet, we were "able" (it appears) to satisfy both traits with the same type, namely `[l a]`. This is important to lock down.
+
+Another possibility (which could amount to the same thing) is to use a kind of `fmap`-style implementation.
+
+```
+@for : ((f of Functor) a, a -> b) -> Maybe b
+```
+
+It's not literally the above, but it acts the same way:
+
+```
+foo = 53
+for n in [1..100]
+  print "n = #{n}"
+  if n == foo then break "#{n}"
+```
+
+Then the type of that `for` loop is a `Maybe Str`, and the type of `a` is `Num` which we know because `[1..100]` is a vector of numbers. Of course, it's not really so clear because one thing we're glossing over here is the `continue` and `break` statements (not to mention a possible `return` statement). So that might not quite cut it.
