@@ -60,6 +60,23 @@ expressionTests = TestGroup "Expressions"
             "foo && bar && baz"
             (expr $ _and foo (_and bar baz))
   ] ++ binOpsTests)
+  , TestGroup "unary operators" [
+      Test "prefix operator"
+           "-1"
+           (expr $ Apply (Var "-_") one)
+    , Test "prefix operator 2"
+           "++foo"
+           (expr $ Apply (Var "++_") foo)
+    , Test "postfix operator"
+           "1!"
+           (expr $ Apply (Var "_!") one)
+    , Test "prefix operator in argument"
+           "foo (++bar)"
+           (expr $ Apply foo (Apply (Var "++_") bar))
+    , Test "postfix operator in argument"
+           "foo (bar++)"
+           (expr $ Apply foo (Apply (Var "_++") bar))
+  ]
   , Test "apply" "foo bar" (expr $ Apply foo bar)
   , Test "apply associates to the left"
           "foo bar baz"
@@ -212,6 +229,12 @@ functionTests = TestGroup "Functions"
            [Define "<*>" $ Lambda (Tuple [ Typed bar (TRigidVar "a")
                                          , Typed baz (TRigidVar "b")])
                          $ Apply bar baz]
+    , Test "should make a prefix function definition"
+           "++(foo: Num) = foo + 1"
+           [Define "++_" $ Lambda (Typed foo numT) (plus foo one)]
+    , Test "should make a postfix function definition"
+           "(foo: Num)! = fact foo"
+           [Define "_!" $ Lambda (Typed foo numT) (Apply (Var "fact") foo)]
     ]
   ]
   where tup1 = Tuple [Typed foo fooT, Typed bar barT]

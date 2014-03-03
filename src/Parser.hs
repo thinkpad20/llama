@@ -19,7 +19,7 @@ skip = many (oneOf " \t") *> option () lineComment
                          (char '\n' >> return ()) <|> eof
 keywords = ["if", "do", "else", "case", "of", "infix", "typedef"
            , "object", "while", "for", "in", "then", "after", "return"]
-keySyms =  ["->", "|", "=", ";", "..", "=>", "?", ":", "#"]
+keySyms =  ["->", "|", "=", ";", "..", "=>", "?", ":", "#", ":=", "&="]
 
 keyword k = fmap T.pack go where
   go = lexeme . try $ string k <* notFollowedBy (alphaNum <|> char '_')
@@ -80,7 +80,6 @@ pTApply = chainl1 pTTerm (pure TApply)
 pTypeDef :: Parser Expr
 pTypeDef =
   TypeDef <$ keyword "typedef" <*> pIdent upper <* exactSym "=" <*> pType
-
 
 pTypedVar :: Parser Expr
 pTypedVar = try $ Typed <$$ pVar <* exactSym ":" <*> pType
@@ -153,8 +152,23 @@ pBinary = pBackwardApply where
   pComposeRight = pBinOp chainl1 pComposeLeft (exactSym "~>")
   pComposeLeft = pBinOp chainr1 pApply (exactSym "<~")
 
+pPrefixSymbol :: Parser Expr
+pPrefixSymbol = do
+  sym <- optionMaybe pSymbol
+  expr <- pPostfixSymbol
+  case sym of
+    Nothing -> return expr
+    Just op -> return $ Apply (Var (op <> "_")) expr
+
+pPostfixSymbol :: Parser Expr
+pPostfixSymbol = do
+  expr <- pBinary
+  option expr $ do
+    sym <- pSymbol
+    return $ Apply (Var ("_" <> sym)) expr
+
 pUnary :: Parser Expr
-pUnary = exactSym "~" *> (Apply (Var "~") <$> pUnary) <|> pTerm
+pUnary = pPrefixSymbol
 
 pApply :: Parser Expr
 pApply = pRef >>= parseRest where
@@ -172,10 +186,10 @@ pRef = pDotted >>= parseRest where
     <|> return res
 
 pDotted :: Parser Expr
-pDotted = pUnary >>= parseRest where
+pDotted = pTerm >>= parseRest where
   parseRest res = do
     exactSym "."
-    y <- pUnary
+    y <- pTerm
     parseRest (Dot res y)
     <|> return res
 
@@ -201,21 +215,35 @@ pFor = For <$ keyword "for" <*> pExpr <* keyword "in"
 pExprOrBlock :: Parser Expr
 pExprOrBlock = choice [ try pBlock, pIf, pExpr ]
 
-pDefine = choice [pDefBinary "=" Define, pDefFunction "=" Define]
-pExtend = choice [pDefBinary "&=" Extend, pDefFunction "&=" Extend]
+pDefine = choice $ map ($ ("=", Define)) [ pDefPrefix, pDefPostfix
+                                         , pDefBinary, pDefFunction]
+pExtend = choice $ map ($ ("&=", Extend)) [ pDefPrefix, pDefPostfix
+                                          , pDefBinary, pDefFunction]
 
-pDefFunction sym f = try $ do
+pDefFunction (sym, f) = try $ do
   name <- pIdent lower <|> (schar '(' *> pSymbol <* schar ')')
   args <- many pTerm
   body <- exactSym sym *> pBlock
   return $ f name $ foldr Lambda body args
 
-pDefBinary sym f = try $ do
+pDefBinary (sym, f) = try $ do
   arg1 <- pTerm
   op   <- pSymbol
   arg2 <- pTerm
   body <- exactSym sym *> pBlock
   return $ f op $ Lambda (Tuple [arg1, arg2]) body
+
+pDefPrefix (sym, f) = try $ do
+  op <- pSymbol
+  arg <- pTerm
+  body <- exactSym sym *> pBlock
+  return $ f (op <> "_") $ Lambda arg body
+
+pDefPostfix (sym, f) = try $ do
+  arg <- pTerm
+  op <- pSymbol
+  body <- exactSym sym *> pBlock
+  return $ f ("_" <> op) $ Lambda arg body
 
 pMut = Mut <$ keyword "mut" <*> pExpr
 
@@ -266,7 +294,7 @@ pExpression = do
       _ -> return $ Block [rest, expr]
 
 pExpr :: Parser Expr
-pExpr = lexeme $ choice [ pMut, pLambda, pBinary ]
+pExpr = lexeme $ choice [ pMut, pLambda, pUnary ]
 
 testE = parse pExpression
 testS = parse pExpressions

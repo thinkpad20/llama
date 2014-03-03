@@ -1,17 +1,12 @@
 # Llama
 
-Note: really not much to see here yet. I'm just laying out some ideas here. And in truth much
-of what's written here is out-of-date and has been replaced by (hopefully) better ideas. On
-the other hand, some of these features, or their improvements, are already implemented in the 
-existing code, and more to come.
+Note: There's really not much to see here yet. I'm just laying out some ideas here. And in truth much of what's written here is out-of-date and has been replaced by (hopefully) better ideas. On the other hand, some of these features, or their improvements, are already implemented in the existing code, and more to come.
 
-Llama is being implemented, at least initially, in Haskell. If the language gets off the ground,
-I might have it compile; possibly to LLVM (which would make its name very appropriate...).
+Llama is being implemented, at least initially, in Haskell. If the language gets off the ground, I might have it compile; possibly to LLVM (which would make its name very appropriate...). Compiling to JavaScript is also a very real possibility; after all, I already have one language (Kirei) which does this, so I have a ready-made JavaScript code generator to use.
 
 ## Quick overview of features
 
-* Static typing plus inferrence. Functions declare their argument types but not their
-  return types, which are inferred. Similarly, local variables' types are inferred.
+* Static typing plus inferrence. Functions declare their argument types but not their return types, which are inferred. Similarly, local variables' types are inferred.
 
         foo (n: Num, x: Maybe Num) =
           bar = case x of None => 0
@@ -30,11 +25,7 @@ I might have it compile; possibly to LLVM (which would make its name very approp
             (s: Str) + (c: Char) = s.append c
             (c: Char) + (s: Str) = s.prepend c
 
-  3. (2) is not the case if `&=` is used. This distinction prevents definitions from
-     earlier scopes creeping unexpectedly into the current one. However, we might
-     not need this, and only have function definitions replace existing ones which take
-     the same argument type.
-     
+  3. (2) is not the case if `&=` is used. This distinction prevents definitions from earlier scopes creeping unexpectedly into the current one. However, we might not need this, and only have function definitions replace existing ones which take the same argument type.
 
             foo (n: Num) = n + 1
             bar (n: Num, m: Num) =
@@ -54,19 +45,36 @@ I might have it compile; possibly to LLVM (which would make its name very approp
         assert bar ("hello", 4) == (4, "hello").bar
         assert foo (bar ("hello", 4)) == (4, "hello").bar.foo
 
-* String interpolation. Two forms: `#{}` applies the `show` function to whatever is
-  contained inside (making it a type error to include anything which doesn't implement
-  this function) and `#[]` does not apply any function (making it a type error to put in
-  anything but a string).
+* Objects can be treated as functions, even if they are not. For example, a vector or map "operating on" a key/index will lookup the key/index (not safely!). A string "operating on" another string will concatenate them.
+        
+        assert [1..10] 3 == 2
+        bar = {"hello" => "world", "hi" => "there"}
+        assert bar "hello" == "world"
+        assert bar.get "hello" == Just "world"
+        assert bar ("bloop", "hey") == "hey"
+        assert "hello" " world!" == "hello world!"
 
-       foo = 3
-       assert "hello #{foo}" == "hello 3"
-       bar = "world"
-       assert "hello #{bar}" == "hello \"world\""
-       assert "hello #[bar]" == "hello world"
+  - Just as with any function, we can specify different behavior based on argument type, so we can have
+  
+        ```
+        # vector operating on another vector
+        assert [1,2,3] [4,5,6] == [1,2,3,4,5,6]
 
-* Variables are default immutable. Distinction between definition (`=`) and assignment 
-  (`:=`), with the latter only allowed for mutable variables.
+        # vector operating on a number
+        assert ["hey","there"] 1 == "there"
+        ```
+
+  - This might seem a little dangerous, as one can mistakenly "call" an object with another object. But with static typing, the great majority of these errors should be caught early.
+
+* String interpolation. Two forms: `#{}` applies the `show` function to whatever is contained inside (making it a type error to include anything which doesn't implement this function) and `#[]` does not apply any function (making it a type error to put in anything but a string).
+      
+        foo = 3
+        assert "hello #{foo}" == "hello 3"
+        bar = "world"
+        assert "hello #{bar}" == "hello \"world\""
+        assert "hello #[bar]" == "hello world"
+
+* Variables are default immutable. Distinction between definition (`=`) and assignment (`:=`), with the latter only allowed for mutable variables.
 
         foo () = 
           result = 0
@@ -79,6 +87,18 @@ I might have it compile; possibly to LLVM (which would make its name very approp
           for i in range 10
             result := result + i # OK
           result
+
+
+* Unary operators are also functions. Prefix and postfix are distinct.
+            
+            ++ (n: ref Num) = n := n + 1
+            (n: ref Num) ++ = m after { m = n; ++n }
+            # when passing unary operators as arguments we use a `_` to
+            # indicate whether it is postfix or prefix.
+            foo = (mut! [1..10]).map! (++_)
+            assert foo == [2..11]
+
+  - Note in the above example the `mut!` designation; this creates a *deeply mutable* object which allows not only the reference, but the things to which the reference refers, to be mutated.
 
 * Move semantics between mutable and immutable variables are important.
 * Difference between mutable variables, references, and mutable references.
@@ -104,19 +124,18 @@ I might have it compile; possibly to LLVM (which would make its name very approp
         b = bar 4 # prints "called 2 times"
         assert b == 5
 
-* convention to put a `!` on the end of mutating functions:
+* There is a convention to put a `!` on the end of mutating functions:
 
         map! (vec: mut ref [a]) (f: a -> b) = 
           for i in vec.range do vec[: i] := f vec[: i]
   
-* `after` keyword lets us declare what we're returning before setting out loops and definitions:
+* The `after` keyword lets us declare what we're returning before setting out loops and definitions:
 
         concat (s: Str) (s': Str) = result after
           result = mut s
           for c in s' do result += c
 
-* Keyword arguments are supported. Still statically typed. Arguments can be declared with a default,
-  or else they will appear wrapped in an `Option`.
+* Keyword arguments are supported, and are statically typed. Arguments can be declared with a default, or else they will appear wrapped in a `Maybe`.
 
         range (n: Num, @start=0, @step=1) = result after
           assert step != 0 && if step > 0 then n > start else n < start
