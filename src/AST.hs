@@ -33,6 +33,7 @@ data Expr = Var !Name
           | Break !Expr
           | Continue
           | Mut !Expr
+          | TypeDef Name Type
           deriving (Show, Eq)
 
 -- | A variable can be rigid (fixed in scope), or polymorphic (free to take on
@@ -99,6 +100,8 @@ instance Render Expr where
       Break e -> line $ "break " <> render e
       Throw e -> line $ "throw " <> render e
       Return e -> line $ "return " <> render e
+      TypeDef name typ -> line $ "typedef " <> name <> " = " <> render typ
+      _ -> return $ T.pack $ show stmt
     line str = get >>= \i -> return $ T.replicate i " " <> str
     join = return . T.intercalate "\n"
     block blk = up *> fmap (T.intercalate "; ") (mapM render' blk) <* down

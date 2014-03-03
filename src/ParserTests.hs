@@ -144,12 +144,12 @@ typingTests = TestGroup "Typed expressions"
     Test "typing an identifier" "foo: Foo"
          [Typed foo (tConst "Foo")]
   , Test "typing an identifier with a variable type" "foo: a"
-         [Typed foo (TVar Rigid "a")]
+         [Typed foo (TRigidVar "a")]
   , Test "typing with 2nd order type" "bar: Maybe Foo"
          [Typed bar (maybeT fooT)]
   , Test "typing with 2nd order type using a variable"
          "bar: Maybe a"
-         [Typed bar (maybeT $ TVar Rigid "a")]
+         [Typed bar (maybeT $ TRigidVar "a")]
   , Test "typing with type tuple" "foo: (Foo, Bar)"
          [Typed foo (tTuple [fooT, barT])]
   , Test "a typed tuple" "(foo: Foo, bar: Bar)"
@@ -204,13 +204,13 @@ functionTests = TestGroup "Functions"
                          $ plus bar baz]
     , Test "should make a function definition with polymorphic args"
            "foo(bar: a) (baz: b) = bar baz"
-           [Define "foo" $ Lambda (Typed bar (TVar Rigid "a"))
-                         $ Lambda (Typed baz (TVar Rigid "b"))
+           [Define "foo" $ Lambda (Typed bar (TRigidVar "a"))
+                         $ Lambda (Typed baz (TRigidVar "b"))
                          $ Apply bar baz]
     , Test "should make a function definition with a symbol"
            "(bar: a) <*> (baz: b) = bar baz"
-           [Define "<*>" $ Lambda (Tuple [ Typed bar (TVar Rigid "a")
-                                         , Typed baz (TVar Rigid "b")])
+           [Define "<*>" $ Lambda (Tuple [ Typed bar (TRigidVar "a")
+                                         , Typed baz (TRigidVar "b")])
                          $ Apply bar baz]
     ]
   ]

@@ -66,13 +66,20 @@ pDouble = lexeme $ do
     return $ read (ds ++ "." ++ ds')
 
 pType :: Parser Type
-pType = pTApply
+pType = pTFunction
 pTTerm = choice [pTVar, pTConst, pTTuple]
-pTVar = TRigidVar <$> fmap T.pack (many1 lower)
+pTVar = TRigidVar <$> fmap T.pack (many1 lower) <* skip
 pTConst = TConst <$> pIdent upper
 pTParens = schar '(' *> sepBy pType (schar ',') <* schar ')'
-pTTuple = tTuple <$> pTParens
+pTTuple = pTParens >>= \case
+  [t] -> return t
+  ts -> return $ tTuple ts
+pTFunction = chainr1 pTApply (exactSym "->" *> pure TFunction)
 pTApply = chainl1 pTTerm (pure TApply)
+
+pTypeDef :: Parser Expr
+pTypeDef =
+  TypeDef <$ keyword "typedef" <*> pIdent upper <* exactSym "=" <*> pType
 
 
 pTypedVar :: Parser Expr
@@ -264,8 +271,11 @@ pExpr = lexeme $ choice [ pMut, pLambda, pBinary ]
 testE = parse pExpression
 testS = parse pExpressions
 
+pTopLevelExpressions =
+  (pExpression <|> pTypeDef) `sepEndBy1` (getSame <|> schar'  ';')
+
 grab :: String -> Either ParseError [Expr]
-grab = parse (pExpressions <* eof)
+grab = parse (pTopLevelExpressions <* eof)
 
 grab' input = case grab input of
   Right statements -> map show statements ! intercalate "\n"

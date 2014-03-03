@@ -117,6 +117,7 @@ instance Typable Expr where
     go = case expr of
       Number _ -> return numT
       String _ -> return strT
+      TypeDef name typ -> addTypeAlias name typ >> return unitT
       Block blk -> pushNameSpace "%b" *> typeOf blk <* popNameSpace
       Var name -> do
         --env <- get
@@ -375,6 +376,7 @@ instantiate typ = fst <$> runStateT (inst typ) mempty where
         Just typ' -> return typ'
     TApply a b -> TApply <$$ inst a <*> inst b
     TFunction a b -> TFunction <$$ inst a <*> inst b
+    TTuple ts -> TTuple <$> mapM inst ts
     TMut typ -> TMut <$> inst typ
 
 -- | the opposite of instantiate; it "polymorphizes" the rigid type variables
@@ -384,25 +386,29 @@ generalize typ = case typ of
   TRigidVar name -> return $ TPolyVar name
   TPolyVar name -> return typ
   TConst name -> return typ
+  TTuple ts -> TTuple <$> mapM generalize ts
   TApply a b -> TApply <$$ generalize a <*> generalize b
   TFunction a b -> TFunction <$$ generalize a <*> generalize b
 
 -- | follows the type aliases and returns the fully qualified type (as
 -- qualified as possible)
-refine typ = look mempty typ where
-  look :: S.Set Name -> Type -> Typing Type
-  look seenNames typ = case typ of
+refine :: Type -> Typing Type
+refine typ = fst <$> runStateT (look typ) mempty where
+  --look :: S.Set Name -> Type -> Typing Type
+  look typ = case typ of
     TConst _ -> return typ
     TRigidVar _ -> return typ
-    TMut typ' -> look seenNames typ'
-    TPolyVar name
-      | name `S.member` seenNames -> throwError1 "Cycle in type aliases"
-      | otherwise -> do
-      M.lookup name <$> getAliases >>= \case
-        Nothing -> return typ
-        Just typ' -> look (S.insert name seenNames) typ'
-    TFunction a b -> TFunction <$$ look seenNames a <*> look seenNames b
-    TApply a b -> TApply <$$ look seenNames a <*> look seenNames b
+    TMut typ' -> TMut <$> look typ'
+    TPolyVar name -> do
+      seenNames <- get
+      if name `S.member` seenNames then throwError1 "Cycle in type aliases"
+      else do
+        M.lookup name <$> (lift getAliases) >>= \case
+          Nothing -> return typ
+          Just typ' -> modify (S.insert name) >> look typ'
+    TFunction a b -> TFunction <$$ look a <*> look b
+    TApply a b -> TApply <$$ look a <*> look b
+    TTuple ts -> TTuple <$> mapM look ts
 
 defaultTypingState = TypingState { aliases = mempty
                                  , nameSpace = []
