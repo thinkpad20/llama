@@ -3,15 +3,14 @@
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE TypeSynonymInstances #-}
 {-# LANGUAGE RankNTypes #-}
-{-# LANGUAGE KindSignatures #-}
 {-# LANGUAGE OverloadedStrings #-}
 module Common ( (!), (<!>), (<$>), (<$), (<*), (*>), (<*>), pure
               , get, modify, put, lift, forM_, forM, when, Monoid(..)
               , (<>), StateT(..), State, ErrorT(..), indentBy, Name
               , intercalate, Identity(..), runState, evalState, (>>==)
-              , trim, line, throwError, catchError, (~>), (<$$), Render(..), isInt
-              , ErrorList(..), throwError1, throwErrorC, addError, addError'
-              , forever)  where
+              , trim, line, throwError, catchError, (~>), (<$$), Render(..)
+              , isInt, ErrorList(..), throwError1, throwErrorC, addError
+              , addError', forever, isSpace)  where
 
 import Control.Monad
 import Control.Monad.State
@@ -54,11 +53,11 @@ instance Render a => Render (S.Set a) where
   render set = line $ "{" <> T.intercalate ", " elems <> "}" where
     elems = set ! S.elems ! map render
 
-(!) :: forall b c. b -> (b -> c) -> c
+(!) :: b -> (b -> c) -> c
 (!) = flip ($)
 infixl 0 !
 
-(<!>) :: forall a b (f :: * -> *). Functor f => f a -> (a -> b) -> f b
+(<!>) :: Functor f => f a -> (a -> b) -> f b
 (<!>) = flip (<$>)
 infixl 4 <!>
 
@@ -66,10 +65,10 @@ infixl 4 <!>
 (~>) = flip (.)
 infixl 9 ~>
 
-(<$$) :: forall (f :: * -> *) a b. Applicative f => (a -> b) -> f a -> f b
+(<$$) :: Applicative f => (a -> b) -> f a -> f b
 a <$$ f = pure a <*> f
 
-(>>==) :: forall (m :: * -> *) b a. Monad m => m b -> (b -> m a) -> m b
+(>>==) :: Monad m => m b -> (b -> m a) -> m b
 action1 >>== action2 = action1 >>= \r -> action2 r >> return r
 
 trim :: T.Text -> T.Text
@@ -92,7 +91,7 @@ line s = if s `contains` '\n' then "\n" <> s else s
 isIntTo :: (Integral a, RealFrac b) => b -> Int -> Bool
 isIntTo x n = round (10 ^ fromIntegral n * (x- fromIntegral (round x))) == 0
 
-isInt :: forall b. RealFrac b => b -> Bool
+isInt :: RealFrac b => b -> Bool
 isInt x = isIntTo x 10
 
 throwErrorC = throwError1 . mconcat

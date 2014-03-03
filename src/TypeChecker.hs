@@ -85,9 +85,10 @@ typeOfApply typeOf func arg = do
             throwErrorC ["No way to call the expression `", render func
                         , "' as a function with argument `", render argT
                         , "'. Define `@call` if desired."]
-  where uniError typ typ' = addError' ["`", render func, "' takes `", render typ'
-                                      , "' as its argument, but `", render arg
-                                      , "' has the type `", render typ, "'"]
+  where uniError typ typ' = addError' ["`", render func, "' takes `"
+                                      , render typ', "' as its argument, but `"
+                                      , render arg, "' has the type `"
+                                      , render typ, "'"]
 
 getFirstCompatible argT funcName tList = go tList where
   go :: [Type] -> Typing Type
@@ -118,7 +119,7 @@ instance Typable Expr where
       String _ -> return strT
       Block blk -> pushNameSpace "%b" *> typeOf blk <* popNameSpace
       Var name -> do
-        env <- get
+        --env <- get
         --log' ["instantiating expr var '", name, "' in environment ", render env]
         lookupAndInstantiate name >>= check
       Constructor name -> do
@@ -165,9 +166,10 @@ instance Typable Expr where
         exprT `unify` exprT'
         refine exprT
       While cond block -> do
+        pushNameSpace "%while"
         cType <- typeOf cond
         cType `unify` boolT `catchError` condError
-        typeOf block
+        maybeT <$> typeOf block <* popNameSpace
       For expr container block -> do
         pushNameSpace "%for"
         -- need to make sure container contains things...
@@ -311,8 +313,8 @@ lookupFuncs funcName = do
     check :: TypeTable -> Name -> Typing [Type]
     check tbl name = case M.lookup name tbl of
       Just (Type t@(TFunction from to)) -> return [t]
-      Just (Type t@(TRigidVar name)) -> return [t]
-      Just (Type t@(TPolyVar name)) -> return [t]
+      Just (Type t@(TRigidVar name))    -> return [t]
+      Just (Type t@(TPolyVar name))     -> return [t]
       Just (Type t) -> throwErrorC ["Identifier `", name, "' maps to non-"
                                    , "function type `", render t, "'"]
       Just (TypeSet ts) -> return $ S.elems ts
@@ -327,27 +329,31 @@ lookupAndInstantiate name = lookup name >>= \case
 -- | adds to the type aliases map any substitutions needed to make
 -- its two arguments equivalent. Throws an error if such a substitution
 -- is impossible (todo: throw an error if there's a cycle)
-unify type1 type2 | type1 == type2 = return ()
-                  | otherwise = do
-  log' ["Unifying `", render type1, "' with `", render type2, "'"]
-  case (type1, type2) of
-    (TMut mtyp, typ) -> unify mtyp typ
-    (typ, TMut mtyp) -> unify mtyp typ
-    (TPolyVar name, typ) -> addTypeAlias name typ
-    (typ, TPolyVar name) -> addTypeAlias name typ
-    (TConst name, TConst name') | name == name' -> return ()
-    (TTuple ts, TTuple ts') -> mapM_ (uncurry unify) $ zip ts ts'
-    (TApply a b, TApply a' b') -> unify a a' >> unify b b'
-    (TFunction a b, TFunction a' b') -> do
-      unify a a' `catchError` argError
-      unify b b' `catchError` returnError
-    _ -> do
-      --log' ["Incompatible types: `", show type1, "' and `", show type2, "'"]
-      throwErrorC ["Incompatible types: `", render type1, "' and `", render type2, "'"]
-  where argError = addError' ["When attempting to unify the argument types of `"
-                             , render type1, "' and `", render type2, "'"]
-        returnError = addError' ["When attempting to unify the return types of `"
-                                , render type1, "' and `", render type2, "'"]
+unify :: Type -> Type -> Typing Int
+unify type1 type2 = snd <$> runStateT (go type1 type2) 0 where
+  go :: Type -> Type -> StateT Int Typing ()
+  go type1 type2 = do
+    lift $ log' ["Unifying `", render type1, "' with `", render type2, "'"]
+    case (type1, type2) of
+      (a, b) | a == b  -> return ()
+      (TMut mtyp, typ) -> go mtyp typ
+      (typ, TMut mtyp) -> go mtyp typ
+      (TPolyVar name, typ) -> lift (addTypeAlias name typ) <* modify (+1)
+      (typ, TPolyVar name) -> lift (addTypeAlias name typ) <* modify (+1)
+      (TConst name, TConst name') | name == name' -> return ()
+      (TTuple ts, TTuple ts') -> mapM_ (uncurry go) $ zip ts ts'
+      (TApply a b, TApply a' b') -> go a a' >> go b b'
+      (TFunction a b, TFunction a' b') -> do
+        go a a' `catchError'` argError
+        go b b' `catchError'` returnError
+      _ -> do
+        --log' ["Incompatible types: `", show type1, "' and `", show type2, "'"]
+        throwErrorC ["Incompatible types: `", render type1, "' and `", render type2, "'"]
+  argError = addError' ["When attempting to unify the argument types of `"
+                       , render type1, "' and `", render type2, "'"]
+  returnError = addError' ["When attempting to unify the return types of `"
+                          , render type1, "' and `", render type2, "'"]
+  catchError' = catchError
 
 -- | takes a type and replaces any type variables in the type with unused
 -- variables. Note: in Hindley-Milner, there are two distinct types, Type and

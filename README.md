@@ -28,7 +28,7 @@ I might have it compile; possibly to LLVM (which would make its name very approp
   2. The new declaration is made in the same scope
 
             (s: Str) + (c: Char) = s.append c
-            (c: Char) + (s: Str) = s.append c
+            (c: Char) + (s: Str) = s.prepend c
 
   3. (2) is not the case if `&=` is used. This distinction prevents definitions from
      earlier scopes creeping unexpectedly into the current one. However, we might
