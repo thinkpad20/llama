@@ -5,7 +5,7 @@
 {-# LANGUAGE NoMonomorphismRestriction #-}
 {-# LANGUAGE OverloadedStrings #-}
 module TypeChecker ( Typable(..), Typing, TypeTable, TypingState(..)
-                   , runTyping, runTypingWith, defaultTypingState) where
+                   , runTyping, runTypingWith, defaultTypingState, typeIt) where
 
 import Prelude hiding (lookup, log)
 import System.IO.Unsafe
@@ -448,15 +448,24 @@ runTypingWith state a = unsafePerformIO $ runStateT (runErrorT $ typeOf a) state
 runTyping :: Typable a => a -> (Either ErrorList Type, TypingState)
 runTyping = runTypingWith defaultTypingState
 
-typeIt :: String -> IO ()
-typeIt input = case grab input of
+typeItIO :: String -> IO ()
+typeItIO input = case grab input of
   Left err -> putStrLn $ "Parse error:\n" <> show err
   Right block -> case runTyping block of
     (Left err, _) -> error $ T.unpack $ render err
     (Right block, state) -> putStrLn $ T.unpack (render block <> "\n" <> render state)
 
+typeIt :: String -> Either ErrorList Type
+typeIt input = case grab input of
+  Left err -> error $ "Parse error:\n" <> show err
+  Right block -> fst $ runTyping block
+
+
 log :: T.Text -> Typing ()
-log s = lift2 $ putStrLn $ T.unpack s
+log s = if hideLogs then return () else lift2 $ putStrLn $ T.unpack s
 log' = mconcat ~> log
 
 lift2 = lift . lift
+
+
+hideLogs = True

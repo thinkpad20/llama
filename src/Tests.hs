@@ -10,6 +10,7 @@ type Name = String
 data TestResult = TestSuccess [Name]
                 | TestFailure [Name] String String String
                 | TestError [Name] String String
+                | TestExpectedError [Name] String String
 
 data TesterState = TesterState { indentLevel::Int
                                , spaceCount::Int
@@ -17,12 +18,14 @@ data TesterState = TesterState { indentLevel::Int
                                , successes::[TestResult]
                                , failures::[TestResult]
                                , errors::[TestResult]
+                               , expectedErrors::[TestResult]
                                , names::M.Map Name Int}
 type Tester = StateT TesterState IO
 data Test input result = Test Name input result
                        | SkipTest Name input result
                        | TestGroup Name [Test input result]
                        | SkipTestGroup Name [Test input result]
+                       | ShouldError Name input
 
 defaultState = TesterState { indentLevel = 0
                            , spaceCount = 4
@@ -30,6 +33,7 @@ defaultState = TesterState { indentLevel = 0
                            , errors = []
                            , failures = []
                            , groupNames = []
+                           , expectedErrors = []
                            , names = mempty }
 
 runTests :: (Eq result, Show input, Show result, Show error) =>
@@ -67,7 +71,7 @@ runTest function count test = case test of
     upIndent >> runTests' function tests >> downIndent
     removeGroupName
     line
-  SkipTest name _ _ -> do
+  SkipTest name _ _ ->
     withColor Blue $ putStrLnI $ "(skipped test " ++ show count ++ " '" ++ name ++ "')"
   Test name input expect -> do
     -- print the header, e.g. "6. test sky is blue: "
@@ -87,10 +91,20 @@ runTest function count test = case test of
       Left message -> do
         addError name input message
         withColor Red $ putStrLn' "ERROR!"
+  ShouldError name input -> do
+    withColor Cyan $ putStrI $ show count ++ ". "
+    putStr' $ name ++ " (expect to error): "
+    -- Run the function on the input; it should fail.
+    case function input of
+      -- no errors, which isn't what we want
+      Right result -> do
+        addExpectedError name input result
+        withColor Magenta $ putStrLn' "DIDN'T ERROR!"
+      -- errors occurred
+      Left _ -> withColor Green $ putStrLn' "ERROR AS EXPECTED!"
 
 reportFailure (TestFailure names input expect result) = do
-  let name = intercalate ", " names
-  withColor Magenta $ withUL $ putStrLnI name
+  withColor Magenta $ withUL $ putStrLnI (intercalate ", " names)
   upIndent
   withColor Magenta $ putStrLnI "Input was:"
   withIndent $ withColor Yellow $ putStrLnI input
@@ -101,8 +115,7 @@ reportFailure (TestFailure names input expect result) = do
   downIndent
 
 reportError (TestError names input message) = do
-  let name = intercalate ", " names
-  withColor Red $ withUL $ putStrLnI name
+  withColor Red $ withUL $ putStrLnI (intercalate ", " names)
   upIndent
   withColor Red $ putStrLnI "Input was:"
   withColor Yellow $ putStrLnI input
@@ -110,13 +123,23 @@ reportError (TestError names input message) = do
   withColor Yellow $ putStrLnI (message ++ "\n")
   downIndent
 
+reportExpectedError (TestExpectedError names input result) = do
+  withColor Red $ withUL $ putStrLnI (intercalate ", " names)
+  upIndent
+  withColor Red $ putStrLnI "Input was:"
+  withColor Yellow $ putStrLnI input
+  withColor Red $ putStrLnI "Expected an error, but got: "
+  withColor Yellow $ putStrLnI (result ++ "\n")
+  downIndent
+
 report :: Tester ()
 report = do
   s <- length <$> getSuccesses
   fails <- getFailures
   errs <- getErrors
-  let (f, e) = (length fails, length errs)
-  let tot = s + f + e
+  expErrs <- getExpectedErrors
+  let (f, e, ee) = (length fails, length errs, length expErrs)
+  let tot = s + f + e + ee
   let tot'= (fromIntegral tot)::Double
   line
   withColor Cyan $ putStrLn' $ concat $ replicate 10 "=--="
@@ -129,8 +152,10 @@ report = do
   rep s "passed" Green
   rep f "failed" Magenta
   rep e "had errors" Red
+  rep ee "didn't throw errors when expected" Cyan
   when (f > 0) $ line >> putStrLn' "Failures:" >> forM_ (reverse fails) reportFailure
   when (e > 0) $ line >> putStrLn' "Errors:" >> forM_ (reverse errs) reportError
+  when (ee > 0) $ line >> putStrLn' "Expected Errors:" >> forM_ (reverse expErrs) reportExpectedError
   withColor Cyan $ putStrLn' $ concat $ replicate 10 "=--="
 
 indent :: String -> Tester String
@@ -153,6 +178,7 @@ getSuccesses, getFailures, getErrors :: Tester [TestResult]
 getSuccesses = get <!> successes
 getFailures = get <!> failures
 getErrors = get <!> errors
+getExpectedErrors = get <!> expectedErrors
 
 getILevel = indentLevel <$> get
 getNSpaces = spaceCount <$> get
@@ -165,6 +191,11 @@ addFailure name input expect result = do
   let names = reverse $ name : gNames
   let f = TestFailure names (show input) (show expect) (show result)
   modify $ \s -> s { failures = f : failures s }
+addExpectedError name input result = do
+  gNames <- getGroupNames
+  let names = reverse $ name : gNames
+  let f = TestExpectedError names (show input) (show result)
+  modify $ \s -> s { expectedErrors = f : expectedErrors s }
 addError name input message = do
   gNames <- getGroupNames
   let names = reverse $ name : gNames
