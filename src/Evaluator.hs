@@ -7,11 +7,11 @@ module Evaluator where
 
 import Prelude hiding (lookup)
 import Control.Monad.Reader
-import Data.IORef
 import System.Console.Haskeline
 import System.IO.Unsafe
 import qualified Data.Map as M
 import qualified Data.Text as T
+import qualified Data.HashTable.IO as H
 
 import Common
 import Parser
@@ -19,13 +19,14 @@ import TypeChecker
 import EvaluatorLib
 
 push :: Eval ()
-push = modify $ \s -> s {stack = defaultFrame : stack s}
+push = do
+  table <- lift3 H.new
+  let frame = defaultFrame {hTable = table}
+  modify $ \s -> s {stack = frame : stack s}
 pop :: Eval ()
 pop = modify $ \s -> s {stack = tail $ stack s}
 pushWith :: StackFrame -> Eval ()
 pushWith frame = modify $ \s -> s {stack = frame : stack s}
-pushWithArg :: Value -> Eval ()
-pushWithArg arg = pushWith defaultFrame{argument = arg}
 
 addLocal :: Name -> Value -> Eval ()
 addLocal name val = do
@@ -115,7 +116,8 @@ instance Evalable Expr where
       case funcVal of
         VFunction block env -> do
           argVal <- eval arg >>= snapshot
-          pushWith StackFrame { argument = argVal, vTable = env }
+          table <- lift3 H.new
+          pushWith StackFrame { argument = argVal, vTable = env, hTable = table }
           eval block <* pop
         VBuiltin (Builtin _ f) ->
           eval arg >>= snapshot >>= f

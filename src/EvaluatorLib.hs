@@ -8,6 +8,7 @@ module EvaluatorLib where
 import Prelude hiding (log)
 import Control.Monad.Reader
 import Data.IORef
+import qualified Data.HashTable.IO as H
 import qualified Data.Map as M
 import qualified Data.Text as T
 
@@ -41,10 +42,14 @@ data LocalRef = ArgRef -- meaning "the argument of this function"
               | Index Int LocalRef -- meaning an index into the argument
               deriving (Show, Eq)
 
+type HashTable k v = H.BasicHashTable k v
+type VHashTable = HashTable Name Value
+
 data StackFrame = StackFrame
   {
     argument :: Value
   , vTable :: ValueTable
+  , hTable :: VHashTable
   } deriving (Show)
 type ValueTable = M.Map Name Value
 data EvalState = EvalState {stack::[StackFrame]} deriving (Show)
@@ -98,7 +103,7 @@ defaultFrame :: StackFrame
 defaultFrame = StackFrame
   {
     argument = unitV
-  , vTable = builtins
+  , vTable   = builtins
   }
 defaultState :: EvalState
 defaultState = EvalState {stack = [defaultFrame]}

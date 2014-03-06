@@ -286,7 +286,7 @@ pReturn = do keyword "return"
 pExpression :: Parser Expr
 pExpression = do
   expr <- lexeme $ choice $ [ pDefine, pExtend, pAssign
-                            , pWhile, pFor, pReturn, pIfOrIf', pExpr ]
+                            , pWhile, pFor, pReturn, pExpr ]
   option expr $ do
     rest <- keyword "after" >> pBlock
     case rest of
@@ -294,7 +294,7 @@ pExpression = do
       _ -> return $ Block [rest, expr]
 
 pExpr :: Parser Expr
-pExpr = lexeme $ choice [ pMut, pLambda, pUnary ]
+pExpr = lexeme $ choice [ pMut, pLambda, pUnary, pIfOrIf' ]
 
 testE = parse pExpression
 testS = parse pExpressions

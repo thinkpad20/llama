@@ -28,6 +28,7 @@ opsFuncs = M.fromList [("+", plus), ("*", times), ("-", minus)
                       , ("==", eq), ("!=", neq), ("|>", fAp), ("<|", bAp)
                       , ("~>", fComp), ("<~", bComp)]
 (one, two, three) = (Number 1, Number 2, Number 3)
+(true, false) = (Constructor "True", Constructor "False")
 
 binOpsTests = [test (T.unpack op) | op <- ops] where
   test op = Test ("can parse `" ++ op ++ "'")
@@ -285,6 +286,12 @@ ifTests = TestGroup "If statements"
     [Lambda (Typed (Var "n") numT) $ If (Var "n") two three]
   , Test "used in define" "foo (n: Num) = if n then 2 else 3"
     [Define "foo" $ Lambda (Typed (Var "n") numT) $ If (Var "n") two three]
+  , Test "nested" "if True then 1 else if False then 2 else 3"
+    [If true one (If false two three)]
+  , Test "nested 2" "if True then if False then 1 else 2 else 3"
+    [If true (If false one two) three]
+  , Test "nested 3" "if if True then False else True then 1 else 2"
+    [If (If true false true) one two]
   ]
 
 whileTests = TestGroup "While statements"
