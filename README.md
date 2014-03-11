@@ -1,6 +1,6 @@
 # Llama
 
-A functional language for imperative programmers. An imperative language for functional programmers. A language that does what you want it to. A language which values safety and expressivity but not at the cost of pragmatism and ease of use.
+A functional language for imperative programmers. An imperative language for functional programmers. A language that does what you want it to, and more importantly, what you expect it to. A language whose type system is meant to support the programmer's vision, rather than imposing its own. A language which values safety and expressivity in equal measure to ease of use, pragmatism, and fun.
 
 ## Overview of some features
 
@@ -88,6 +88,26 @@ A functional language for imperative programmers. An imperative language for fun
         ```
 
   - This might seem a little dangerous, as one can mistakenly "call" an object with another object. But with static typing, the great majority of these errors should be caught early.
+
+* Optionally right-associative identifiers. By default, function application associates to the left, so that `foo bar baz == (foo bar) baz`. This makes the most sense in a lot of cases; for example it means that `foo bar + baz qux == (foo bar) + (baz qux)`, which is how it most naturally reads (to this author), rather than `foo (bar + baz qux)`, as one would find for example in Coffeescript. However, certain functions such as `print` and `assert` are overwhelmingly used as single statements, not likely to be part of binary expressions, and their arguments tend to be more complex, which would require parentheses if left-associative. These can be declared as right-associative, which leads to nicer syntax:
+* 
+        ```
+        > foo = [1,2,3,4]
+        > print foo + [3,4,5,6]
+        [1,2,3,4,3,4,5,6]
+        > foo += 7
+        > assert foo (-1) == 7
+        > assert foo.length > 4
+        > 
+        > shout (s: Str) = s.length after print (s + "!")
+        > rassoc shout
+        > shout "hello " + "world"
+        hello world!
+        11
+        > assert (shout "hey " + "you") == 7
+        hey you!
+        > 
+        ```
 
 * String interpolation. Two forms: `#{}` applies the `show` function to whatever is contained inside (making it a type error to include anything which doesn't implement this function) and `#[]` does not apply any function (making it a type error to put in anything but a string).
       

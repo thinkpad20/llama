@@ -1,0 +1,38 @@
+```
+module Print
+
+import from System: stdout, write
+import from Show: Show
+
+export print, println
+
+print (x: Show, @output=stdout) = output.write x.show
+println (x: Show, @output: File) = print ("#{x}\n", output=output)
+```
+
+One issue: a namespaced method makes `.` notation kinda ugly. For example:
+
+```
+module Foo
+export foo
+foo (n: Num) = n * 6
+```
+
+```
+> import Foo
+> print $ Foo/foo 4
+24
+> print 4.Foo/foo
+24
+```
+
+
+The latter is a little harder to read. It's worse if it's longer:
+
+```
+> import System
+> my_file = System/open ("foo.txt", mode='w')
+> my_file.System/close after my_file.System/write "hello world"
+```
+
+Meh, I suppose it's not terrible.

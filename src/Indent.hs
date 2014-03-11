@@ -1,5 +1,6 @@
 {-# LANGUAGE LambdaCase #-}
-module Indent (indent, dedent, same, parse, Parser(..)) where
+{-# LANGUAGE OverloadedStrings #-}
+module Indent (indent, dedent, same, parse, Parser(..), IndentState(..)) where
 
 import Common
 import Text.Parsec hiding (parse)
@@ -13,7 +14,8 @@ data Statement = Expr Expression
                deriving (Show)
 
 data IndentState = IndentState { currentLevel :: Int
-                               , stepAmount :: Maybe Int }
+                               , stepAmount :: Maybe Int
+                               , raNames :: [Name] }
 type Parser = ParsecT String IndentState Identity
 
 lexeme :: Parser a -> Parser a
@@ -83,5 +85,7 @@ statement = choice [while, Expr <$> expression]
 statements :: Parser [Statement]
 statements = statement `sepBy1` same
 
-defaultState = IndentState {currentLevel = 0, stepAmount = Nothing}
+defaultState = IndentState { currentLevel = 0
+                           , stepAmount = Nothing
+                           , raNames = ["print", "assert"]}
 parse parser input = runIdentity $ runParserT parser defaultState "" input

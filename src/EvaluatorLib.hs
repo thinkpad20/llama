@@ -28,6 +28,18 @@ data Value = VNumber !Double
            | VThrow !Value
            deriving (Show, Eq)
 
+type ValueObject = H.BasicHashTable T.Text ValueAttribute
+
+data ValueAttribute = VType Type
+                    | VString T.Text
+                    | VNumber Double
+                    | V
+
+numV :: Eval ValueObject
+numV = do
+  empty <- lift3 H.new
+
+
 data Builtin = Builtin !Name !(Value -> Eval Value)
 
 instance Show (IORef Value) where

@@ -1,0 +1,10 @@
+
+unrecognized_command = block (command: Str)
+  println "Command #{command} not recognized.\n#{usage}"
+  Sys/exit_with 1
+
+argv 0 |> {
+  "tags"    => get_tags,
+  "replace" => replace,
+  @default  => unrecognized_command @default
+}

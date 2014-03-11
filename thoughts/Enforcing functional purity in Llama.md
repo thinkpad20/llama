@@ -65,3 +65,5 @@ Another use of this is the idea of pure modules; that is, modules which are guar
 Need to thinking about this one for sure.
 
 Note: it seems that there's a close relationship between pure/local functions and inlineable functions. This is something to think about.
+
+Another thought: we might want to make a `trust` keyword, which will let a function be treated as `pure` or `local` even if it actually performs IO or the like. For example, if the IO being performed is completely trivial like getting the current time, or guaranteed (by the developer) not to fail, as in even if it does, its exceptions are handled, etc. Conceivably, a similar `notrust` keyword would make a `pure` function reject downstream functions declared with `trust`, unless they are actually pure.

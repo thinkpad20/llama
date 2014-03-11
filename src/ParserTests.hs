@@ -14,18 +14,20 @@ expr e = [e]
 (foo, bar, baz, qux) = (Var "foo", Var "bar", Var "baz", Var "qux")
 (fooT, barT, bazT, quxT) = ( tConst "Foo", tConst "Bar"
                            , tConst "Baz", tConst "Qux")
+print_ = Apply (Var "print")
+assert = Apply (Var "assert")
 arrayS exprs = expr $ Array $ ArrayLiteral exprs
 arrayE exprs = Array $ ArrayLiteral exprs
 rangeS start stop = rangeE start stop ! expr
 rangeE start stop = ArrayRange start stop ! Array
 ops = [ "+", "*", "-", "/", "^", "%", "<", ">", "<="
-      , ">=", "==", "!=", "<|", "|>", "<~", "~>", "||", "&&"]
+      , ">=", "==", "!=", "$", "|>", "<~", "~>", "||", "&&"]
 [ plus, times, minus, divide, expon, mod, lt, gt, leq, geq
  , eq, neq, bAp, fAp, bComp, fComp, _or, _and] = map binary ops
 opsFuncs = M.fromList [("+", plus), ("*", times), ("-", minus)
                       , ("/", divide), ("^", expon), ("%", mod)
                       , ("<", lt), (">", gt), ("<=", leq), (">=", geq)
-                      , ("==", eq), ("!=", neq), ("|>", fAp), ("<|", bAp)
+                      , ("==", eq), ("!=", neq), ("|>", fAp), ("$", bAp)
                       , ("~>", fComp), ("<~", bComp)]
 (one, two, three) = (Number 1, Number 2, Number 3)
 (true, false) = (Constructor "True", Constructor "False")
@@ -69,14 +71,26 @@ expressionTests = TestGroup "Expressions"
            "++foo"
            (expr $ Apply (Var "++_") foo)
     , Test "postfix operator"
-           "1!"
-           (expr $ Apply (Var "_!") one)
+           "3!"
+           (expr $ Apply (Var "_!") three)
     , Test "prefix operator in argument"
            "foo (++bar)"
            (expr $ Apply foo (Apply (Var "++_") bar))
     , Test "postfix operator in argument"
            "foo (bar++)"
            (expr $ Apply foo (Apply (Var "_++") bar))
+    , Test "postfix operator after an application"
+           "foo bar++"
+           (expr $ Apply (Var "_++") $ Apply foo bar)
+    , Test "mixing postfix and infix operators"
+           "foo + bar ++"
+           (expr $ Apply (Var "_++") $ plus foo bar)
+    , Test "mixing postfix and infix operators 2"
+           "foo + (bar++)"
+           (expr $ plus foo $ Apply (Var "_++") bar)
+    , Test "mixing prefix and infix operators"
+           "++foo + bar"
+           (expr $ Apply (Var "++_") $ plus foo bar)
   ]
   , Test "apply" "foo bar" (expr $ Apply foo bar)
   , Test "apply associates to the left"
@@ -140,20 +154,20 @@ arrayTests = TestGroup "Arrays"
            (rangeS foo (arrayE [bar, baz]))
     ]
   , TestGroup "array dereference" [
-      Test "make array reference" "foo{! bar}" [Ref foo bar]
+      Test "make array reference" "foo[: bar]" [Ref foo bar]
     , Test "can contain arbitrary expressions"
-           "foo {! bar + baz qux}"
+           "foo [: bar + baz qux]"
            [Ref foo (plus bar (Apply baz qux))]
     , Test "should have higher precedence than application"
-           "foo bar{!baz}" [Apply foo $ Ref bar baz]
+           "foo bar[:baz]" [Apply foo $ Ref bar baz]
     , Test "should have higher precedence than application 2"
-           "(foo bar){!baz}" [Ref (Apply foo bar) baz]
+           "(foo bar)[:baz]" [Ref (Apply foo bar) baz]
     , Test "should have lower precedence than dots"
-           "foo.bar{!baz}" [Ref (Dot foo bar) baz]
+           "foo.bar[:baz]" [Ref (Dot foo bar) baz]
     , Test "should have lower precedence than dots 2"
-           "foo.(bar{!baz})" [Dot foo (Ref bar baz)]
+           "foo.(bar[:baz])" [Dot foo (Ref bar baz)]
     , Test "should associate to the left"
-           "foo{!bar}{!baz}" [Ref (Ref foo bar) baz]
+           "foo[:bar][:baz]" [Ref (Ref foo bar) baz]
     ]
   ]
 
@@ -201,15 +215,20 @@ functionTests = TestGroup "Functions"
     , Test "should be able to be used in assignments"
            "foo := bar: Baz => qux bar"
            [Assign foo (Lambda (Typed bar bazT) (Apply qux bar))]
+    , Test "should be able to be used in a binary operator"
+           "foo $ bar: Bar => bar + 2"
+           (expr $ Apply (Var "$")
+                 $ Tuple [foo, (Lambda (Typed bar barT)
+                               (plus bar two))])
+    , Test "should grab as much as we can"
+           "bar: Bar => bar + 2 $ foo"
+           (eLambda (Typed bar barT) (bAp (plus bar two) foo))
     , Test "should be able to string alternatives"
            "1 => 2 | 2 => 3"
            (eLambdas [(one, two), (two, three)])
     , Test "should be able to handle complex lambdas"
            "(1 => 2 | 2 => 3 | foo => bar baz) 3"
-           [Apply (Lambda (Var "(arg)") $ Case (Var "(arg)")
-                                 [ (one, two)
-                                 , (two, three)
-                                 , (foo, Apply bar baz)]) three]
+           [Apply (lambdas [(one, two), (two, three), (foo, Apply bar baz)]) three]
     ]
   , TestGroup "Defined functions" [
       Test "should make a function definition"
@@ -231,8 +250,8 @@ functionTests = TestGroup "Functions"
                                          , Typed baz (TRigidVar "b")])
                          $ Apply bar baz]
     , Test "should make a prefix function definition"
-           "++(foo: Num) = foo + 1"
-           [Define "++_" $ Lambda (Typed foo numT) (plus foo one)]
+           "!(foo: Bool) = not foo"
+           [Define "!_" $ Lambda (Typed foo boolT) (Apply (Var "not") foo)]
     , Test "should make a postfix function definition"
            "(foo: Num)! = fact foo"
            [Define "_!" $ Lambda (Typed foo numT) (Apply (Var "fact") foo)]
@@ -240,7 +259,8 @@ functionTests = TestGroup "Functions"
   ]
   where tup1 = Tuple [Typed foo fooT, Typed bar barT]
         eLambda arg body = expr $ Lambda arg body
-        eLambdas abds = expr $ Lambda (Var "(arg)") $ Case (Var "(arg)") abds
+        lambdas abds = Lambda (Var "(arg)") $ Case (Var "(arg)") abds
+        eLambdas = expr . lambdas
 
 assignmentTests = TestGroup "Assignments"
   [
@@ -250,6 +270,58 @@ assignmentTests = TestGroup "Assignments"
          [Define "foo" $ bar `plus` baz]
   , Test "can make complex assignments" "foo bar := baz * qux foo"
          [Assign (Apply foo bar) $ baz `times` Apply qux foo]
+  ]
+
+rassocTests = TestGroup "Right-associative functions"
+  [
+    Test "rassoc doesn't matter when single expr"
+         "rassoc foo; foo"
+         [foo]
+  , Test "rassoc doesn't matter when one arg"
+         "rassoc foo; foo bar"
+         [Apply foo bar]
+  , Test "rassoc doesn't matter when it is the arg"
+         "rassoc bar; foo bar"
+         [Apply foo bar]
+  , Test "rassoc doesn't matter when it is the arg 2"
+         "rassoc bar; foo bar baz"
+         [Apply (Apply foo bar) baz]
+  , Test "rassoc matters when 2 args"
+         "rassoc foo; foo bar baz"
+         [Apply foo (Apply bar baz)]
+  , Test "rassoc works with binary functions"
+         "rassoc foo; foo bar + baz"
+         [Apply foo (plus bar baz)]
+  , Test "rassoc works with binary functions 2"
+         "rassoc foo; foo bar baz + qux"
+         [Apply foo (plus (Apply bar baz) qux)]
+  , Test "rassoc works in parentheses"
+         "rassoc bar; foo (bar baz qux)"
+         [Apply foo (Apply bar (Apply baz qux))]
+  , Test "nested rassoc works"
+         "rassoc foo, bar; foo bar baz"
+         [Apply foo (Apply bar baz)]
+  , Test "nested rassoc works 2"
+         "rassoc foo, bar; foo bar baz qux"
+         [Apply foo (Apply bar (Apply baz qux))]
+  , Test "nested rassoc works 3"
+         "rassoc foo, bar; foo bar baz + qux"
+         [Apply foo (Apply bar (plus baz qux))]
+  , Test "print is rassoc by default"
+         "print 1 + 2; print foo bar"
+         [print_ (plus one two), print_ (Apply foo bar)]
+  , Test "assert is rassoc by default"
+         "assert 1 != 2; assert foo bar > 3"
+         [assert (neq one two), assert (gt (Apply foo bar) three)]
+  , Test "assert is rassoc by default"
+         "rassoc foo; assert (foo bar baz) > 3"
+         [assert (gt (Apply foo (Apply bar baz)) three)]
+  , Test "we can still pass print and assert as args"
+         "map print foo; map assert bar"
+         [ Apply (Apply (Var "map") (Var "print")) foo
+         , Apply (Apply (Var "map") (Var "assert")) bar]
+  -- Should test that we can unrassoc something, and that this
+  -- happens automatically when shadowing a definition
   ]
 
 blockTests = TestGroup "Blocks"
@@ -374,6 +446,7 @@ doTests = runTests grab [ expressionTests
                         , functionTests
                         , ifTests
                         , flowTests
+                        , rassocTests
                         ]
 
 main = doTests
