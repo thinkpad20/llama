@@ -1,0 +1,84 @@
+Array [1,2,3]
+
+object Array a = Array [a]
+
+arrays are C-style (python-style). Initialized with a vector but converted to C-style under the hood.
+
+(arr: Array a)[: index: Int] =
+
+that's why := isn't a function. It needs knowledge of its location.
+
+[:] can be used in assignment on a array or a hash, not on a vector or a map.
+
+```
+> foo = [1, 2, 3]
+```
+`foo` is immutable, clojure persistent vector.
+
+```
+> bar = mut Array foo
+```
+`bar` is mutable, Java-style arraylist.
+
+```
+> baz = {1 => 2, 3 => 4}
+```
+`baz` is immutable, red-black tree or similar.
+
+```
+> qux = mut Hash baz
+```
+`qux` is mutable, hash table.
+
+```
+> print foo[: 0]
+1
+> print bar[: 0]
+1
+> foo[: 0] := 5
+Error
+> foo.insert 0 5
+[5, 2, 3]
+> foo
+[1, 2, 3]
+> bar[: 0] := 5
+5
+> bar
+[5, 2, 3]
+> bar.set! 2 6
+6
+> bar
+[5, 2, 6]
+> bar.extend [3, 4]
+[5, 2, 6, 3, 4]
+> bar
+[5, 2, 6]
+> bar.extend! [3, 4]
+[5, 2, 6, 3, 4]
+> bar
+[5, 2, 6, 3, 4]
+```
+
+Still not quite certain, I suppose, about the distinction between updating a variable, and updating the object that variable points to. Need to perhaps write some of this stuff out in C++ to make things clearer.
+
+```
+++(x: ref Int) = { x += 1; x }
+int incr(int &x) { x += 1; return x; }
+int incr_c(int *x) { *x += 1; return *x; }
+```
+
+```
+> baz[: 1] := 5
+Error
+> baz.insert 1 5
+{1=>5, 3=>4}
+> baz
+{1=>2, 3=>4}
+> qux[: 1] := 5
+5
+> qux
+{1=>5, 3=>4}
+> qux.set! 6 7
+7
+> qux
+{1=>5, 3=>4, 6=>7}
