@@ -1,6 +1,10 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
-module Parser ( grab, Expr(..), Block(..), ArrayLiteral(..)) where
+module Parser ( grab
+              , Expr(..)
+              , Block
+              , ArrayLiteral(..)
+              , grabT) where
 
 import Text.Parsec hiding (Parser, parse, State)
 import Control.Applicative hiding (many, (<|>))
@@ -71,7 +75,7 @@ pDouble = lexeme $ do
 pType :: Parser Type
 pType = pTFunction
 pTTerm = choice [pTVar, pTConst, pTTuple]
-pTVar = TRigidVar <$> fmap T.pack (many1 lower) <* skip
+pTVar = TPolyVar <$> fmap T.pack (many1 lower) <* skip
 pTConst = TConst <$> pIdent upper
 pTParens = schar '(' *> sepBy pType (schar ',') <* schar ')'
 pTTuple = pTParens >>= \case
@@ -336,6 +340,11 @@ pTopLevelExpressions =
 
 grab :: String -> Either ParseError [Expr]
 grab = parse pTopLevelExpressions
+
+grabT :: String -> Either ErrorList Type
+grabT input = case parse pType input of
+  Left err -> Left $ TE [T.pack $ show err]
+  Right typ -> return typ
 
 grab' input = case grab input of
   Right statements -> map show statements ! intercalate "\n"

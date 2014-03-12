@@ -101,7 +101,9 @@ runTest function count test = case test of
         addExpectedError name input result
         withColor Magenta $ putStrLn' "DIDN'T ERROR!"
       -- errors occurred
-      Left _ -> withColor Green $ putStrLn' "ERROR AS EXPECTED!"
+      Left _ -> do
+        addSuccess name
+        withColor Green $ putStrLn' "ERROR AS EXPECTED!"
 
 reportFailure (TestFailure names input expect result) = do
   withColor Magenta $ withUL $ putStrLnI (intercalate ", " names)
@@ -147,8 +149,9 @@ report = do
   let rep n testType c = do
         let n' = (fromIntegral n)::Double
         let tests = if n == 1 then "1 test " else  show n ++ " tests "
-        let percent = " (" ++ show (round $ 100 * n' / tot') ++ "%)"
-        withColor c $ putStrLn' $ tests ++ testType ++ percent
+        let percent = if tot' == 0 then "0" else show (round $ 100 * n' / tot')
+        let percentStr = " (" ++ percent ++ "%)"
+        withColor c $ putStrLn' $ tests ++ testType ++ percentStr
   rep s "passed" Green
   rep f "failed" Magenta
   rep e "had errors" Red

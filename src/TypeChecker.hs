@@ -5,14 +5,15 @@
 {-# LANGUAGE NoMonomorphismRestriction #-}
 {-# LANGUAGE OverloadedStrings #-}
 module TypeChecker ( Typable(..), Typing, TypeTable, TypingState(..)
-                   , runTyping, runTypingWith, defaultTypingState, typeIt) where
+                   , runTyping, runTypingWith, defaultTypingState
+                   , typeIt, unifyIt) where
 
 import Prelude hiding (lookup, log)
 import System.IO.Unsafe
 import Control.Monad.Error.Class
 import Common
 import AST
-import Parser (grab)
+import Parser (grab, grabT)
 import qualified Data.Map as M
 import qualified Data.Set as S
 import qualified Data.Text as T
@@ -329,27 +330,30 @@ lookupAndInstantiate name = lookup name >>= \case
 
 -- | adds to the type aliases map any substitutions needed to make
 -- its two arguments equivalent. Throws an error if such a substitution
--- is impossible (todo: throw an error if there's a cycle)
-unify :: Type -> Type -> Typing Int
-unify type1 type2 = snd <$> runStateT (go type1 type2) 0 where
-  go :: Type -> Type -> StateT Int Typing ()
-  go type1 type2 = do
+-- is impossible.
+-- TODO: throw an error if there's a cycle
+unify :: Type -> Type -> Typing (Int, M.Map Name Type)
+unify type1 type2 = snd <$> runStateT (go (type1, type2)) (0, mempty) where
+  go :: (Type, Type) -> StateT (Int, M.Map Name Type) Typing ()
+  go types = do
     lift $ log' ["Unifying `", render type1, "' with `", render type2, "'"]
-    case (type1, type2) of
+    case types of
       (a, b) | a == b  -> return ()
-      (TMut mtyp, typ) -> go mtyp typ
-      (typ, TMut mtyp) -> go mtyp typ
-      (TPolyVar name, typ) -> lift (addTypeAlias name typ) <* modify (+1)
-      (typ, TPolyVar name) -> lift (addTypeAlias name typ) <* modify (+1)
+      (TMut mtyp, typ) -> go (mtyp, typ)
+      (typ, TMut mtyp) -> go (mtyp, typ)
+      (TPolyVar name, typ) -> bump >> alias name typ
+      (typ, TPolyVar name) -> bump >> alias name typ
       (TConst name, TConst name') | name == name' -> return ()
-      (TTuple ts, TTuple ts') -> mapM_ (uncurry go) $ zip ts ts'
-      (TApply a b, TApply a' b') -> go a a' >> go b b'
+      (TTuple ts, TTuple ts') | length ts == length ts' -> mapM_ go $ zip ts ts'
+      (TApply a b, TApply a' b') -> go (a, a') >> go (b, b')
       (TFunction a b, TFunction a' b') -> do
-        go a a' `catchError'` argError
-        go b b' `catchError'` returnError
-      _ -> do
+        go (a, a') `catchError'` argError
+        go (b, b') `catchError'` returnError
+      (type1, type2) -> do
         --log' ["Incompatible types: `", show type1, "' and `", show type2, "'"]
         throwErrorC ["Incompatible types: `", render type1, "' and `", render type2, "'"]
+  bump = modify $ \(n, s) -> (n + 1, s)
+  alias name typ = modify $ \(n, s) -> (n, M.insert name typ s)
   argError = addError' ["When attempting to unify the argument types of `"
                        , render type1, "' and `", render type2, "'"]
   returnError = addError' ["When attempting to unify the return types of `"
@@ -448,6 +452,10 @@ runTypingWith state a = unsafePerformIO $ runStateT (runErrorT $ typeOf a) state
 runTyping :: Typable a => a -> (Either ErrorList Type, TypingState)
 runTyping = runTypingWith defaultTypingState
 
+runUnify :: Type -> Type -> (Either ErrorList (Int, M.Map Name Type), TypingState)
+runUnify type1 type2 =
+  unsafePerformIO $ runStateT (runErrorT $ unify type1 type2) defaultTypingState
+
 typeItIO :: String -> IO ()
 typeItIO input = case grab input of
   Left err -> putStrLn $ "Parse error:\n" <> show err
@@ -457,9 +465,14 @@ typeItIO input = case grab input of
 
 typeIt :: String -> Either ErrorList Type
 typeIt input = case grab input of
-  Left err -> error $ "Parse error:\n" <> show err
+  Left err -> Left $ TE ["Parse error:\n" <> (T.pack $ show err)]
   Right block -> fst $ runTyping block
 
+unifyIt :: (String, String) -> Either ErrorList (Int, M.Map Name Type)
+unifyIt (input1, input2) = do
+  type1 <- grabT input1
+  type2 <- grabT input2
+  fst $ runUnify type1 type2
 
 log :: T.Text -> Typing ()
 log s = if hideLogs then return () else lift2 $ putStrLn $ T.unpack s
