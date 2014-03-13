@@ -173,20 +173,42 @@ arrayTests = TestGroup "Arrays"
 
 typingTests = TestGroup "Typed expressions"
   [
-    Test "typing an identifier" "foo: Foo"
-         [Typed foo (tConst "Foo")]
-  , Test "typing an identifier with a variable type" "foo: a"
-         [Typed foo (TRigidVar "a")]
-  , Test "typing with 2nd order type" "bar: Maybe Foo"
-         [Typed bar (maybeT fooT)]
-  , Test "typing with 2nd order type using a variable"
-         "bar: Maybe a"
-         [Typed bar (maybeT $ TRigidVar "a")]
-  , Test "typing with type tuple" "foo: (Foo, Bar)"
-         [Typed foo (tTuple [fooT, barT])]
+    test "typing an identifier" "foo: Foo" fooT
+  , test "typing an identifier with a variable type" "foo: a" a
+  , test "typing with 2nd order type" "foo: Maybe Foo" (maybeT fooT)
+  , test "typing with 2nd order type using a variable"
+         "foo: Maybe a" (maybeT a)
+  , test "typing with type tuple" "foo: (Foo, Bar)" (tTuple [fooT, barT])
   , Test "a typed tuple" "(foo: Foo, bar: Bar)"
          [Tuple [Typed foo fooT, Typed bar barT]]
+  , test "a multifunc" "foo: multi {Foo => Bar}" (multi1 fooT barT)
+  , test "a multifunc with more than one"
+         "foo: multi {Foo => Bar, Baz => Qux}"
+         (multi [(fooT, barT), (bazT, quxT)])
+  , test "a multifunc containing functions"
+         "foo: multi {Foo -> Bar => Baz}"
+         (multi1 (fooT ==> barT) bazT)
+  , test "a multifunc containing variables"
+         "foo: multi {(a -> b, a) => b}"
+         (multi1 (tTuple [(a ==> b), a]) b)
+  , col "vector" "[" "]" arrayOf
+  , col "list" "[!" "]" listOf
+  , col "set" "{" "}" setOf
+  , col "map1" "{" " => Num}" (\t -> mapOf (t, numT))
+  , col "map2" "{Num =>" "}" (\t -> mapOf (numT, t))
   ]
+  where multi = TMultiFunc . M.fromList
+        multi1 a b = multi [(a, b)]
+        [a, b] = map TRigidVar ["a", "b"]
+        test name input typ = Test name input [Typed foo typ]
+        col name open close f = TestGroup name tests where
+          encl s = "foo: " ++ open ++ s ++ close
+          tests = [ test "of variable" (encl "a") (f a)
+                  , test "of number" (encl "Num")  (f numT)
+                  , test "of function" (encl "Num -> Str") (f (numT ==> strT))
+                  , test "of lists" (encl "[!Num]") (f (listOf numT))
+                  , test "of vectors" (encl "[Num]") (f (arrayOf numT))
+                  , test "of maps" (encl "{a=>b}") (f (mapOf (a, b)))]
 
 functionTests = TestGroup "Functions"
   [
@@ -259,7 +281,7 @@ functionTests = TestGroup "Functions"
   ]
   where tup1 = Tuple [Typed foo fooT, Typed bar barT]
         eLambda arg body = expr $ Lambda arg body
-        lambdas abds = Lambda (Var "(arg)") $ Case (Var "(arg)") abds
+        lambdas abds = Lambdas abds
         eLambdas = expr . lambdas
 
 assignmentTests = TestGroup "Assignments"
@@ -332,6 +354,16 @@ blockTests = TestGroup "Blocks"
   , Test "separate expressions into blocks by semicolon"
          "foo;bar;baz qux"
          [foo, bar, Apply baz qux]
+  , Test "after" "foo after bar" [foo `After` bar]
+  , Test "after with block" "foo after {bar; baz}"
+         [foo `After` Block [bar, baz]]
+  , Test "before" "foo before bar" [foo `Before` bar]
+  , Test "before with block" "foo before {bar; baz}"
+         [foo `Before` Block [bar, baz]]
+  , SkipTest "after with block 2" "{foo; bar} after {bar; baz}"
+         [Block [foo, bar] `After` Block [bar, baz]]
+  , SkipTest "before with block 2" "{foo; bar} before {bar; baz}"
+         [Block [foo, bar] `Before` Block [bar, baz]]
   ]
 
 flowTests = TestGroup "Program flow"

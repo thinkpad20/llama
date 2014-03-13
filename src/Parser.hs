@@ -9,6 +9,7 @@ module Parser ( grab
 import Text.Parsec hiding (Parser, parse, State)
 import Control.Applicative hiding (many, (<|>))
 import qualified Data.Text as T
+import qualified Data.Map as M
 
 import Common
 import AST
@@ -22,7 +23,8 @@ skip = many (oneOf " \t") *> option () lineComment
                          many (noneOf "\n")
                          (char '\n' >> return ()) <|> eof
 keywords = ["if", "do", "else", "case", "of", "infix", "typedef"
-           , "object", "while", "for", "in", "then", "after", "return"]
+           , "object", "while", "for", "in", "then", "after", "before"
+           , "return", "multi"]
 keySyms =  ["->", "|", "=", ";", "..", "=>", "?", ":", "#", ":=", "&="]
 
 keyword k = fmap T.pack $ go where
@@ -73,9 +75,9 @@ pDouble = lexeme $ do
     return $ read (ds ++ "." ++ ds')
 
 pType :: Parser Type
-pType = pTFunction
+pType = choice [pMultiFunc, pTVector, pTList, pTMap, pTSet, pTFunction]
 pTTerm = choice [pTVar, pTConst, pTTuple]
-pTVar = TPolyVar <$> fmap T.pack (many1 lower) <* skip
+pTVar = TRigidVar <$> fmap T.pack (many1 lower) <* skip
 pTConst = TConst <$> pIdent upper
 pTParens = schar '(' *> sepBy pType (schar ',') <* schar ')'
 pTTuple = pTParens >>= \case
@@ -83,6 +85,24 @@ pTTuple = pTParens >>= \case
   ts -> return $ tTuple ts
 pTFunction = chainr1 pTApply (exactSym "->" *> pure TFunction)
 pTApply = chainl1 pTTerm (pure TApply)
+pTVector = fmap arrayOf (exactSym "[" *> pType <* schar ']')
+pTList = fmap listOf (sstring "[!" *> pType <* schar ']')
+pTSet = fmap setOf (exactSym "{" *> pType <* schar '}')
+pTMap = fmap mapOf $ try $ do
+  exactSym "{"
+  t1 <- pType
+  exactSym "=>"
+  t2 <- pType
+  schar '}'
+  return (t1, t2)
+pMultiFunc = do
+  keyword "multi"
+  schar '{'
+  fromTos <- sepBy1 pFromTo (schar ',')
+  schar '}'
+  return $ TMultiFunc $ M.fromList fromTos
+  where pFromTo = (,) <$$ pType <* exactSym "=>" <*> pType
+
 
 pTypeDef :: Parser Expr
 pTypeDef =
@@ -299,9 +319,7 @@ pLambda = try $ do
   argsBodies <- pArgBody `sepBy1` (exactSym "|")
   case argsBodies of
     [(arg, body)] -> return $ Lambda arg body
-    _ -> do
-      name <- unusedName
-      return $ Lambda (Var name) $ Case (Var name) argsBodies
+    _ -> return $ Lambdas argsBodies
 
 -- | Clearly, this isn't the final version :)
 unusedName :: Parser Name
@@ -324,10 +342,11 @@ pExpression = do
   expr <- lexeme $ choice $ [ pDefine, pExtend, pAssign
                             , pWhile, pFor, pReturn, pExpr ]
   option expr $ do
-    rest <- keyword "after" >> pBlock
-    case rest of
-      Block exprs -> return $ Block $ exprs ++ [expr]
-      _ -> return $ Block [rest, expr]
+    kw <- keyword "after" <|> keyword "before"
+    rest <- pBlock
+    return $ case kw of
+      "after"  -> After expr rest
+      "before" -> Before expr rest
 
 pExpr :: Parser Expr
 pExpr = lexeme $ choice [ pMut, pLambda, pRightAssociativeFunction, pIfOrIf' ]

@@ -6,45 +6,50 @@ module AST where
 
 import Common
 import qualified Data.Text as T
+import qualified Data.Map as M
 
-data Expr = Var !Name
-          | Number !Double
-          | String !T.Text
+data Expr = Var         !Name
+          | Number      !Double
+          | String      !T.Text
           | Constructor !Name
-          | Block !Block
-          | Dot !Expr !Expr
-          | Apply !Expr !Expr
-          | Unary !String !Expr
-          | Lambda !Expr !Expr
-          | Case !Expr ![(Expr, Expr)]
-          | Tuple ![Expr]
-          | Array !ArrayLiteral
-          | Ref !Expr !Expr
-          | Typed !Expr !Type
-          | If !Expr !Expr !Expr
-          | If' !Expr !Expr
-          | While !Expr !Expr
-          | For !Expr !Expr !Expr
-          | Define !Name !Expr
-          | Extend !Name !Expr
-          | Assign !Expr !Expr
-          | Return !Expr
-          | Throw !Expr
-          | Break !Expr
+          | Block       !Block
+          | Dot         !Expr !Expr
+          | Apply       !Expr !Expr
+          | Unary       !String !Expr
+          | Lambda      !Expr !Expr
+          | Lambdas     ![(Expr, Expr)]
+          | Case        !Expr ![(Expr, Expr)]
+          | Tuple       ![Expr]
+          | Array       !ArrayLiteral
+          | Ref         !Expr !Expr
+          | Typed       !Expr !Type
+          | If          !Expr !Expr !Expr
+          | If'         !Expr !Expr
+          | While       !Expr !Expr
+          | For         !Expr !Expr !Expr
+          | Define      !Name !Expr
+          | Extend      !Name !Expr
+          | Assign      !Expr !Expr
+          | Return      !Expr
+          | Throw       !Expr
+          | Break       !Expr
+          | After       !Expr !Expr
+          | Before      !Expr !Expr
           | Continue
-          | Mut !Expr
-          | TypeDef Name Type
+          | Mut         !Expr
+          | TypeDef !Name !Type
           deriving (Show, Eq)
 
 -- | A variable can be rigid (fixed in scope), or polymorphic (free to take on
 -- multiple forms in the same scope).
-data Type = TRigidVar !Name
-          | TPolyVar !Name
-          | TConst !Name
-          | TTuple ![Type]
-          | TApply !Type !Type
-          | TFunction !Type !Type
-          | TMut !Type
+data Type = TRigidVar  !Name
+          | TPolyVar   !Name
+          | TConst     !Name
+          | TTuple     ![Type]
+          | TApply     !Type !Type
+          | TFunction  !Type !Type
+          | TMut       !Type
+          | TMultiFunc !(M.Map Type Type)
           deriving (Show, Eq, Ord)
 
 data ArrayLiteral = ArrayLiteral ![Expr]
@@ -65,7 +70,6 @@ instance Render Expr where
       Dot e1 e2 -> return $ render'' e1 <> "." <> render'' e2
       Apply (Var op) (Tuple [e1, e2])
         | isSymbol op -> return $ render'' e1 <> " " <> op <> " " <> render'' e2
-      Apply (Var "~") e -> return $ "-" <> render'' e
       Apply (Var op) e | isSymbol op -> return $ op <> " " <> render'' e
       Apply e1 e2 -> return $ render'' e1 <> " " <> render'' e2
       Tuple es -> return $ "(" <> (T.intercalate "," . map render) es <> ")"
@@ -86,8 +90,8 @@ instance Render Expr where
         if' <- line $ "if " <> render c
         t' <- render' t
         join [if', t']
-      While e blk -> do
-        while <- line $ "while " <> render e
+      While ex blk -> do
+        while <- line $ "while " <> render ex
         blk' <- render' blk
         join [while, blk']
       For pat expr blk -> do
@@ -149,14 +153,16 @@ numT = tConst "Num"
 strT = tConst "Str"
 unitT = tTuple []
 
-arrayOf, listOf, maybeT :: Type -> Type
+arrayOf, listOf, setOf, maybeT :: Type -> Type
 arrayOf = TApply (TConst "[]")
 listOf = TApply (TConst "[!]")
+setOf = TApply (TConst "{s}")
 maybeT = TApply (TConst "Maybe")
 tTuple :: [Type] -> Type
 tTuple = TTuple
 tConst :: Name -> Type
 tConst = TConst
+mapOf (key, val) = TApply (TApply (TConst "{}") key) val
 
 (==>) :: Type -> Type -> Type
 (==>) = TFunction
