@@ -1,5 +1,5 @@
 {-# LANGUAGE LambdaCase #-}
-module Tests (Test(..), runTests) where
+module Tests (Test(..), runTests, runTestsWith) where
 
 import Common hiding (line, addError, Name)
 import System.IO
@@ -39,9 +39,15 @@ defaultState = TesterState { indentLevel = 0
 runTests :: (Eq result, Show input, Show result, Show error) =>
             (input -> Either error result) ->
             [Test input result] ->
-            IO ()
-runTests f ts = do runStateT (runTests' f ts >> report) defaultState
-                   return ()
+            IO (TesterState)
+runTests f ts = fmap snd $ runStateT (runTests' f ts >> report) defaultState
+
+runTestsWith :: (Eq result, Show input, Show result, Show error) =>
+                (input -> Either error result) ->
+                [Test input result] ->
+                TesterState ->
+                IO (TesterState)
+runTestsWith f ts = fmap snd . runStateT (runTests' f ts >> report)
 
 runTests' :: (Eq result, Show input, Show result, Show error) =>
             (input -> Either error result) ->

@@ -181,27 +181,27 @@ typingTests = TestGroup "Typed expressions"
   , test "typing with type tuple" "foo: (Foo, Bar)" (tTuple [fooT, barT])
   , Test "a typed tuple" "(foo: Foo, bar: Bar)"
          [Tuple [Typed foo fooT, Typed bar barT]]
-  , test "a multifunc" "foo: multi {Foo => Bar}" (multi1 fooT barT)
+  , test "a multifunc" "foo: {m Foo -> Bar}" (multi1 fooT barT)
   , test "a multifunc with more than one"
-         "foo: multi {Foo => Bar, Baz => Qux}"
+         "foo: {m Foo -> Bar, Baz -> Qux}"
          (multi [(fooT, barT), (bazT, quxT)])
   , test "a multifunc containing functions"
-         "foo: multi {Foo -> Bar => Baz}"
+         "foo: {m (Foo -> Bar) -> Baz}"
          (multi1 (fooT ==> barT) bazT)
   , test "a multifunc containing variables"
-         "foo: multi {(a -> b, a) => b}"
-         (multi1 (tTuple [(a ==> b), a]) b)
-  , col "vector" "[" "]" arrayOf
-  , col "list" "[!" "]" listOf
-  , col "set" "{" "}" setOf
-  , col "map1" "{" " => Num}" (\t -> mapOf (t, numT))
-  , col "map2" "{Num =>" "}" (\t -> mapOf (numT, t))
+         "foo: {m (a -> b, a) -> b, Num -> Num}"
+         (multi [((tTuple [(a ==> b), a]), b), (numT, numT)])
+  , collection "vector" "[" "]" arrayOf
+  , collection "list" "[!" "]" listOf
+  , collection "set" "{" "}" setOf
+  , collection "map1" "{" " => Num}" (\t -> mapOf (t, numT))
+  , collection "map2" "{Num =>" "}" (\t -> mapOf (numT, t))
   ]
   where multi = TMultiFunc . M.fromList
         multi1 a b = multi [(a, b)]
         [a, b] = map TRigidVar ["a", "b"]
         test name input typ = Test name input [Typed foo typ]
-        col name open close f = TestGroup name tests where
+        collection name open close f = TestGroup name tests where
           encl s = "foo: " ++ open ++ s ++ close
           tests = [ test "of variable" (encl "a") (f a)
                   , test "of number" (encl "Num")  (f numT)

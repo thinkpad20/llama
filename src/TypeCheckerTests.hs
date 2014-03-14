@@ -18,8 +18,6 @@ basicTests = TestGroup "Basic expressions" [
   , Test "variable definitions" "a = 3" numT
   , Test "variables" "a = 3; a" numT
   , Test "blocks" "a = 0; 1; \"hello\"; 2; False; a" numT
-  , Test "lambdas" "x: Num => x" (numT ==> numT)
-  , Test "lambdas 2" "x: Str => x" (strT ==> strT)
   , TestGroup "if expressions" [
       Test "basic" "if False then 1 else 2" numT
     , Test "variable" "a = False; if a then 1 else 2" numT
@@ -33,7 +31,41 @@ basicTests = TestGroup "Basic expressions" [
            numT
   ]
   , TestGroup "binary operators" [
-
+      TestGroup "numbers" [
+        Test "plus" "1 + 2" numT
+      , Test "minus" "1 - 2" numT
+      , Test "times" "1 * 2" numT
+      , Test "divide" "1 / 2" numT
+      , Test "equal" "1 == 2" boolT
+      , Test "not equal" "1 != 2" boolT
+      , Test "greater" "1 > 2" boolT
+      , Test "less" "1 < 2" boolT
+      , Test "gequal" "1 >= 2" boolT
+      , Test "lequal" "1 <= 2" boolT
+      , Test "in assignment" "foo = 1 <= 2; foo" boolT
+      , Test "in a lambda" "foo = x: Num => y: Num => x + y; foo"
+             (numT ==> numT ==> numT)
+      ]
+    , TestGroup "strings" [
+        Test "plus" "\"hello\" + \"world\"" strT
+      , Test "times number" "\"hello\" * 10" strT
+      , Test "equal" "\"hello\" == \"hello\"" boolT
+      , Test "not equal" "\"hello\" != \"goodbye\"" boolT
+    ]
+  ]
+  , TestGroup "vectors" [
+      Test "basic" "[1,2,3]" (arrayOf numT)
+    , Test "extending" "[1,2,3] + [4,5]" (arrayOf numT)
+    , Test "appending" "[1,2,3] + 4" (arrayOf numT)
+  ]
+  , TestGroup "functions" [
+      Test "lambdas" "x: Num => x" (numT ==> numT)
+    , Test "lambdas 2" "x: Str => x" (strT ==> strT)
+    , Test "lambdas 3" "x: Str => y: Num => y" (strT ==> numT ==> numT)
+    , Test "unary op" "foo (x: Bool) = !x; foo" (boolT ==> boolT)
+    , Test "unary op 2" "foo (x: Num) = x !; foo" (numT ==> numT)
+    , Test "lambda with tuple" "x: (Str, Str) => x"
+           (tTuple [strT, strT] ==> tTuple [strT, strT])
   ]
   ]
 
@@ -66,9 +98,27 @@ unifyTests1 = TestGroup "Basic unification" [
          [("a", TConst "Maybe")]
   , subs "variables in applied types 3" ("a b", "Maybe Num")
          [("a", TConst "Maybe"), ("b", numT)]
+  , subs "multi (m, f) basic"
+         ("{m Num -> Num}", "Num -> Num") []
+  , subs "multi (m, f) basic 2"
+         ("{m Num -> Num, Str -> Num}", "Num -> Num") []
+  , subs "multi (m, f) with variable"
+         ("{m a -> Num, Str -> Num}", "Num -> Num") [("a", numT)]
+  , subs "multi (m, f) with two variables"
+         ("{m a -> b, Str -> Num}", "Num -> Num")
+         [("a", numT), ("b", numT)]
+  , subs "multi (m, f) with applied type"
+         ("{m Maybe Num -> Num, Str -> Num}", "Maybe Num -> Num") []
+  , subs "multi (m, f) with applied type 2"
+         ("{m Maybe Num -> Num, Str -> Num}", "Maybe a -> Num") [("a", numT)]
+  , subs "multi (m, f) with applied type 3"
+         ("{m Maybe Num -> b, Str -> Num}", "Maybe a -> Str")
+         [("a", numT), ("b", strT)]
+  , subs "multi (m, f) should pick most specific"
+         ("{m a -> b, Str -> Num}", "Str -> Num") []
   ]
   where
-    subs name inputs subs' = Test name inputs (length subs', M.fromList subs')
+    subs name inputs subs' = Test name inputs (M.fromList subs')
 
 unifyFailTests = TestGroup "Invalid unifications" [
     ShouldError "non-matching constants" ("Num", "Str")
@@ -82,10 +132,13 @@ unifyFailTests = TestGroup "Invalid unifications" [
   , ShouldError "non-matching variable function" ("Str -> a", "Num -> Str")
   , ShouldError "non-matching variable function 2" ("a -> Num", "Num -> Str")
   , ShouldError "non-matching variable function 3" ("a -> b -> Str", "Num -> Str")
+  , ShouldError "multi (m, f) no matches"
+          ("{m Foo -> Bar, Str -> Num}", "Num -> Num")
+  , ShouldError "multi (m, f) no matches 2"
+          ("{m Num -> Num, Str -> Num}", "Num -> Num -> Num")
+  , ShouldError "multi (m, f) ambiguous"
+          ("{m Num -> Num, Str -> Num}", "a -> Num")
   ]
 
-typingTests = runTests typeIt [basicTests]
-unifyTests = runTests unifyIt [unifyTests1, unifyFailTests]
-
-tests = do typingTests
-           unifyTests
+tests = do res1 <- runTests typeIt [basicTests]
+           runTestsWith unifyIt [unifyTests1, unifyFailTests] res1

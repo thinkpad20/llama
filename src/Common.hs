@@ -10,17 +10,19 @@ module Common ( (!), (<!>), (<$>), (<$), (<*), (*>), (<*>), pure
               , intercalate, Identity(..), runState, evalState, (>>==)
               , trim, line, throwError, catchError, (~>), (<$$), Render(..)
               , isInt, ErrorList(..), throwError1, throwErrorC, addError
-              , addError', forever, isSpace)  where
+              , addError', forever, isSpace, catMaybes, sortWith)  where
 
 import Control.Monad
 import Control.Monad.State
 import Control.Monad.Error
 import Data.Monoid
+import GHC.Exts (sortWith)
 import qualified Data.Text as T
 import Control.Applicative hiding (many, (<|>))
 import Data.List (intercalate)
 import Control.Monad.Identity
 import Data.Char (isSpace)
+import Data.Maybe (catMaybes)
 import qualified Data.Map as M
 import qualified Data.Set as S
 

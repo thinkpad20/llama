@@ -131,12 +131,17 @@ instance Render Type where
     TApply a b -> render a <> " " <> render' b
     TFunction t1 t2 -> render'' t1 <> " -> " <> render t2
     TMut typ -> "mut " <> render typ
+    TMultiFunc tset -> "{m " <> renderSet tset <> "}"
     where render' typ = case typ of
             TApply _ _ -> "(" <> render typ <> ")"
             _ -> render typ
           render'' typ = case typ of
             TFunction _ _ -> "(" <> render typ <> ")"
             _ -> render typ
+          renderSet tset =
+            let pairs = M.toList tset
+                rPair (from, to) = render from <> " -> " <> render to
+            in T.intercalate ", " (map rPair pairs)
 
 symChars :: String
 symChars = "><=+-*/^~!%@&$:.#|?"
@@ -147,10 +152,11 @@ isSymbol = T.all (`elem` symChars)
 binary :: Name -> Expr -> Expr -> Expr
 binary name e1 e2 = Apply (Var name) $ Tuple [e1, e2]
 
-boolT, numT, strT, unitT :: Type
+boolT, numT, strT, charT, unitT :: Type
 boolT = tConst "Bool"
 numT = tConst "Num"
 strT = tConst "Str"
+charT = tConst "Char"
 unitT = tTuple []
 
 arrayOf, listOf, setOf, maybeT :: Type -> Type

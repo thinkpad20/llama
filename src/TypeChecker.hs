@@ -11,29 +11,24 @@ module TypeChecker ( Typable(..), Typing, TypeTable, TypingState(..)
 import Prelude hiding (lookup, log)
 import System.IO.Unsafe
 import Control.Monad.Error.Class
-import Common
-import AST
-import Parser (grab, grabT)
 import qualified Data.Map as M
 import qualified Data.Set as S
 import qualified Data.Text as T
 
+import Common
+import AST
+import Parser (grab, grabT)
+
 class Typable a where
   typeOf :: a -> Typing Type
 
-data TypeRecord = Type Type | TypeSet TypeSet deriving (Show)
-type TypeSet = S.Set Type
-type TypeTable = M.Map Name TypeRecord
+type TypeTable = M.Map Name Type
 type NameSpace = [Name]
 data TypingState = TypingState { aliases :: M.Map Name Type
                                , nameSpace :: [Name]
                                , nameSpaceTable :: TypeTable
                                , freshName :: Name } deriving (Show)
 type Typing = ErrorT ErrorList (StateT TypingState IO)
-
-instance Render TypeRecord where
-  render (Type typ) = render typ
-  render (TypeSet ts) = "{" <> (T.intercalate ", " $ map render $ S.elems ts) <> "}"
 
 instance Render TypingState where
   render state =
@@ -68,44 +63,15 @@ typeOfArrayLiteral typeOfFunc arr = case arr of
 typeOfApply typeOf func arg = do
   log' ["determining the type of ", render func, " applied to ", render arg]
   argT <- typeOf arg
-  case func of
-    Var name -> do
-      tList <- lookupFuncs name
-      log' ["function is a name, '", name, "' lookup returned `", render tList, "'"]
-      when (length tList == 0) $ throwErrorC ["`", name, "' is not defined in scope"]
-      getFirstCompatible argT name tList
-    _ -> do
-      log' ["not a name, but `", T.pack $ show func, "'"]
-      typeOf func >>= \case
-        TFunction fromT returnT -> do
-          unify argT fromT `catchError` uniError argT fromT
-          refine returnT
-        -- here we can check if we can use the type "as a function"
-        funcT -> typeOf (Apply (Var "@call") (Tuple [func, arg]))
-          `catchError` \_ ->
-            throwErrorC ["No way to call the expression `", render func
-                        , "' as a function with argument `", render argT
-                        , "'. Define `@call` if desired."]
-  where uniError typ typ' = addError' ["`", render func, "' takes `"
-                                      , render typ', "' as its argument, but `"
-                                      , render arg, "' has the type `"
-                                      , render typ, "'"]
+  retT <- unusedTypeVar
+  log' ["not a name, but `", T.pack $ show func, "'"]
+  funcT <- typeOf func
+  unifyAdd funcT (argT ==> retT) `catchError` uniError
+  refine retT
+  where uniError = addError' ["When attempting to apply `", render func
+                             , " to argument ", render arg]
 
-getFirstCompatible argT funcName tList = go tList where
-  go :: [Type] -> Typing Type
-  go list = case list of
-    (TFunction fromT toT):rest -> do
-      log' ["Trying to unify `", render argT, "' with `", render fromT, "'"]
-      (unify argT fromT >> refine toT) `catchError` \_ -> go rest
-    funcT@(TPolyVar _):_ -> do
-      returnT <- unusedTypeVar
-      unify funcT (TFunction argT returnT)
-      refine returnT
-    typ:rest -> throwErrorC ["Identifier `", funcName, "' has non-function "
-                            , "type `", render typ, "'"]
-    [] -> throwErrorC ["Function `", funcName, "' can accept types "
-                      , render tList, " but none of these match the type of "
-                      , "its argument `", render argT, "'"]
+unifyAdd t1 t2 = unify t1 t2 >>= mapM_ (uncurry addTypeAlias) . M.toList
 
 addTypeAlias name typ =
   modify $ \s -> s { aliases = M.insert name typ (aliases s)}
@@ -120,13 +86,10 @@ instance Typable Expr where
       String _ -> return strT
       TypeDef name typ -> addTypeAlias name typ >> return unitT
       Block blk -> pushNameSpace "%b" *> typeOf blk <* popNameSpace
-      Var name -> do
-        --env <- get
-        --log' ["instantiating expr var '", name, "' in environment ", render env]
-        lookupAndInstantiate name >>= check
+      Var name -> lookupAndInstantiate name
       Constructor name -> do
         log' ["instantiating expr constructor '", name, "'"]
-        lookupAndInstantiate name >>= check
+        lookupAndInstantiate name
       Array arr@(ArrayLiteral _) -> typeOfArrayLiteral typeOf arr
       Tuple vals -> tTuple <$> mapM typeOf vals
       Mut expr -> TMut <$> typeOf expr
@@ -138,15 +101,18 @@ instance Typable Expr where
       Apply a b -> typeOfApply typeOf a b
       If' cond res -> do
         condT <- typeOf cond
-        unify condT boolT `catchError` condError
+        unifyAdd condT boolT `catchError` condError
         maybeT <$> typeOf res
       If cond tBranch fBranch -> do
-        cType <- typeOf cond
-        cType `unify` boolT `catchError` condError
-        tType <- typeOf tBranch
-        fType <- typeOf fBranch
-        tType `unify` fType `catchError` branchError
-        refine tType
+        -- Type the condition, make sure it's a Bool
+        condType <- typeOf cond
+        condType `unifyAdd` boolT `catchError` condError
+        -- Type the true and false branches, make sure they're the same type
+        trueType <- typeOf tBranch
+        falseType <- typeOf fBranch
+        trueType `unifyAdd` falseType `catchError` branchError
+        -- Return the true branch's refined type (same as false's)
+        refine trueType
       Define name expr ->
         lookup1 name >>= \case
           -- If it's not defined in this scope, we proceed forward.
@@ -205,12 +171,6 @@ instance Typable (Expr, Block) where
     argType <- litTypeOf arg
     TFunction argType <$> typeOf block
 
-check :: TypeRecord -> Typing Type
-check (Type typ) = return typ
-check (TypeSet ts) = throwErrorC [ "Error: computed an ambiguous type: it "
-                                 , "could be any of ", render ts, ". Each "
-                                 , "expression must have a single type."]
-
 -- | @litType@ is for expressions from which a "literal type" can be
 -- determined; that is, context-free. For example @[1,2,3]@ is literally
 -- @[Number]@ regardless of context, and @True@ is always @Bool@. Arguments
@@ -227,7 +187,7 @@ litTypeOf expr = case expr of
   Array arr@(ArrayLiteral _) -> typeOfArrayLiteral litTypeOf arr
   Constructor name -> do
     log' ["instantiating constructor ", name]
-    lookupAndInstantiate name >>= check
+    lookupAndInstantiate name
   Apply a b -> typeOfApply litTypeOf a b
   _ -> throwErrorC [ "`", render expr, "' does not have a literal type. "
                    , "Please provide the type of the expression."]
@@ -259,7 +219,7 @@ popNameSpaceWith name typ = popNameSpace *> record name typ
 record :: Name -> Type -> Typing Type
 record name typ = do
   nsName <- fullName name
-  nsTable <- M.insert nsName (Type typ) <$> nameSpaceTable <$> get
+  nsTable <- M.insert nsName typ <$> nameSpaceTable <$> get
   modify $ \s -> s { nameSpaceTable = nsTable }
   return typ
 
@@ -282,7 +242,7 @@ getNameSpace :: Typing [Name]
 getNameSpace = get <!> nameSpace
 getTable = get <!> nameSpaceTable
 
-lookup, lookup1 :: Name -> Typing (Maybe TypeRecord)
+lookup, lookup1 :: Name -> Typing (Maybe Type)
 -- | local lookup, searches head of table list
 lookup1 name = do
   fullName <- getNameSpace <!> (name :) <!> render
@@ -314,51 +274,80 @@ lookupFuncs funcName = do
 
     check :: TypeTable -> Name -> Typing [Type]
     check tbl name = case M.lookup name tbl of
-      Just (Type t@(TFunction from to)) -> return [t]
-      Just (Type t@(TRigidVar name))    -> return [t]
-      Just (Type t@(TPolyVar name))     -> return [t]
-      Just (Type t) -> throwErrorC ["Identifier `", name, "' maps to non-"
-                                   , "function type `", render t, "'"]
-      Just (TypeSet ts) -> return $ S.elems ts
+      Just (t@(TFunction from to)) -> return [t]
+      Just (t@(TRigidVar name))    -> return [t]
+      Just (t@(TPolyVar name))     -> return [t]
+      Just t -> throwErrorC ["Identifier `", name, "' maps to non-"
+                            , "function type `", render t, "'"]
       Nothing -> return mempty
 
-lookupAndInstantiate :: Name -> Typing TypeRecord
+lookupAndInstantiate :: Name -> Typing Type
 lookupAndInstantiate name = lookup name >>= \case
-  Just (Type typ) -> Type <$> instantiate typ
-  Just (TypeSet ts) -> (TypeSet . S.fromList) <$> mapM instantiate (S.toList ts)
+  Just typ -> instantiate typ
   Nothing -> throwErrorC ["Variable '", name, "' not defined in scope"]
 
 -- | adds to the type aliases map any substitutions needed to make
 -- its two arguments equivalent. Throws an error if such a substitution
 -- is impossible.
 -- TODO: throw an error if there's a cycle
-unify :: Type -> Type -> Typing (Int, M.Map Name Type)
-unify type1 type2 = snd <$> runStateT (go (type1, type2)) (0, mempty) where
-  go :: (Type, Type) -> StateT (Int, M.Map Name Type) Typing ()
+unify :: Type -> Type -> Typing (M.Map Name Type)
+unify type1 type2 = snd <$> runStateT (go (type1, type2)) mempty where
+  go :: (Type, Type) -> StateT (M.Map Name Type) Typing ()
   go types = do
     lift $ log' ["Unifying `", render type1, "' with `", render type2, "'"]
     case types of
       (a, b) | a == b  -> return ()
       (TMut mtyp, typ) -> go (mtyp, typ)
       (typ, TMut mtyp) -> go (mtyp, typ)
-      (TPolyVar name, typ) -> bump >> alias name typ
-      (typ, TPolyVar name) -> bump >> alias name typ
+      (TPolyVar name, typ) -> alias name typ
+      (typ, TPolyVar name) -> alias name typ
       (TConst name, TConst name') | name == name' -> return ()
       (TTuple ts, TTuple ts') | length ts == length ts' -> mapM_ go $ zip ts ts'
       (TApply a b, TApply a' b') -> go (a, a') >> go (b, b')
       (TFunction a b, TFunction a' b') -> do
         go (a, a') `catchError'` argError
         go (b, b') `catchError'` returnError
-      (type1, type2) -> do
-        --log' ["Incompatible types: `", show type1, "' and `", show type2, "'"]
-        throwErrorC ["Incompatible types: `", render type1, "' and `", render type2, "'"]
-  bump = modify $ \(n, s) -> (n + 1, s)
-  alias name typ = modify $ \(n, s) -> (n, M.insert name typ s)
+      (TMultiFunc set, TFunction from to) -> do
+        -- Go through the multifunction's argument types. If we can
+        -- unify @from@ with an argument type, record its subs and
+        -- pair it with the @to@ type that argument type maps to.
+        -- Valid choices get wrapped in a @Just@, otherwise @Nothing@.
+        subsTos <- forM (M.toList set) $ \(from', to') -> do
+          (lift (unify from' from) >>= \s -> return (Just (s, to')))
+                  `catchError` \_ -> return Nothing
+        -- Filter out the @Nothing@ values and sort by smallest subs.
+        let valids = catMaybes subsTos ! sortWith (fst ~> M.size)
+        tryAll to valids
+      (type1, type2) -> incompatErr
+  tryAll :: Type -> [(M.Map Name Type, Type)] -> StateT (M.Map Name Type) Typing ()
+  tryAll to valids = case valids of
+    -- If there aren't any valids, it's incompatible.
+    [] -> lift incompatErr
+    -- If there's exactly one, try to unify @to@ with it after adding the subs.
+    [(subs, to')] -> addSubs subs >> lift (unify to' to) >>= addSubs
+    -- If the first two are of equal size, then it's ambiguous, an error.
+    (s1, _):(s2, _):_ | M.size s1 == M.size s2 -> lift $ ambiguousErr s1 s2
+    -- Otherwise, try to unify, and if it fails, move on to the next.
+    (subs, to'):rest -> do
+      savedSubs <- get
+      addSubs subs
+      (lift (unify to' to) >>= addSubs) `catchError` \_ ->
+        put savedSubs >> tryAll to rest
+
+  alias name typ = modify $ M.insert name typ
+  addSubs = modify . M.union
   argError = addError' ["When attempting to unify the argument types of `"
                        , render type1, "' and `", render type2, "'"]
   returnError = addError' ["When attempting to unify the return types of `"
                           , render type1, "' and `", render type2, "'"]
   catchError' = catchError
+  incompatErr =
+      throwErrorC ["Incompatible types: `", render type1, "' and `", render type2, "'"]
+  ambiguousErr t1 t2 = throwErrorC [
+      "Ambiguous application of `", render type1, "' to `", render type2, "'. "
+    , "Multiple unification choices are equally valid: could be `", render t1
+    , "', or `", render t2, "'"
+    ]
 
 -- | takes a type and replaces any type variables in the type with unused
 -- variables. Note: in Hindley-Milner, there are two distinct types, Type and
@@ -382,6 +371,9 @@ instantiate typ = fst <$> runStateT (inst typ) mempty where
     TFunction a b -> TFunction <$$ inst a <*> inst b
     TTuple ts -> TTuple <$> mapM inst ts
     TMut typ -> TMut <$> inst typ
+    TMultiFunc tset -> do
+      list' <- forM (M.toList tset) $ \(f, t) -> (,) <$$ inst f <*> inst t
+      return $ TMultiFunc (M.fromList list')
 
 -- | the opposite of instantiate; it "polymorphizes" the rigid type variables
 -- so that they can be polymorphic in future uses.
@@ -422,27 +414,46 @@ defaultTypingState = TypingState { aliases = mempty
 fullName :: Name -> Typing T.Text
 fullName name = get <!> nameSpace <!> (name:) <!> render
 
-builtIns = M.fromList [ ("+", nnnOrSss), ("-", nnn), ("*", nnn), ("/", nnn)
+builtIns = M.fromList [ ("+", join [nnn, sss, css, scs, vvv, avv, vav])
+                      , ("-", nnn), ("/", nnn)
+                      , ("*", nnn `or` sns)
                       , ("%", nnn), (">", nnb), ("<", nnb), (">=", nnb)
-                      , ("<=", nnb), ("==", nnbOrSsb), ("!=", nnbOrSsb)
-                      , ("<|", Type $ tup ab a b), ("|>", Type $ tup a ab b)
-                      , ("~>", Type $ tup ab bc ac), ("<~", Type $ tup bc ab ac)
-                      , ("print", Type $ a ==> unitT)
-                      , ("Just", Type $ a ==> maybeT a)
-                      , ("Nothing", Type $ maybeT a)
-                      , ("@call", nnnOrSss), ("True", Type $ tConst "Bool")
-                      , ("False", Type $ tConst "Bool") ]
+                      , ("<=", nnb), ("==", nnb `or` ssb), ("!=", nnb `or` ssb)
+                      , ("<|", tup ab a b), ("|>", tup a ab b)
+                      , ("~>", tup ab bc ac), ("<~", tup bc ab ac)
+                      , ("!_", boolT ==> boolT), ("_!", numT ==> numT)
+                      , ("print", a ==> unitT)
+                      , ("Just", a ==> maybeT a)
+                      , ("Nothing", maybeT a)
+                      , ("@call", nnn `or` sss `or` vna)
+                      , ("True", tConst "Bool")
+                      , ("False", tConst "Bool") ]
   where tup a b c = tTuple [a, b] ==> c
-        nnn = Type $ tup numT numT numT
-        sss = Type $ tup strT strT strT
-        nnnOrSss = TypeSet $ S.fromList [ tup strT strT strT
-                                        , tup numT numT numT ]
-        nnb = Type $ tup numT numT boolT
-        ssb = Type $ tup strT strT boolT
-        nnbOrSsb = TypeSet $ S.fromList [ tup strT strT boolT
-                                        , tup numT numT boolT ]
+        tup' a b c = (tTuple [a, b], c)
+        nnn = tup numT numT numT
+        sss = tup strT strT strT
+        scs = tup strT charT strT
+        css = tup charT strT strT
+        sns = tup strT numT strT
+        vna = tup (arrayOf a) numT a
+        vvv = tup (arrayOf a) (arrayOf a) (arrayOf a)
+        vav = tup (arrayOf a) a (arrayOf a)
+        avv = tup a (arrayOf a) (arrayOf a)
+        nnnOrSss = TMultiFunc $ M.fromList [ tup' strT strT strT
+                                           , tup' numT numT numT ]
+        nnb = tup numT numT boolT
+        ssb = tup strT strT boolT
+        nnbOrSsb = TMultiFunc $ M.fromList [ tup' strT strT boolT
+                                           , tup' numT numT boolT ]
         [a, b, c] = TPolyVar <$> ["a", "b", "c"]
         (ab, bc, ac) = (a ==> b, b ==> c, a ==> c)
+        join ts = foldr1 or ts
+        TMultiFunc s `or` TMultiFunc s' = TMultiFunc $ M.union s s'
+        TMultiFunc s `or` TFunction from to = TMultiFunc $ M.insert from to s
+        TFunction from to `or` TMultiFunc s = TMultiFunc $ M.insert from to s
+        TFunction f1 t1 `or` TFunction f2 t2 =
+          TMultiFunc $ M.fromList [(f1, t1), (f2, t2)]
+        t1 `or` t2 = error $ "Invalid `or`s: " <> show t1 <> ", " <> show t2
 
 -- NOTE: using unsafePerformIO for testing purposes only. This will
 -- all be pure code in the end.
@@ -452,7 +463,7 @@ runTypingWith state a = unsafePerformIO $ runStateT (runErrorT $ typeOf a) state
 runTyping :: Typable a => a -> (Either ErrorList Type, TypingState)
 runTyping = runTypingWith defaultTypingState
 
-runUnify :: Type -> Type -> (Either ErrorList (Int, M.Map Name Type), TypingState)
+runUnify :: Type -> Type -> (Either ErrorList (M.Map Name Type), TypingState)
 runUnify type1 type2 =
   unsafePerformIO $ runStateT (runErrorT $ unify type1 type2) defaultTypingState
 
@@ -468,7 +479,7 @@ typeIt input = case grab input of
   Left err -> Left $ TE ["Parse error:\n" <> (T.pack $ show err)]
   Right block -> fst $ runTyping block
 
-unifyIt :: (String, String) -> Either ErrorList (Int, M.Map Name Type)
+unifyIt :: (String, String) -> Either ErrorList (M.Map Name Type)
 unifyIt (input1, input2) = do
   type1 <- grabT input1
   type2 <- grabT input2

@@ -77,7 +77,7 @@ pDouble = lexeme $ do
 pType :: Parser Type
 pType = choice [pMultiFunc, pTVector, pTList, pTMap, pTSet, pTFunction]
 pTTerm = choice [pTVar, pTConst, pTTuple]
-pTVar = TRigidVar <$> fmap T.pack (many1 lower) <* skip
+pTVar = varConstructor <$> fmap T.pack (many1 lower) <* skip
 pTConst = TConst <$> pIdent upper
 pTParens = schar '(' *> sepBy pType (schar ',') <* schar ')'
 pTTuple = pTParens >>= \case
@@ -96,13 +96,14 @@ pTMap = fmap mapOf $ try $ do
   schar '}'
   return (t1, t2)
 pMultiFunc = do
-  keyword "multi"
-  schar '{'
+  keyword "{m"
   fromTos <- sepBy1 pFromTo (schar ',')
   schar '}'
   return $ TMultiFunc $ M.fromList fromTos
-  where pFromTo = (,) <$$ pType <* exactSym "=>" <*> pType
-
+  where
+    pFromTo = pTFunction >>= \case
+      TFunction from to -> return (from, to)
+      _ -> unexpected "Didn't parse a function type in MultiFunction."
 
 pTypeDef :: Parser Expr
 pTypeDef =
@@ -368,3 +369,5 @@ grabT input = case parse pType input of
 grab' input = case grab input of
   Right statements -> map show statements ! intercalate "\n"
   Left err -> error $ show err
+
+varConstructor = TPolyVar

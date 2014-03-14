@@ -19,4 +19,5 @@ desugarBeforeAfter expr = case expr of
     e1' <- rec e1
     e2' <- rec e2
     return $ Block [e2', e1']
+
   where rec = desugarBeforeAfter
