@@ -1,8 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
-module TypeCheckerTests (tests) where
+module TypeCheckerTests (main) where
 
 import qualified Data.Map as M
-import qualified Data.Text as T
 
 import Common
 import Tests
@@ -54,9 +53,13 @@ basicTests = TestGroup "Basic expressions" [
     ]
   ]
   , TestGroup "vectors" [
-      Test "basic" "[1,2,3]" (arrayOf numT)
+      Test "empty" "[]"                  (arrayOf (TPolyVar "a0"))
+    , Test "basic" "[1,2,3]"             (arrayOf numT)
     , Test "extending" "[1,2,3] + [4,5]" (arrayOf numT)
-    , Test "appending" "[1,2,3] + 4" (arrayOf numT)
+    , Test "appending" "[1,2,3] + 4"     (arrayOf numT)
+    , Test "appending 2" "[] + 4"        (arrayOf numT)
+    , Test "prepending" "4 + [1,2,3]"    (arrayOf numT)
+    , Test "prepending 2" "4 + []"       (arrayOf numT)
   ]
   , TestGroup "functions" [
       Test "lambdas" "x: Num => x" (numT ==> numT)
@@ -67,6 +70,30 @@ basicTests = TestGroup "Basic expressions" [
     , Test "lambda with tuple" "x: (Str, Str) => x"
            (tTuple [strT, strT] ==> tTuple [strT, strT])
   ]
+  ]
+
+declarations = TestGroup "Multifunctions" [
+    Test "can extend a function definition"
+         ("foo (n: Num) = n + 1; " <>
+          "foo (s: Str) &= s + \"!\"; foo")
+         (TMultiFunc (M.fromList [(numT, numT), (strT, strT)]))
+  , Test "can extend a function definition with tuple"
+         ("foo (n: Num) = n + 1; " <>
+          "foo (s: Str) &= s + \"!\"; " <>
+          "foo (s: Str, n: Num) &= s + \"!\"; foo")
+         (TMultiFunc (M.fromList [ (numT, numT)
+                                 , (strT, strT)
+                                 , (tTuple [strT, numT], strT)]))
+  , Test "can extend a binary function definition"
+       "(n: Num) / (s: Str) &= n + 1; _/_"
+       (TMultiFunc (M.fromList [ (tTuple [numT, numT], numT)
+                               , (tTuple [numT, strT], numT)]))
+  , Test "can use a previous definition inside an extension"
+       ("foo (n: Num) = n + 1; " <>
+        "foo (s: Str) &= (s, foo 3); foo")
+        (TMultiFunc (M.fromList [ (numT, numT)
+                                 , (strT, tTuple [strT, numT])]))
+
   ]
 
 unifyTests1 = TestGroup "Basic unification" [
@@ -124,8 +151,12 @@ unifyFailTests = TestGroup "Invalid unifications" [
     ShouldError "non-matching constants" ("Num", "Str")
   , ShouldError "non-matching constant tuples" ("Num", "(Str, Num)")
   , ShouldError "non-matching constant tuples 2" ("(Num, Str)", "(Str, Num)")
+  , ShouldError "non-matching constant tuples 3"
+                ("([Num], Num)", "([Num], [Num])")
   , ShouldError "non-matching constant function" ("Num", "Str -> Num")
   , ShouldError "non-matching constant function 2" ("Num -> Str", "Str -> Num")
+  , ShouldError "non-matching constant function 3"
+                ("([Num], Num) -> [Num]", "([Num] [Num]) -> Num")
   , ShouldError "non-matching variable tuples" ("(Str, a)", "(Num, Str)")
   , ShouldError "non-matching variable tuples 2" ("(a, Num)", "(Num, Str)")
   , ShouldError "non-matching variable tuples 3" ("(a, b, Str)", "(Num, Str)")
@@ -138,7 +169,9 @@ unifyFailTests = TestGroup "Invalid unifications" [
           ("{m Num -> Num, Str -> Num}", "Num -> Num -> Num")
   , ShouldError "multi (m, f) ambiguous"
           ("{m Num -> Num, Str -> Num}", "a -> Num")
+  , ShouldError "multi (m, f) ambiguous"
+          ("{m [a] -> b, a -> b, Str -> Num}", "[Str] -> Num")
   ]
 
-tests = do res1 <- runTests typeIt [basicTests]
-           runTestsWith unifyIt [unifyTests1, unifyFailTests] res1
+main = runAllTests [ run typeIt [basicTests, declarations]
+                   , run unifyIt [unifyTests1, unifyFailTests]]

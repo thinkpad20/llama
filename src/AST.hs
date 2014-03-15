@@ -57,6 +57,15 @@ data ArrayLiteral = ArrayLiteral ![Expr]
 
 type Block = [Expr]
 
+instance Monoid Type where
+  mempty = TMultiFunc mempty
+  TMultiFunc s `mappend` TMultiFunc s' = TMultiFunc $ M.union s s'
+  TMultiFunc s `mappend` TFunction from to = TMultiFunc $ M.insert from to s
+  TFunction from to `mappend` TMultiFunc s = TMultiFunc $ M.insert from to s
+  TFunction f1 t1 `mappend` TFunction f2 t2 =
+    TMultiFunc $ M.fromList [(f1, t1), (f2, t2)]
+  t1 `mappend` t2 = error $ "Invalid `or`s: " <> show t1 <> ", " <> show t2
+
 instance Render Expr where
   render e = evalState (render' e) 0 where
     render' :: Expr -> State Int T.Text
@@ -123,7 +132,7 @@ instance Render Block where
 instance Render Type where
   render t = case t of
     TRigidVar name -> name
-    TPolyVar name -> "(some " <> name <> ")"
+    TPolyVar name -> {-"*" <> -} name {-<> "*"-}
     TConst name -> name
     TTuple ts -> "(" <> T.intercalate ", " (map render ts) <> ")"
     TApply (TConst "[]") typ -> "[" <> render typ <> "]"
@@ -131,7 +140,7 @@ instance Render Type where
     TApply a b -> render a <> " " <> render' b
     TFunction t1 t2 -> render'' t1 <> " -> " <> render t2
     TMut typ -> "mut " <> render typ
-    TMultiFunc tset -> "{m " <> renderSet tset <> "}"
+    TMultiFunc tset -> "{" <> renderSet tset <> "}"
     where render' typ = case typ of
             TApply _ _ -> "(" <> render typ <> ")"
             _ -> render typ

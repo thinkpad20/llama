@@ -61,10 +61,8 @@ typeOfArrayLiteral typeOfFunc arr = case arr of
 -- when looking for a literal type, so we provide which typeOf
 -- function to apply as an argument to typeOfApply
 typeOfApply typeOf func arg = do
-  log' ["determining the type of ", render func, " applied to ", render arg]
   argT <- typeOf arg
   retT <- unusedTypeVar
-  log' ["not a name, but `", T.pack $ show func, "'"]
   funcT <- typeOf func
   unifyAdd funcT (argT ==> retT) `catchError` uniError
   refine retT
@@ -87,9 +85,7 @@ instance Typable Expr where
       TypeDef name typ -> addTypeAlias name typ >> return unitT
       Block blk -> pushNameSpace "%b" *> typeOf blk <* popNameSpace
       Var name -> lookupAndInstantiate name
-      Constructor name -> do
-        log' ["instantiating expr constructor '", name, "'"]
-        lookupAndInstantiate name
+      Constructor name -> lookupAndInstantiate name
       Array arr@(ArrayLiteral _) -> typeOfArrayLiteral typeOf arr
       Tuple vals -> tTuple <$> mapM typeOf vals
       Mut expr -> TMut <$> typeOf expr
@@ -127,6 +123,14 @@ instance Typable Expr where
             unify var' result `catchError` definitionError name
             refine result >>= record name
           Just typ -> scopeError name
+      Extend name expr@(Lambda arg body) ->
+        lookup name >>= \case
+          -- If it's not defined in this scope, we proceed forward.
+          Nothing -> notInScopeError name
+          Just f@(TFunction from to) -> extend name f expr
+          Just mf@(TMultiFunc tset) -> extend name mf expr
+          Just _ -> notAFunctionError
+      Extend _ _ -> notAFunctionError
       Assign expr expr' -> do
         exprT <- typeOf expr
         -- check mutability of exprT here?
@@ -138,23 +142,6 @@ instance Typable Expr where
         cType <- typeOf cond
         cType `unify` boolT `catchError` condError
         maybeT <$> typeOf block <* popNameSpace
-      For expr container block -> do
-        pushNameSpace "%for"
-        -- need to make sure container contains things...
-        contT <- typeOf container
-        -- we probably want to do this via traits instead of this, but eh...
-        case (expr, contT) of
-          (Var name, TApply contT itemT) -> do
-            record name itemT
-            result <- typeOf block
-            popNameSpaceWith name result
-          (Typed (Var name) typ, TApply contT itemT) -> do
-            unify typ itemT `catchError` itemError name
-            refine itemT >>= record name
-            result <- typeOf block
-            popNameSpaceWith name result
-          (_, typ) -> throwErrorC ["Non-container type `", render typ
-                                  , "' used in a for loop"]
       Return expr -> typeOf expr
       _ -> error $ T.unpack $ "we can't handle expression `" <> render expr <> "'"
     err = addError' ["When typing the expression `", render expr, "'"]
@@ -165,6 +152,29 @@ instance Typable Expr where
     itemError name =
       addError' ["When unifying declared type of iterating variable '", name
                 , "' with what its container contains"]
+    notAFunctionError =
+      throwErrorC [ "Only functions' definitions can be extended, and "
+                  , "only with other functions."]
+    notInScopeError name =
+      throwErrorC [ "Attempted to extend the definition of '", name, "', ",
+                    "but that name is not in scope."]
+    extend name origType expr = do
+      -- the expr must be a Lambda with declared argument type.
+      argT <- case expr of
+        Lambda arg body -> litTypeOf arg
+        _ -> notAFunctionError
+      -- We don't know what the return type is; initialize it as unknown.
+      retT <- unusedTypeVar
+      -- Add in this new definition to the current
+      record name (origType <> (argT ==> retT))
+      result <- pushNameSpace name *> typeOf expr <* popNameSpace
+      -- TODO: Make sure the types unify.
+      typ <- refine result
+      record name (origType <> typ)
+      case typ of
+        TFunction _ _ -> record name (origType <> typ)
+        TMultiFunc  _ -> record name (origType <> typ)
+        _ -> notAFunctionError
 
 instance Typable (Expr, Block) where
   typeOf (arg, block) = do
@@ -294,6 +304,7 @@ unify :: Type -> Type -> Typing (M.Map Name Type)
 unify type1 type2 = snd <$> runStateT (go (type1, type2)) mempty where
   go :: (Type, Type) -> StateT (M.Map Name Type) Typing ()
   go types = do
+    let (type1, type2) = types
     lift $ log' ["Unifying `", render type1, "' with `", render type2, "'"]
     case types of
       (a, b) | a == b  -> return ()
@@ -305,24 +316,33 @@ unify type1 type2 = snd <$> runStateT (go (type1, type2)) mempty where
       (TTuple ts, TTuple ts') | length ts == length ts' -> mapM_ go $ zip ts ts'
       (TApply a b, TApply a' b') -> go (a, a') >> go (b, b')
       (TFunction a b, TFunction a' b') -> do
+        lift $ log' ["a, a', b, b' are, ", T.intercalate ", " $ map render [a, a', b, b']]
         go (a, a') `catchError'` argError
+        lift $ log' ["bloops!"]
         go (b, b') `catchError'` returnError
+        lift $ log' ["poops!"]
       (TMultiFunc set, TFunction from to) -> do
+        lift $ log' ["poooooooooooooooooooooooooooooooooooooop"]
         -- Go through the multifunction's argument types. If we can
         -- unify @from@ with an argument type, record its subs and
         -- pair it with the @to@ type that argument type maps to.
         -- Valid choices get wrapped in a @Just@, otherwise @Nothing@.
         subsTos <- forM (M.toList set) $ \(from', to') -> do
+          lift $ log' ["trying to unify `", render from', "' with `", render from, "'"]
+          subs <- lift $ unify from' from `catchError` \_ -> do log' ["blaaaaaaaaaaaat"]
+                                                                return mempty
           (lift (unify from' from) >>= \s -> return (Just (s, to')))
                   `catchError` \_ -> return Nothing
         -- Filter out the @Nothing@ values and sort by smallest subs.
         let valids = catMaybes subsTos ! sortWith (fst ~> M.size)
-        tryAll to valids
+        lift $ log' $ map T.pack ["valids: ", show valids]
+        when (length valids == 0) $ noArgMatchErr from set
+        tryAll to valids `catchError` tryingErr valids
       (type1, type2) -> incompatErr
   tryAll :: Type -> [(M.Map Name Type, Type)] -> StateT (M.Map Name Type) Typing ()
   tryAll to valids = case valids of
     -- If there aren't any valids, it's incompatible.
-    [] -> lift incompatErr
+    [] -> lift noMatchErr
     -- If there's exactly one, try to unify @to@ with it after adding the subs.
     [(subs, to')] -> addSubs subs >> lift (unify to' to) >>= addSubs
     -- If the first two are of equal size, then it's ambiguous, an error.
@@ -334,7 +354,14 @@ unify type1 type2 = snd <$> runStateT (go (type1, type2)) mempty where
       (lift (unify to' to) >>= addSubs) `catchError` \_ ->
         put savedSubs >> tryAll to rest
 
-  alias name typ = modify $ M.insert name typ
+  alias name typ = M.lookup name <$> get >>= \case
+    Nothing -> modify $ M.insert name typ
+    Just (TPolyVar name') -> alias name' typ
+    Just typ' | typ == typ' -> return ()
+              | otherwise -> case typ of
+                TPolyVar name' -> alias name' (TRigidVar name)
+                _ -> throwError1 "Occurs check"
+
   addSubs = modify . M.union
   argError = addError' ["When attempting to unify the argument types of `"
                        , render type1, "' and `", render type2, "'"]
@@ -348,6 +375,13 @@ unify type1 type2 = snd <$> runStateT (go (type1, type2)) mempty where
     , "Multiple unification choices are equally valid: could be `", render t1
     , "', or `", render t2, "'"
     ]
+  tryingErr valids = addError' ["After finding potential matches ", r valids]
+  r valids = T.intercalate ", " $ map (fst ~> render) valids
+  noMatchErr = throwErrorC ["No types exist in multifunction's set which match ",
+                            render type2]
+  noArgMatchErr argT set =
+    throwErrorC ["No types in the set `", render (M.keys set), "' match the "
+                , "provided argument type `", render argT, "'"]
 
 -- | takes a type and replaces any type variables in the type with unused
 -- variables. Note: in Hindley-Milner, there are two distinct types, Type and

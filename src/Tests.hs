@@ -1,11 +1,10 @@
 {-# LANGUAGE LambdaCase #-}
-module Tests (Test(..), runTests, runTestsWith) where
+module Tests (Test(..), runTests, run, runAllTests) where
 
 import Common hiding (line, addError, Name)
 import System.IO
 import System.Console.ANSI
 
-import qualified Data.Map as M
 type Name = String
 data TestResult = TestSuccess [Name]
                 | TestFailure [Name] String String String
@@ -18,44 +17,66 @@ data TesterState = TesterState { indentLevel::Int
                                , successes::[TestResult]
                                , failures::[TestResult]
                                , errors::[TestResult]
-                               , expectedErrors::[TestResult]
-                               , names::M.Map Name Int}
+                               , expectedErrors::[TestResult]}
+
 type Tester = StateT TesterState IO
 data Test input result = Test Name input result
                        | SkipTest Name input result
+                       | TestOnly Name input result
                        | TestGroup Name [Test input result]
                        | SkipTestGroup Name [Test input result]
+                       | TestGroupOnly Name [Test input result]
                        | ShouldError Name input
+                       | ShouldErrorOnly Name input
+                       deriving (Show)
 
+defaultState :: TesterState
 defaultState = TesterState { indentLevel = 0
                            , spaceCount = 4
                            , successes = []
                            , errors = []
                            , failures = []
                            , groupNames = []
-                           , expectedErrors = []
-                           , names = mempty }
+                           , expectedErrors = []}
+
+runAll :: Monad m => [a -> m a] -> a -> m a
+runAll [] result = return result
+runAll (action:rest) res = action res >>= runAll rest
+
+
+runAllTests :: [TesterState -> IO TesterState] -> IO TesterState
+runAllTests = flip runAll defaultState
 
 runTests :: (Eq result, Show input, Show result, Show error) =>
             (input -> Either error result) ->
             [Test input result] ->
             IO (TesterState)
-runTests f ts = fmap snd $ runStateT (runTests' f ts >> report) defaultState
+runTests f ts = do
+  fmap snd $ runStateT (runTests' f ts >> report) defaultState
 
-runTestsWith :: (Eq result, Show input, Show result, Show error) =>
-                (input -> Either error result) ->
-                [Test input result] ->
-                TesterState ->
-                IO (TesterState)
-runTestsWith f ts = fmap snd . runStateT (runTests' f ts >> report)
+run :: (Eq result, Show input, Show result, Show error) =>
+       (input -> Either error result) ->
+       [Test input result] ->
+       TesterState ->
+       IO (TesterState)
+run f ts = fmap snd . runStateT (runTests' f ts >> report)
 
 runTests' :: (Eq result, Show input, Show result, Show error) =>
             (input -> Either error result) ->
             [Test input result] ->
             Tester ()
-runTests' function tests =
+runTests' function tests = do
+  let run = if any containsOnly tests then runTestOnly else runTest
   forM_ (zip [1..] tests) $ \(count, test) ->
-    runTest function count test
+    run function count test
+
+containsOnly :: Test input result -> Bool
+containsOnly test = case test of
+  TestOnly _ _ _ -> True
+  TestGroup _ tests -> any containsOnly tests
+  ShouldErrorOnly _ _ -> True
+  TestGroupOnly _ _ -> True
+  _ -> False
 
 runTest :: (Eq result, Show input, Show result, Show error) =>
            (input -> Either error result) ->
@@ -111,6 +132,60 @@ runTest function count test = case test of
         addSuccess name
         withColor Green $ putStrLn' "ERROR AS EXPECTED!"
 
+-- | Similar to @runTests@, but will only run a test if it's listed as "only".
+runTestOnly :: (Eq result, Show input, Show result, Show error) =>
+               (input -> Either error result) ->
+               Int ->
+               Test input result ->
+               Tester ()
+runTestOnly function count test = case test of
+  SkipTestGroup _ _ -> return ()
+  SkipTest _ _ _ -> return ()
+  Test _ _ _ -> return ()
+  ShouldError _ _ -> return ()
+  TestGroup _ tests ->
+    forM_ (zip [1..] tests) $ \(count, test) ->
+      runTestOnly function count test
+  TestGroupOnly name tests -> do
+    putStrI "| "
+    addGroupName name
+    withColor Cyan $ withUL $ putStrLn' $ "Test " ++ name
+    upIndent >> runTests' function tests >> downIndent
+    removeGroupName
+    line
+  TestOnly name input expect -> do
+    -- print the header, e.g. "6. test sky is blue: "
+    withColor Cyan $ putStrI $ show count ++ ". "
+    putStr' $ name ++ ": "
+    -- run the function on the input, one of three possibilities
+    case function input of
+      -- no errors, and result is what's expected
+      Right result | result == expect -> do
+        addSuccess name
+        withColor Green $ putStrLn' "PASSED!"
+      -- no errors, but unexpected result (failure)
+      Right result -> do
+        addFailure name input expect result
+        withColor Magenta $ putStrLn' "FAILED!"
+      -- errors occurred
+      Left message -> do
+        addError name input message
+        withColor Red $ putStrLn' "ERROR!"
+  ShouldErrorOnly name input -> do
+    withColor Cyan $ putStrI $ show count ++ ". "
+    putStr' $ name ++ " (expect to error): "
+    -- Run the function on the input; it should fail.
+    case function input of
+      -- no errors, which isn't what we want
+      Right result -> do
+        addExpectedError name input result
+        withColor Magenta $ putStrLn' "DIDN'T ERROR!"
+      -- errors occurred
+      Left _ -> do
+        addSuccess name
+        withColor Green $ putStrLn' "ERROR AS EXPECTED!"
+
+reportFailure :: TestResult -> StateT TesterState IO ()
 reportFailure (TestFailure names input expect result) = do
   withColor Magenta $ withUL $ putStrLnI (intercalate ", " names)
   upIndent
@@ -122,6 +197,7 @@ reportFailure (TestFailure names input expect result) = do
   withIndent $ withColor Yellow $ putStrLnI result
   downIndent
 
+reportError :: TestResult -> StateT TesterState IO ()
 reportError (TestError names input message) = do
   withColor Red $ withUL $ putStrLnI (intercalate ", " names)
   upIndent
@@ -131,6 +207,7 @@ reportError (TestError names input message) = do
   withColor Yellow $ putStrLnI (message ++ "\n")
   downIndent
 
+reportExpectedError :: TestResult -> StateT TesterState IO ()
 reportExpectedError (TestExpectedError names input result) = do
   withColor Red $ withUL $ putStrLnI (intercalate ", " names)
   upIndent

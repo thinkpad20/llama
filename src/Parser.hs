@@ -48,21 +48,40 @@ check p = lexeme . try $ do
     else return s
 
 pSymbol :: Parser T.Text
-pSymbol = fmap T.pack $ check $ many1 $ oneOf symChars
+pSymbol = fmap T.pack $ check $ many1 $ oneOf symChars <* notFollowedBy (char '_')
 
 pIdent :: Parser Char -> Parser T.Text
 pIdent firstChar = fmap T.pack $ check $ do
   first <- firstChar
   rest <- many $ alphaNum <|> char '_'
   bangs <- many $ char '!' <|> char '\''
-  return $ first : rest ++ bangs
+  case (first : rest ++ bangs) of
+    "_" -> unexpected "Single underscore"
+    ident -> return ident
 
 pVar :: Parser Expr
 pVar = do
-  var <- Var <$> pIdent (lower <|> char '_')
+  var <- getVar
   option var $ do
     typ <- exactSym ":" *> pType
     return $ Typed var typ
+  where getVar = choice $ map (fmap Var . try) ps
+        chk s = if s `elem` keySyms
+          then unexpected $ "reserved symbol " ++ show s
+          else return s
+        prefix = do
+          s <- chk =<< many1 (oneOf symChars)
+          c <- char '_'
+          return $ T.pack $ s ++ [c]
+        postfix = do
+          c <- char '_'
+          s <- chk =<< many1 (oneOf symChars)
+          return $ T.pack $ c : s
+        infix_ = do
+          s <- char '_' *> (chk =<< many1 (oneOf symChars)) <* char '_'
+          return $ T.pack s
+        ps =  [ pIdent (lower <|> char '_')
+              , infix_, prefix, postfix]
 
 pConstructor = Constructor <$> pIdent upper
 
@@ -75,8 +94,8 @@ pDouble = lexeme $ do
     return $ read (ds ++ "." ++ ds')
 
 pType :: Parser Type
-pType = choice [pMultiFunc, pTVector, pTList, pTMap, pTSet, pTFunction]
-pTTerm = choice [pTVar, pTConst, pTTuple]
+pType = choice [pTFunction]
+pTTerm = choice [pMultiFunc, pTVector, pTList, pTMap, pTSet, pTVar, pTConst, pTTuple]
 pTVar = varConstructor <$> fmap T.pack (many1 lower) <* skip
 pTConst = TConst <$> pIdent upper
 pTParens = schar '(' *> sepBy pType (schar ',') <* schar ')'

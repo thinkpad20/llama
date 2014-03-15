@@ -62,6 +62,11 @@ expressionTests = TestGroup "Expressions"
     , Test "observes associativity rules 4"
             "foo && bar && baz"
             (expr $ _and foo (_and bar baz))
+    , Test "infix on its own" "_+_" (expr $ Var "+")
+    , Test "alternate infix syntax"
+           "_+_ (foo, bar)" (expr $ plus foo bar)
+    , Test "prefix on its own" "+_" (expr $ Var "+_")
+    , Test "postfix on its own" "_+" (expr $ Var "_+")
   ] ++ binOpsTests)
   , TestGroup "unary operators" [
       Test "prefix operator"
@@ -91,6 +96,10 @@ expressionTests = TestGroup "Expressions"
     , Test "mixing prefix and infix operators"
            "++foo + bar"
            (expr $ Apply (Var "++_") $ plus foo bar)
+    , Test "high precedence prefix"
+           "++_ foo" (expr $ Apply (Var "++_") foo)
+    , Test "high precedence prefix 2"
+           "++_ foo bar" (expr $ Apply (Apply (Var "++_") foo) bar)
   ]
   , Test "apply" "foo bar" (expr $ Apply foo bar)
   , Test "apply associates to the left"
@@ -181,6 +190,11 @@ typingTests = TestGroup "Typed expressions"
   , test "typing with type tuple" "foo: (Foo, Bar)" (tTuple [fooT, barT])
   , Test "a typed tuple" "(foo: Foo, bar: Bar)"
          [Tuple [Typed foo fooT, Typed bar barT]]
+  , test "a function" "foo: a -> b" (a ==> b)
+  , test "a function 2" "foo: Num -> b" (numT ==> b)
+  , test "a function with a tuple" "foo: (Num, Str) -> b"
+        (tTuple [numT, strT] ==> b)
+  , test "a function 3" "foo: Num -> b -> c" (numT ==> b ==> c)
   , test "a multifunc" "foo: {m Foo -> Bar}" (multi1 fooT barT)
   , test "a multifunc with more than one"
          "foo: {m Foo -> Bar, Baz -> Qux}"
@@ -191,6 +205,9 @@ typingTests = TestGroup "Typed expressions"
   , test "a multifunc containing variables"
          "foo: {m (a -> b, a) -> b, Num -> Num}"
          (multi [((tTuple [(a ==> b), a]), b), (numT, numT)])
+  , test "a multifunc containing vectors"
+         "foo: {m a -> [b], [Num] -> Num}"
+         (multi [(a, arrayOf b), (arrayOf numT, numT)])
   , collection "vector" "[" "]" arrayOf
   , collection "list" "[!" "]" listOf
   , collection "set" "{" "}" setOf
@@ -199,13 +216,15 @@ typingTests = TestGroup "Typed expressions"
   ]
   where multi = TMultiFunc . M.fromList
         multi1 a b = multi [(a, b)]
-        [a, b] = map TRigidVar ["a", "b"]
+        [a, b, c] = map TRigidVar ["a", "b", "c"]
         test name input typ = Test name input [Typed foo typ]
         collection name open close f = TestGroup name tests where
           encl s = "foo: " ++ open ++ s ++ close
           tests = [ test "of variable" (encl "a") (f a)
                   , test "of number" (encl "Num")  (f numT)
                   , test "of function" (encl "Num -> Str") (f (numT ==> strT))
+                  , test "of function 2" (encl "[Num] -> {Str}")
+                      (f (arrayOf numT ==> setOf strT))
                   , test "of lists" (encl "[!Num]") (f (listOf numT))
                   , test "of vectors" (encl "[Num]") (f (arrayOf numT))
                   , test "of maps" (encl "{a=>b}") (f (mapOf (a, b)))]
