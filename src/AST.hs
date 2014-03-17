@@ -4,9 +4,11 @@
 {-# LANGUAGE OverloadedStrings #-}
 module AST where
 
-import Common
 import qualified Data.Text as T
 import qualified Data.Map as M
+
+import Common
+import TypeCheckerLib
 
 data Expr = Var         !Name
           | Number      !Double
@@ -21,7 +23,7 @@ data Expr = Var         !Name
           | Case        !Expr ![(Expr, Expr)]
           | Tuple       ![Expr]
           | Array       !ArrayLiteral
-          | Ref         !Expr !Expr
+          | DeRef       !Expr !Expr
           | Typed       !Expr !Type
           | If          !Expr !Expr !Expr
           | If'         !Expr !Expr
@@ -36,35 +38,14 @@ data Expr = Var         !Name
           | After       !Expr !Expr
           | Before      !Expr !Expr
           | Continue
-          | Mut         !Expr
+          | Mutable     !Expr
           | TypeDef !Name !Type
           deriving (Show, Eq)
-
--- | A variable can be rigid (fixed in scope), or polymorphic (free to take on
--- multiple forms in the same scope).
-data Type = TRigidVar  !Name
-          | TPolyVar   !Name
-          | TConst     !Name
-          | TTuple     ![Type]
-          | TApply     !Type !Type
-          | TFunction  !Type !Type
-          | TMut       !Type
-          | TMultiFunc !(M.Map Type Type)
-          deriving (Show, Eq, Ord)
 
 data ArrayLiteral = ArrayLiteral ![Expr]
                   | ArrayRange !Expr !Expr deriving (Show, Eq)
 
 type Block = [Expr]
-
-instance Monoid Type where
-  mempty = TMultiFunc mempty
-  TMultiFunc s `mappend` TMultiFunc s' = TMultiFunc $ M.union s s'
-  TMultiFunc s `mappend` TFunction from to = TMultiFunc $ M.insert from to s
-  TFunction from to `mappend` TMultiFunc s = TMultiFunc $ M.insert from to s
-  TFunction f1 t1 `mappend` TFunction f2 t2 =
-    TMultiFunc $ M.fromList [(f1, t1), (f2, t2)]
-  t1 `mappend` t2 = error $ "Invalid `or`s: " <> show t1 <> ", " <> show t2
 
 instance Render Expr where
   render e = evalState (render' e) 0 where
@@ -84,7 +65,7 @@ instance Render Expr where
       Tuple es -> return $ "(" <> (T.intercalate "," . map render) es <> ")"
       Array (ArrayLiteral exprs) -> return $ "[" <> T.intercalate ", " (map render exprs) <> "]"
       Array (ArrayRange start stop) -> return $ "[" <> render start <> ".." <> render stop <> "]"
-      Ref object index -> return $ render'' object <> "[:" <> render index <> "]"
+      DeRef object index -> return $ render'' object <> "[:" <> render index <> "]"
       Lambda arg expr -> return $ render'' arg <> " => " <> render expr
       Case expr alts -> return $ "case " <> render expr <> " of " <> T.intercalate " | " rPairs
         where rPairs = map (\(p, r) -> render p <> " => " <> render r) alts
@@ -129,29 +110,6 @@ instance Render Expr where
 instance Render Block where
   render b = "{" <> (line . trim . T.intercalate "; " . map render) b <> "}"
 
-instance Render Type where
-  render t = case t of
-    TRigidVar name -> name
-    TPolyVar name -> {-"*" <> -} name {-<> "*"-}
-    TConst name -> name
-    TTuple ts -> "(" <> T.intercalate ", " (map render ts) <> ")"
-    TApply (TConst "[]") typ -> "[" <> render typ <> "]"
-    TApply (TConst "[!]") typ -> "[!" <> render typ <> "]"
-    TApply a b -> render a <> " " <> render' b
-    TFunction t1 t2 -> render'' t1 <> " -> " <> render t2
-    TMut typ -> "mut " <> render typ
-    TMultiFunc tset -> "{" <> renderSet tset <> "}"
-    where render' typ = case typ of
-            TApply _ _ -> "(" <> render typ <> ")"
-            _ -> render typ
-          render'' typ = case typ of
-            TFunction _ _ -> "(" <> render typ <> ")"
-            _ -> render typ
-          renderSet tset =
-            let pairs = M.toList tset
-                rPair (from, to) = render from <> " -> " <> render to
-            in T.intercalate ", " (map rPair pairs)
-
 symChars :: String
 symChars = "><=+-*/^~!%@&$:.#|?"
 
@@ -160,25 +118,3 @@ isSymbol = T.all (`elem` symChars)
 
 binary :: Name -> Expr -> Expr -> Expr
 binary name e1 e2 = Apply (Var name) $ Tuple [e1, e2]
-
-boolT, numT, strT, charT, unitT :: Type
-boolT = tConst "Bool"
-numT = tConst "Num"
-strT = tConst "Str"
-charT = tConst "Char"
-unitT = tTuple []
-
-arrayOf, listOf, setOf, maybeT :: Type -> Type
-arrayOf = TApply (TConst "[]")
-listOf = TApply (TConst "[!]")
-setOf = TApply (TConst "{s}")
-maybeT = TApply (TConst "Maybe")
-tTuple :: [Type] -> Type
-tTuple = TTuple
-tConst :: Name -> Type
-tConst = TConst
-mapOf (key, val) = TApply (TApply (TConst "{}") key) val
-
-(==>) :: Type -> Type -> Type
-(==>) = TFunction
-infixr 4 ==>

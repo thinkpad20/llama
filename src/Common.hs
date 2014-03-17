@@ -26,15 +26,15 @@ import Data.Maybe (catMaybes)
 import qualified Data.Map as M
 import qualified Data.Set as S
 
-newtype ErrorList = TE [T.Text]
+newtype ErrorList = ErrorList [T.Text]
 instance Error ErrorList where
-  strMsg = TE . pure . T.pack
+  strMsg = ErrorList . pure . T.pack
 
 instance Render ErrorList
 
 instance Show ErrorList where
-  show (TE msgs) = show msgs
-  --show (TE msgs) = msgs ! concatMap ((<> "\n") . indentBy 4 . trim) ! line
+  show (ErrorList msgs) = show msgs
+  --show (ErrorList msgs) = msgs ! concatMap ((<> "\n") . indentBy 4 . trim) ! line
 
 type Name = T.Text
 
@@ -97,6 +97,6 @@ isInt :: RealFrac b => b -> Bool
 isInt x = isIntTo x 10
 
 throwErrorC = throwError1 . mconcat
-throwError1 = throwError . TE . pure
-addError msg (TE msgs) = throwError $ TE $ msg : msgs
+throwError1 = throwError . ErrorList . pure
+addError msg (ErrorList msgs) = throwError $ ErrorList $ msg : msgs
 addError' = addError . mconcat

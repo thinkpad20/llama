@@ -17,6 +17,7 @@ import qualified Data.Text as T
 
 import Common
 import AST
+import TypeCheckerLib
 import Parser (grab, grabT)
 
 class Typable a where
@@ -88,7 +89,7 @@ instance Typable Expr where
       Constructor name -> lookupAndInstantiate name
       Array arr@(ArrayLiteral _) -> typeOfArrayLiteral typeOf arr
       Tuple vals -> tTuple <$> mapM typeOf vals
-      Mut expr -> TMut <$> typeOf expr
+      Mutable expr -> TMut <$> typeOf expr
       Lambda arg expr -> do
         argT <- pushNameSpace "%l" *> litTypeOf arg
         returnT <- typeOf expr
@@ -240,7 +241,7 @@ unusedTypeVar = do
   -- increment the freshName
   modify $ \s -> s { freshName = T.pack $ next var }
   -- wrap it in a type variable and return it
-  return $ TPolyVar var
+  return $ TVar var
   where
     next n = let name = T.unpack n
                  (c:cs) = reverse name in
@@ -286,7 +287,7 @@ lookupFuncs funcName = do
     check tbl name = case M.lookup name tbl of
       Just (t@(TFunction from to)) -> return [t]
       Just (t@(TRigidVar name))    -> return [t]
-      Just (t@(TPolyVar name))     -> return [t]
+      Just (t@(TVar name))     -> return [t]
       Just t -> throwErrorC ["Identifier `", name, "' maps to non-"
                             , "function type `", render t, "'"]
       Nothing -> return mempty
@@ -310,8 +311,8 @@ unify type1 type2 = snd <$> runStateT (go (type1, type2)) mempty where
       (a, b) | a == b  -> return ()
       (TMut mtyp, typ) -> go (mtyp, typ)
       (typ, TMut mtyp) -> go (mtyp, typ)
-      (TPolyVar name, typ) -> alias name typ
-      (typ, TPolyVar name) -> alias name typ
+      (TVar name, typ) -> alias name typ
+      (typ, TVar name) -> alias name typ
       (TConst name, TConst name') | name == name' -> return ()
       (TTuple ts, TTuple ts') | length ts == length ts' -> mapM_ go $ zip ts ts'
       (TApply a b, TApply a' b') -> go (a, a') >> go (b, b')
@@ -322,15 +323,13 @@ unify type1 type2 = snd <$> runStateT (go (type1, type2)) mempty where
         go (b, b') `catchError'` returnError
         lift $ log' ["poops!"]
       (TMultiFunc set, TFunction from to) -> do
-        lift $ log' ["poooooooooooooooooooooooooooooooooooooop"]
         -- Go through the multifunction's argument types. If we can
         -- unify @from@ with an argument type, record its subs and
         -- pair it with the @to@ type that argument type maps to.
         -- Valid choices get wrapped in a @Just@, otherwise @Nothing@.
         subsTos <- forM (M.toList set) $ \(from', to') -> do
           lift $ log' ["trying to unify `", render from', "' with `", render from, "'"]
-          subs <- lift $ unify from' from `catchError` \_ -> do log' ["blaaaaaaaaaaaat"]
-                                                                return mempty
+          subs <- lift $ unify from' from `catchError` \_ -> return mempty
           (lift (unify from' from) >>= \s -> return (Just (s, to')))
                   `catchError` \_ -> return Nothing
         -- Filter out the @Nothing@ values and sort by smallest subs.
@@ -356,10 +355,10 @@ unify type1 type2 = snd <$> runStateT (go (type1, type2)) mempty where
 
   alias name typ = M.lookup name <$> get >>= \case
     Nothing -> modify $ M.insert name typ
-    Just (TPolyVar name') -> alias name' typ
+    Just (TVar name') -> alias name' typ
     Just typ' | typ == typ' -> return ()
               | otherwise -> case typ of
-                TPolyVar name' -> alias name' (TRigidVar name)
+                TVar name' -> alias name' (TRigidVar name)
                 _ -> throwError1 "Occurs check"
 
   addSubs = modify . M.union
@@ -369,7 +368,8 @@ unify type1 type2 = snd <$> runStateT (go (type1, type2)) mempty where
                           , render type1, "' and `", render type2, "'"]
   catchError' = catchError
   incompatErr =
-      throwErrorC ["Incompatible types: `", render type1, "' and `", render type2, "'"]
+      throwErrorC [ "Incompatible types: `", render type1, "' and `"
+                  , render type2, "'"]
   ambiguousErr t1 t2 = throwErrorC [
       "Ambiguous application of `", render type1, "' to `", render type2, "'. "
     , "Multiple unification choices are equally valid: could be `", render t1
@@ -383,17 +383,15 @@ unify type1 type2 = snd <$> runStateT (go (type1, type2)) mempty where
     throwErrorC ["No types in the set `", render (M.keys set), "' match the "
                 , "provided argument type `", render argT, "'"]
 
--- | takes a type and replaces any type variables in the type with unused
--- variables. Note: in Hindley-Milner, there are two distinct types, Type and
--- Polytype, and instantiate maps between them. Tentatively, we don't need this
--- distinction.
+-- | takes a polytype and replaces any type variables in the type with unused
+-- variables.
 instantiate :: Type -> Typing Type
 instantiate typ = fst <$> runStateT (inst typ) mempty where
   inst :: Type -> StateT (M.Map Name Type) Typing Type
   inst typ = case typ of
     TRigidVar name -> return typ
     TConst name -> return typ
-    TPolyVar name -> do
+    TVar name -> do
       M.lookup name <$> get >>= \case
         -- if we haven't yet seen this variable, create a new one
         Nothing -> do typ' <- lift unusedTypeVar
@@ -412,13 +410,18 @@ instantiate typ = fst <$> runStateT (inst typ) mempty where
 -- | the opposite of instantiate; it "polymorphizes" the rigid type variables
 -- so that they can be polymorphic in future uses.
 generalize :: Type -> Typing Type
-generalize typ = case typ of
-  TRigidVar name -> return $ TPolyVar name
-  TPolyVar name -> return typ
-  TConst name -> return typ
-  TTuple ts -> TTuple <$> mapM generalize ts
-  TApply a b -> TApply <$$ generalize a <*> generalize b
-  TFunction a b -> TFunction <$$ generalize a <*> generalize b
+generalize typ = fst <$> runStateT (go typ) (mempty, "a") where
+  next name = case reverse name of
+    c:rest | c < 'z' -> reverse (succ c:rest)
+           | True    -> 'a': map (\_ -> 'a') name
+  go :: Type -> StateT (M.Map Name Type, Name) Typing Type
+  go typ = case typ of
+    TRigidVar name -> return $ TVar name
+    TVar name -> return typ
+    TConst name -> return typ
+    TTuple ts -> TTuple <$> mapM go ts
+    TApply a b -> TApply <$$ go a <*> go b
+    TFunction a b -> TFunction <$$ go a <*> go b
 
 -- | follows the type aliases and returns the fully qualified type (as
 -- qualified as possible)
@@ -429,7 +432,7 @@ refine typ = fst <$> runStateT (look typ) mempty where
     TConst _ -> return typ
     TRigidVar _ -> return typ
     TMut typ' -> TMut <$> look typ'
-    TPolyVar name -> do
+    TVar name -> do
       seenNames <- get
       if name `S.member` seenNames then throwError1 "Cycle in type aliases"
       else do
@@ -457,6 +460,7 @@ builtIns = M.fromList [ ("+", join [nnn, sss, css, scs, vvv, avv, vav])
                       , ("~>", tup ab bc ac), ("<~", tup bc ab ac)
                       , ("!_", boolT ==> boolT), ("_!", numT ==> numT)
                       , ("print", a ==> unitT)
+                      , ("length", (strT ==> numT) <> (arrayOf a ==> numT))
                       , ("Just", a ==> maybeT a)
                       , ("Nothing", maybeT a)
                       , ("@call", nnn `or` sss `or` vna)
@@ -479,7 +483,7 @@ builtIns = M.fromList [ ("+", join [nnn, sss, css, scs, vvv, avv, vav])
         ssb = tup strT strT boolT
         nnbOrSsb = TMultiFunc $ M.fromList [ tup' strT strT boolT
                                            , tup' numT numT boolT ]
-        [a, b, c] = TPolyVar <$> ["a", "b", "c"]
+        [a, b, c] = TVar <$> ["a", "b", "c"]
         (ab, bc, ac) = (a ==> b, b ==> c, a ==> c)
         join ts = foldr1 or ts
         TMultiFunc s `or` TMultiFunc s' = TMultiFunc $ M.union s s'
@@ -510,7 +514,7 @@ typeItIO input = case grab input of
 
 typeIt :: String -> Either ErrorList Type
 typeIt input = case grab input of
-  Left err -> Left $ TE ["Parse error:\n" <> (T.pack $ show err)]
+  Left err -> Left $ ErrorList ["Parse error:\n" <> (T.pack $ show err)]
   Right block -> fst $ runTyping block
 
 unifyIt :: (String, String) -> Either ErrorList (M.Map Name Type)

@@ -6,6 +6,7 @@ import qualified Data.Map as M
 import Common
 import Tests
 import AST
+import TypeCheckerLib
 import TypeChecker (typeIt, unifyIt)
 
 
@@ -53,7 +54,7 @@ basicTests = TestGroup "Basic expressions" [
     ]
   ]
   , TestGroup "vectors" [
-      Test "empty" "[]"                  (arrayOf (TPolyVar "a0"))
+      Test "empty" "[]"                  (arrayOf (TVar "a0"))
     , Test "basic" "[1,2,3]"             (arrayOf numT)
     , Test "extending" "[1,2,3] + [4,5]" (arrayOf numT)
     , Test "appending" "[1,2,3] + 4"     (arrayOf numT)
@@ -69,32 +70,37 @@ basicTests = TestGroup "Basic expressions" [
     , Test "unary op 2" "foo (x: Num) = x !; foo" (numT ==> numT)
     , Test "lambda with tuple" "x: (Str, Str) => x"
            (tTuple [strT, strT] ==> tTuple [strT, strT])
+    , Test "polymorphic lambda" "x: a => [x]" (a ==> arrayOf a)
   ]
-  ]
-
-declarations = TestGroup "Multifunctions" [
-    Test "can extend a function definition"
+  , TestGroup "Multifunctions" [
+      Test "can extend a function definition"
+           ("foo (n: Num) = n + 1; " <>
+            "foo (s: Str) &= s + \"!\"; foo")
+           (TMultiFunc (M.fromList [(numT, numT), (strT, strT)]))
+    , Test "can extend a function definition with tuple"
+           ("foo (n: Num) = n + 1; " <>
+            "foo (s: Str) &= s + \"!\"; " <>
+            "foo (s: Str, n: Num) &= s + \"!\"; foo")
+           (TMultiFunc (M.fromList [ (numT, numT)
+                                   , (strT, strT)
+                                   , (tTuple [strT, numT], strT)]))
+    , SkipTest "can extend a function definition with generic"
+           ("foo (n: Num) = n + 1; " <>
+            "foo (x: a) &= [x]; foo")
+           (TMultiFunc (M.fromList [(numT, numT), (a, arrayOf a)]))
+    , Test "can extend a binary function definition"
+         "(n: Num) / (s: Str) &= n + 1; _/_"
+         (TMultiFunc (M.fromList [ (tTuple [numT, numT], numT)
+                                 , (tTuple [numT, strT], numT)]))
+    , Test "can use a previous definition inside an extension"
          ("foo (n: Num) = n + 1; " <>
-          "foo (s: Str) &= s + \"!\"; foo")
-         (TMultiFunc (M.fromList [(numT, numT), (strT, strT)]))
-  , Test "can extend a function definition with tuple"
-         ("foo (n: Num) = n + 1; " <>
-          "foo (s: Str) &= s + \"!\"; " <>
-          "foo (s: Str, n: Num) &= s + \"!\"; foo")
-         (TMultiFunc (M.fromList [ (numT, numT)
-                                 , (strT, strT)
-                                 , (tTuple [strT, numT], strT)]))
-  , Test "can extend a binary function definition"
-       "(n: Num) / (s: Str) &= n + 1; _/_"
-       (TMultiFunc (M.fromList [ (tTuple [numT, numT], numT)
-                               , (tTuple [numT, strT], numT)]))
-  , Test "can use a previous definition inside an extension"
-       ("foo (n: Num) = n + 1; " <>
-        "foo (s: Str) &= (s, foo 3); foo")
-        (TMultiFunc (M.fromList [ (numT, numT)
-                                 , (strT, tTuple [strT, numT])]))
-
-  ]
+          "foo (s: Str) &= (s, foo 3); foo")
+          (TMultiFunc (M.fromList [ (numT, numT)
+                                   , (strT, tTuple [strT, numT])]))
+    , Test "can apply a multifunction" "length \"hello\"" numT
+    , Test "can apply a multifunction 2" "length [1,2,3]" numT
+    ]
+  ] where a = TVar "a"
 
 unifyTests1 = TestGroup "Basic unification" [
     subs "constants" ("Num", "Num") []
@@ -173,5 +179,5 @@ unifyFailTests = TestGroup "Invalid unifications" [
           ("{m [a] -> b, a -> b, Str -> Num}", "[Str] -> Num")
   ]
 
-main = runAllTests [ run typeIt [basicTests, declarations]
+main = runAllTests [ run typeIt [basicTests]
                    , run unifyIt [unifyTests1, unifyFailTests]]

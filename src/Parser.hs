@@ -13,6 +13,7 @@ import qualified Data.Map as M
 
 import Common
 import AST
+import TypeCheckerLib
 import Indent
 
 instance Render ParseError
@@ -231,18 +232,18 @@ pAnnotation :: Parser ()
 pAnnotation = choice [pRAssoc]
 
 pApply :: Parser Expr
-pApply = pRef >>= parseRest where
+pApply = pDeRef >>= parseRest where
   parseRest res = do -- res is a parsed expression
-    term <- pRef -- run the parser again
+    term <- pDeRef -- run the parser again
     parseRest (Apply res term)
     <|> return res -- at some point the second parse will fail; then
                    -- return what we have so far
 
-pRef :: Parser Expr
-pRef = pDotted >>= parseRest where
+pDeRef :: Parser Expr
+pDeRef = pDotted >>= parseRest where
   parseRest res = do
     y <- exactSym "[:" *> pExpr <* schar ']'
-    parseRest (Ref res y)
+    parseRest (DeRef res y)
     <|> return res
 
 pDotted :: Parser Expr
@@ -305,7 +306,7 @@ pDefPostfix (sym, f) = try $ do
   body <- exactSym sym *> pBlock
   return $ f ("_" <> op) $ Lambda arg body
 
-pMut = Mut <$ keyword "mut" <*> pExpr
+pMut = Mutable <$ keyword "mut" <*> pExpr
 
 pAssign = try $ Assign <$$ pExpr <* exactSym ":=" <*> pExprOrBlock
 
@@ -382,11 +383,11 @@ grab = parse pTopLevelExpressions
 
 grabT :: String -> Either ErrorList Type
 grabT input = case parse pType input of
-  Left err -> Left $ TE [T.pack $ show err]
+  Left err -> Left $ ErrorList [T.pack $ show err]
   Right typ -> return typ
 
 grab' input = case grab input of
   Right statements -> map show statements ! intercalate "\n"
   Left err -> error $ show err
 
-varConstructor = TPolyVar
+varConstructor = TVar
