@@ -13,6 +13,7 @@ import qualified Data.Map as M
 
 import Common
 import AST
+import TypeLib
 import Indent
 
 instance Render ParseError
@@ -48,35 +49,55 @@ check p = lexeme . try $ do
     else return s
 
 pSymbol :: Parser T.Text
-pSymbol = fmap T.pack $ check $ many1 $ oneOf symChars
+pSymbol = fmap T.pack $ check $ many1 $ oneOf symChars <* notFollowedBy (char '_')
 
 pIdent :: Parser Char -> Parser T.Text
 pIdent firstChar = fmap T.pack $ check $ do
   first <- firstChar
-  rest <- many $ alphaNum <|> char '_'
-  bangs <- many $ char '!' <|> char '\''
-  return $ first : rest ++ bangs
+  rest <- many $ alphaNum <|> char '_' <|> char '-' <|> char '\''
+  bangs <- many $ char '!'
+  case (first : rest ++ bangs) of
+    "_" -> unexpected "Single underscore"
+    ident | last ident == '-' -> unexpected "Ends in a dash"
+          | otherwise -> return ident
 
 pVar :: Parser Expr
 pVar = do
-  var <- Var <$> pIdent (lower <|> char '_')
+  var <- getVar
   option var $ do
     typ <- exactSym ":" *> pType
     return $ Typed var typ
+  where getVar = choice $ map (fmap Var . try) ps
+        chk s = if s `elem` keySyms
+          then unexpected $ "reserved symbol " ++ show s
+          else return s
+        prefix = do
+          s <- chk =<< many1 (oneOf symChars)
+          c <- char '_'
+          return $ T.pack $ s ++ [c]
+        postfix = do
+          c <- char '_'
+          s <- chk =<< many1 (oneOf symChars)
+          return $ T.pack $ c : s
+        infix_ = do
+          s <- char '_' *> (chk =<< many1 (oneOf symChars)) <* char '_'
+          return $ T.pack s
+        ps =  [ pIdent (lower <|> char '_')
+              , infix_, prefix, postfix]
 
 pConstructor = Constructor <$> pIdent upper
 
 pDouble :: Parser Double
 pDouble = lexeme $ do
   ds <- many1 digit
-  option (read ds) $ do
-    exactSym "."
-    ds' <- many1 digit
-    return $ read (ds ++ "." ++ ds')
+  option (read ds) $ getDecimal ds
+  where getDecimal ds = try $ do exactSym "."
+                                 ds' <- many1 digit
+                                 return $ read (ds ++ "." ++ ds')
 
 pType :: Parser Type
-pType = choice [pMultiFunc, pTVector, pTList, pTMap, pTSet, pTFunction]
-pTTerm = choice [pTVar, pTConst, pTTuple]
+pType = choice [pTFunction]
+pTTerm = choice [pMultiFunc, pTVector, pTList, pTMap, pTSet, pTVar, pTConst, pTTuple]
 pTVar = varConstructor <$> fmap T.pack (many1 lower) <* skip
 pTConst = TConst <$> pIdent upper
 pTParens = schar '(' *> sepBy pType (schar ',') <* schar ')'
@@ -212,18 +233,18 @@ pAnnotation :: Parser ()
 pAnnotation = choice [pRAssoc]
 
 pApply :: Parser Expr
-pApply = pRef >>= parseRest where
+pApply = pDeRef >>= parseRest where
   parseRest res = do -- res is a parsed expression
-    term <- pRef -- run the parser again
+    term <- pDeRef -- run the parser again
     parseRest (Apply res term)
     <|> return res -- at some point the second parse will fail; then
                    -- return what we have so far
 
-pRef :: Parser Expr
-pRef = pDotted >>= parseRest where
+pDeRef :: Parser Expr
+pDeRef = pDotted >>= parseRest where
   parseRest res = do
     y <- exactSym "[:" *> pExpr <* schar ']'
-    parseRest (Ref res y)
+    parseRest (DeRef res y)
     <|> return res
 
 pDotted :: Parser Expr
@@ -286,7 +307,7 @@ pDefPostfix (sym, f) = try $ do
   body <- exactSym sym *> pBlock
   return $ f ("_" <> op) $ Lambda arg body
 
-pMut = Mut <$ keyword "mut" <*> pExpr
+pMut = Mutable <$ keyword "mut" <*> pExpr
 
 pAssign = try $ Assign <$$ pExpr <* exactSym ":=" <*> pExprOrBlock
 
@@ -363,11 +384,11 @@ grab = parse pTopLevelExpressions
 
 grabT :: String -> Either ErrorList Type
 grabT input = case parse pType input of
-  Left err -> Left $ TE [T.pack $ show err]
+  Left err -> Left $ ErrorList [T.pack $ show err]
   Right typ -> return typ
 
 grab' input = case grab input of
   Right statements -> map show statements ! intercalate "\n"
   Left err -> error $ show err
 
-varConstructor = TPolyVar
+varConstructor = TVar

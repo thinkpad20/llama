@@ -10,7 +10,8 @@ module Common ( (!), (<!>), (<$>), (<$), (<*), (*>), (<*>), pure
               , intercalate, Identity(..), runState, evalState, (>>==)
               , trim, line, throwError, catchError, (~>), (<$$), Render(..)
               , isInt, ErrorList(..), throwError1, throwErrorC, addError
-              , addError', forever, isSpace, catMaybes, sortWith)  where
+              , addError', forever, isSpace, catMaybes, sortWith, each)
+              where
 
 import Control.Monad
 import Control.Monad.State
@@ -26,15 +27,15 @@ import Data.Maybe (catMaybes)
 import qualified Data.Map as M
 import qualified Data.Set as S
 
-newtype ErrorList = TE [T.Text]
+newtype ErrorList = ErrorList [T.Text]
 instance Error ErrorList where
-  strMsg = TE . pure . T.pack
+  strMsg = ErrorList . pure . T.pack
 
 instance Render ErrorList
 
 instance Show ErrorList where
-  show (TE msgs) = show msgs
-  --show (TE msgs) = msgs ! concatMap ((<> "\n") . indentBy 4 . trim) ! line
+  show (ErrorList msgs) = show msgs
+  --show (ErrorList msgs) = msgs ! concatMap ((<> "\n") . indentBy 4 . trim) ! line
 
 type Name = T.Text
 
@@ -43,6 +44,14 @@ class Show a => Render a where
   render = show ~> T.pack
   renderIO :: a -> IO T.Text
   renderIO = return . render
+
+instance Render T.Text
+instance Render Int
+instance Render Char
+instance (Render a, Render b) => Render (a, b)
+
+instance Render String where
+  render = show ~> T.pack
 
 instance Render a => Render [a] where
   render as = "[" <> T.intercalate ", " (map render as) <> "]"
@@ -97,6 +106,8 @@ isInt :: RealFrac b => b -> Bool
 isInt x = isIntTo x 10
 
 throwErrorC = throwError1 . mconcat
-throwError1 = throwError . TE . pure
-addError msg (TE msgs) = throwError $ TE $ msg : msgs
+throwError1 = throwError . ErrorList . pure
+addError msg (ErrorList msgs) = throwError $ ErrorList $ msg : msgs
 addError' = addError . mconcat
+
+each = flip map
