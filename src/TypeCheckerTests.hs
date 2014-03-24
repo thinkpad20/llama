@@ -261,6 +261,6 @@ group1 = [basicTests, functionTests, ifTests, binaryTests, vectorTests
 
 main = runAllTests [ run typeIt group1
                    , run unifyIt [unifyTests1, unifyFailTests]
-                   --, run testInstantiate [instantiationTests]
-                   --, run generalizeE [generalizationTests]
+                   , run testInstantiate [instantiationTests]
+                   , run generalizeE [generalizationTests]
                    ]

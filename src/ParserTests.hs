@@ -34,8 +34,8 @@ opsFuncs = M.fromList [("+", plus), ("*", times), ("-", minus)
 (true, false) = (Constructor "True", Constructor "False")
 
 binOpsTests = [test (T.unpack op) | op <- ops] where
-  test op = Test ("can parse `" ++ op ++ "'")
-                 ("1 " ++ op ++ " 2")
+  test op = Test ("can parse `" <> T.pack op <> "'")
+                 ("1 " <> op <> " 2")
                  (expr $ binary (T.pack op) one two)
 
 expressionTests = TestGroup "Expressions"

@@ -9,13 +9,11 @@ import Common
 
 -- | A variable can be rigid (fixed in scope), or polymorphic (free to take on
 -- multiple forms in the same scope).
-data Type = TRigidVar  !Name
-          | TVar       !Name
+data Type = TVar       !Name
           | TConst     !Name
           | TTuple     ![Type]
           | TApply     !Type !Type
           | TFunction  !Type !Type
-          | TMut       !Type
           | TMod       !Mod !Type
           | TMultiFunc !TypeMap
           deriving (Show, Eq, Ord)
@@ -23,7 +21,7 @@ data Type = TRigidVar  !Name
 type TypeMap = M.Map Type Type
 type TypeTable = M.Map Name Type
 
-data Mod = TMut_
+data Mod = TMut
          | TRef
          | TPure
          | TLocal
@@ -128,7 +126,6 @@ instance Monoid TypeEnv where
 
 instance Render Type where
   render t = case t of
-    TRigidVar name -> name
     TVar name -> name
     TConst name -> name
     TTuple ts -> "(" <> T.intercalate ", " (map render ts) <> ")"
@@ -136,7 +133,7 @@ instance Render Type where
     TApply (TConst "[!]") typ -> "[!" <> render typ <> "]"
     TApply a b -> render a <> " " <> render' b
     TFunction t1 t2 -> render'' t1 <> " -> " <> render t2
-    TMut typ -> "mut " <> render typ
+    TMod modi typ -> render modi <> " " <> render typ
     TMultiFunc tset -> "{" <> renderSet tset <> "}"
     where render' typ = case typ of
             TApply _ _ -> "(" <> render typ <> ")"
@@ -149,6 +146,13 @@ instance Render Type where
                 rPair (from, to) = render from <> " -> " <> render to
             in T.intercalate ", " (map rPair pairs)
 
+instance Render Mod where
+  render TMut = "mut"
+  render TRef = "ref"
+  render TPure = "pure"
+  render TLocal = "local"
+  render TLazy = "lazy"
+
 instance Monoid Type where
   mempty = TMultiFunc mempty
   TMultiFunc s `mappend` TMultiFunc s' = TMultiFunc $ M.union s s'
@@ -157,6 +161,10 @@ instance Monoid Type where
   TFunction f1 t1 `mappend` TFunction f2 t2 =
     TMultiFunc $ M.fromList [(f1, t1), (f2, t2)]
   t1 `mappend` t2 = error $ "Invalid <>s: " <> show t1 <> ", " <> show t2
+
+instance Monoid Polytype where
+  mempty = Polytype [] mempty
+  Polytype vars t `mappend` Polytype vars' t' = Polytype (vars <> vars') (t <> t')
 
 boolT, numT, strT, charT, unitT :: Type
 arrayOf, listOf, setOf, maybeT :: Type -> Type
@@ -237,6 +245,10 @@ normalize t = evalState (go t) ("a", mempty) where
     TFunction a b -> TFunction <$$ go a <*> go b
     TTuple ts -> tTuple <$> mapM go ts
     TConst _ -> return type_
+    TMultiFunc set -> do
+      let pairs = M.toList set
+      pairs' <- forM pairs $ \(from, to) -> (,) <$$ go from <*> go to
+      return $ TMultiFunc (M.fromList pairs')
   next name = case T.last name of
     c | c < 'z' -> T.init name `T.snoc` succ c
       | True    -> name `T.snoc` 'a'

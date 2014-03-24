@@ -75,7 +75,7 @@ instance Typable Expr where
       popNameSpace
       return (paramT ==> bodyT, paramS <> bodyS)
     Define name expr -> typeOfDefinition name expr
-    Extend name expr -> typeOfDefinition name expr
+    Extend name expr -> typeOfExtension name expr
     Apply func arg -> typeOfApply typeOf func arg
     If c t f -> typeOfIf (c, t, f)
     Array (ArrayLiteral arr) -> do
@@ -116,6 +116,27 @@ typeOfDefinition name expr = lookup1 name >>= \case
     subs3 <- unify (nameT, apply subs2 type_)
     store name =<< generalize (apply subs3 nameT)
     return (nameT, subs3 <> subs2)
+
+-- | TODO: DRY this up
+typeOfExtension :: Name -> Expr -> Typing (Type, Subs)
+typeOfExtension name expr = lookup1 name >>= \case
+  Nothing -> throwErrorC [name, " is not defined in immediate scope"]
+  Just polytype@(Polytype _ t) -> case t of
+    TFunction _ _ -> extend polytype
+    TMultiFunc  _ -> extend polytype
+    type_ ->
+      throwErrorC ["Can't extend non-function type `", render type_, "'"]
+  where extend polytype = do
+          newT <- unusedTypeVar
+          -- TODO: we need to figure out how to do recursive definitions in
+          -- this system.
+          pushNameSpace name
+          (newT', subs2) <- typeOf expr
+          popNameSpace
+          subs3 <- unify (newT, apply subs2 newT')
+          generalized <- generalize (apply subs3 newT)
+          store name (generalized <> polytype)
+          return (newT, subs3 <> subs2)
 
 typeOfIf :: (Expr, Expr, Expr) -> Typing (Type, Subs)
 typeOfIf (cond, true, false) = do
@@ -339,8 +360,7 @@ refine :: Type -> Typing Type
 refine typ = fst <$> runStateT (look typ) mempty where
   look typ' = case typ' of
     TConst _ -> return typ'
-    TRigidVar _ -> return typ'
-    TMut typ'' -> TMut <$> look typ''
+    TMod modi typ'' -> TMod modi <$> look typ''
     TVar name -> do
       seenNames <- get
       if name `S.member` seenNames then throwError1 "Cycle in type aliases"
