@@ -1,3 +1,5 @@
 src/*.o
 src/*.hi
 src/*.prof
+src/\#*
+src/Profile
