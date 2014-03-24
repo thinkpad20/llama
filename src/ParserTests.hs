@@ -8,6 +8,7 @@ import Prelude hiding (mod)
 import Common
 import Tests
 import AST
+import TypeLib
 import Parser (grab)
 
 expr e = [e]
@@ -39,110 +40,133 @@ binOpsTests = [test (T.unpack op) | op <- ops] where
 
 expressionTests = TestGroup "Expressions"
   [
-    Test "number" "1" (expr one)
-  , Test "variable" "foo" (expr foo)
+    test "integer" "1" one
+  , test "integer 2" "129348" (Number 129348)
+  , test "with dot" "1.23" (Number 1.23)
+  , ShouldError "with dot, no trailing digits" "10."
+  , TestGroup "variables" [
+      test "basic variable" "foo" foo
+    , test "variable with underscores" "foo_bar" (Var "foo_bar")
+    , test "variable with dashes" "foo-bar" (Var "foo-bar")
+    , ShouldError "ends with a dash" "foo-"
+    , test "variable with primes" "foo'bar" (Var "foo'bar")
+    , test "variable with primes and others"
+           "foo'oo''" (Var "foo'oo''")
+    , test "variable with dashes and others"
+           "foo'oo''" (Var "foo'oo''")
+    , test "variable with bang" "foo!" (Var "foo!")
+    , test "variable with bangs" "foo!!" (Var "foo!!")
+    , test "variable with bangs and things after it"  "foo!oo"
+           (Apply (Var "foo!") (Var "oo"))
+    , test "constructor" "Foo" (Constructor "Foo")
+    , test "constructor with primes" "Foo'" (Constructor "Foo'")
+  ]
   , TestGroup "binary operators" ([
-      Test "binary" "1 + 2" (expr $ plus one two)
-    , Test "binary 2" "1 + foo" (expr $ plus one foo)
-    , Test "observes precedence rules 1"
+      test "binary" "1 + 2" (plus one two)
+    , test "binary 2" "1 + foo" (plus one foo)
+    , test "observes precedence rules 1"
             "foo + bar * baz"
-            (expr $ plus foo (times bar baz))
-    , Test "observes precedence rules 2"
+            (plus foo (times bar baz))
+    , test "observes precedence rules 2"
             "foo * bar + baz"
-            (expr $ plus (times foo bar) baz)
-    , Test "observes associativity rules 1"
+            (plus (times foo bar) baz)
+    , test "observes associativity rules 1"
             "foo - bar - baz"
-            (expr $ minus (minus foo bar) baz)
-    , Test "observes associativity rules 2"
+            (minus (minus foo bar) baz)
+    , test "observes associativity rules 2"
             "foo ^ bar ^ baz"
-            (expr $ expon foo (expon bar baz))
-    , Test "observes associativity rules 3"
+            (expon foo (expon bar baz))
+    , test "observes associativity rules 3"
             "foo || bar || baz"
-            (expr $ _or foo (_or bar baz))
-    , Test "observes associativity rules 4"
+            (_or foo (_or bar baz))
+    , test "observes associativity rules 4"
             "foo && bar && baz"
-            (expr $ _and foo (_and bar baz))
-    , Test "infix on its own" "_+_" (expr $ Var "+")
-    , Test "alternate infix syntax"
-           "_+_ (foo, bar)" (expr $ plus foo bar)
-    , Test "prefix on its own" "+_" (expr $ Var "+_")
-    , Test "postfix on its own" "_+" (expr $ Var "_+")
+            (_and foo (_and bar baz))
+    , test "infix on its own" "_+_" (Var "+")
+    , test "alternate infix syntax"
+           "_+_ (foo, bar)" (plus foo bar)
+    , test "prefix on its own" "+_" (Var "+_")
+    , test "postfix on its own" "_+" (Var "_+")
   ] ++ binOpsTests)
   , TestGroup "unary operators" [
-      Test "prefix operator"
+      test "prefix operator"
            "-1"
-           (expr $ Apply (Var "-_") one)
-    , Test "prefix operator 2"
+           (Apply (Var "-_") one)
+    , test "prefix operator 2"
            "++foo"
-           (expr $ Apply (Var "++_") foo)
-    , Test "postfix operator"
+           (Apply (Var "++_") foo)
+    , test "postfix operator"
            "3!"
-           (expr $ Apply (Var "_!") three)
-    , Test "prefix operator in argument"
+           (Apply (Var "_!") three)
+    , test "prefix operator in argument"
            "foo (++bar)"
-           (expr $ Apply foo (Apply (Var "++_") bar))
-    , Test "postfix operator in argument"
+           (Apply foo (Apply (Var "++_") bar))
+    , test "postfix operator in argument"
            "foo (bar++)"
-           (expr $ Apply foo (Apply (Var "_++") bar))
-    , Test "postfix operator after an application"
+           (Apply foo (Apply (Var "_++") bar))
+    , test "postfix operator after an application"
            "foo bar++"
-           (expr $ Apply (Var "_++") $ Apply foo bar)
-    , Test "mixing postfix and infix operators"
+           (Apply (Var "_++") $ Apply foo bar)
+    , test "mixing postfix and infix operators"
            "foo + bar ++"
-           (expr $ Apply (Var "_++") $ plus foo bar)
-    , Test "mixing postfix and infix operators 2"
+           (Apply (Var "_++") $ plus foo bar)
+    , test "mixing postfix and infix operators 2"
            "foo + (bar++)"
-           (expr $ plus foo $ Apply (Var "_++") bar)
-    , Test "mixing prefix and infix operators"
+           (plus foo $ Apply (Var "_++") bar)
+    , test "mixing prefix and infix operators"
            "++foo + bar"
-           (expr $ Apply (Var "++_") $ plus foo bar)
-    , Test "high precedence prefix"
-           "++_ foo" (expr $ Apply (Var "++_") foo)
-    , Test "high precedence prefix 2"
-           "++_ foo bar" (expr $ Apply (Apply (Var "++_") foo) bar)
+           (Apply (Var "++_") $ plus foo bar)
+    , test "high precedence prefix"
+           "++_ foo" (Apply (Var "++_") foo)
+    , test "high precedence prefix 2"
+           "++_ foo bar" (Apply (Apply (Var "++_") foo) bar)
   ]
-  , Test "apply" "foo bar" (expr $ Apply foo bar)
-  , Test "apply associates to the left"
+  , test "apply" "foo bar" (Apply foo bar)
+  , test "apply associates to the left"
           "foo bar baz"
-          (expr $ Apply (Apply foo bar) baz)
+          (Apply (Apply foo bar) baz)
+  , test "no spaces still has apply" "2foo" (Apply two foo)
   , TestGroup "strings" [
-      Test "basic" "\"hello\"" (expr $ String "hello")
-    , Test "can escape quotes" "\"he said \\\"hello\\\" to me\""
-           (expr $ String "he said \"hello\" to me")
-    , Test "can escape newlines" "\"foo\\nbar\""
-           (expr $ String "foo\nbar")
+      test "basic" "\"hello\"" (String "hello")
+    , test "can escape quotes" "\"he said \\\"hello\\\" to me\""
+           (String "he said \"hello\" to me")
+    , test "can escape newlines" "\"foo\\nbar\""
+           (String "foo\nbar")
   ]
   , TestGroup "dot" [
-      Test "dot" "foo.bar" (expr $ Dot foo bar)
-    , Test "dot associates left"
+      test "dot" "foo.bar" (Dot foo bar)
+    , test "dot associates left"
            "foo.bar.baz"
-           (expr $ Dot (Dot foo bar) baz)
-    , Test "dot is higher precedence than apply"
+           (Dot (Dot foo bar) baz)
+    , test "dot is higher precedence than apply"
            "foo baz.bar"
-           (expr $ Apply foo (Dot baz bar))
-    , Test "dot is higher precedence than apply 2"
+           (Apply foo (Dot baz bar))
+    , test "dot is higher precedence than apply 2"
            "foo.baz bar"
-           (expr $ Apply (Dot foo baz) bar)
-    , Test "dots work on numbers" "1 . foo" (expr $ Dot one foo)
-    , Test "dots work on decimals" "2.34 . foo" (expr $ Dot (Number 2.34) foo)
+           (Apply (Dot foo baz) bar)
+    , test "dots work on numbers" "1 . foo" (Dot one foo)
+    , test "dots work on numbers 2" "1.foo" (Dot one foo)
+    , test "dots work on decimals" "2.34 . foo" (Dot (Number 2.34) foo)
+    , test "dots work on decimals" "2.34.foo" (Dot (Number 2.34) foo)
     ]
   , TestGroup "Tuples" [
-      Test "tuples" "(foo, bar)" (expr $ Tuple [foo, bar])
-    , Test "tuples 2" "(foo, bar, baz)" (expr $ Tuple [foo, bar, baz])
-    , Test "empty tuple" "()" (expr $ Tuple [])
-    , Test "tuple of 1 is not a tuple" "(foo)" (expr foo)
-    , Test "nested tuples" "(foo, (bar, baz))"
-            (expr $ Tuple [foo, Tuple [bar, baz]])
-    , Test "nested tuples 2" "((bar, baz, qux), foo)"
-            (expr $ Tuple [Tuple [bar, baz, qux], foo])
-    , Test "tuples with expressions inside" "(foo + 1, bar baz)"
-            (expr $ Tuple [plus foo one, Apply bar baz])
-    , Test "tuples as arguments" "foo(bar, baz)"
-            (expr $ Apply foo $ Tuple [bar, baz])
-    , Test "tuples as arguments 2" "foo()bar"
-            (expr $ Apply (Apply foo $ Tuple []) bar)
+      test "tuples" "(foo, bar)" (Tuple [foo, bar])
+    , test "tuples 2" "(foo, bar, baz)" (Tuple [foo, bar, baz])
+    , test "empty tuple" "()" (Tuple [])
+    , test "tuple of 1 is not a tuple" "(foo)" foo
+    , test "nested tuples" "(foo, (bar, baz))"
+            (Tuple [foo, Tuple [bar, baz]])
+    , test "nested tuples 2" "((bar, baz, qux), foo)"
+            (Tuple [Tuple [bar, baz, qux], foo])
+    , test "tuples with expressions inside" "(foo + 1, bar baz)"
+            (Tuple [plus foo one, Apply bar baz])
+    , test "tuples as arguments" "foo(bar, baz)"
+            (Apply foo $ Tuple [bar, baz])
+    , test "tuples as arguments 2" "foo()bar"
+            (Apply (Apply foo $ Tuple []) bar)
     ]
   ]
+  where test i r e = Test i r (expr e)
 
 arrayTests = TestGroup "Arrays"
   [
@@ -163,20 +187,20 @@ arrayTests = TestGroup "Arrays"
            (rangeS foo (arrayE [bar, baz]))
     ]
   , TestGroup "array dereference" [
-      Test "make array reference" "foo[: bar]" [Ref foo bar]
+      Test "make array reference" "foo[: bar]" [DeRef foo bar]
     , Test "can contain arbitrary expressions"
            "foo [: bar + baz qux]"
-           [Ref foo (plus bar (Apply baz qux))]
+           [DeRef foo (plus bar (Apply baz qux))]
     , Test "should have higher precedence than application"
-           "foo bar[:baz]" [Apply foo $ Ref bar baz]
+           "foo bar[:baz]" [Apply foo $ DeRef bar baz]
     , Test "should have higher precedence than application 2"
-           "(foo bar)[:baz]" [Ref (Apply foo bar) baz]
+           "(foo bar)[:baz]" [DeRef (Apply foo bar) baz]
     , Test "should have lower precedence than dots"
-           "foo.bar[:baz]" [Ref (Dot foo bar) baz]
+           "foo.bar[:baz]" [DeRef (Dot foo bar) baz]
     , Test "should have lower precedence than dots 2"
-           "foo.(bar[:baz])" [Dot foo (Ref bar baz)]
+           "foo.(bar[:baz])" [Dot foo (DeRef bar baz)]
     , Test "should associate to the left"
-           "foo[:bar][:baz]" [Ref (Ref foo bar) baz]
+           "foo[:bar][:baz]" [DeRef (DeRef foo bar) baz]
     ]
   ]
 
@@ -216,7 +240,7 @@ typingTests = TestGroup "Typed expressions"
   ]
   where multi = TMultiFunc . M.fromList
         multi1 a b = multi [(a, b)]
-        [a, b, c] = map TRigidVar ["a", "b", "c"]
+        [a, b, c] = map TVar ["a", "b", "c"]
         test name input typ = Test name input [Typed foo typ]
         collection name open close f = TestGroup name tests where
           encl s = "foo: " ++ open ++ s ++ close
@@ -282,13 +306,13 @@ functionTests = TestGroup "Functions"
                          $ plus bar baz]
     , Test "should make a function definition with polymorphic args"
            "foo(bar: a) (baz: b) = bar baz"
-           [Define "foo" $ Lambda (Typed bar (TRigidVar "a"))
-                         $ Lambda (Typed baz (TRigidVar "b"))
+           [Define "foo" $ Lambda (Typed bar (TVar "a"))
+                         $ Lambda (Typed baz (TVar "b"))
                          $ Apply bar baz]
     , Test "should make a function definition with a symbol"
            "(bar: a) <*> (baz: b) = bar baz"
-           [Define "<*>" $ Lambda (Tuple [ Typed bar (TRigidVar "a")
-                                         , Typed baz (TRigidVar "b")])
+           [Define "<*>" $ Lambda (Tuple [ Typed bar (TVar "a")
+                                         , Typed baz (TVar "b")])
                          $ Apply bar baz]
     , Test "should make a prefix function definition"
            "!(foo: Bool) = not foo"

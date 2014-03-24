@@ -8,7 +8,7 @@ import qualified Data.Text as T
 import qualified Data.Map as M
 
 import Common
-import TypeCheckerLib
+import TypeLib
 
 data Expr = Var         !Name
           | Number      !Double

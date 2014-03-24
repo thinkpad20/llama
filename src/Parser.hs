@@ -13,7 +13,7 @@ import qualified Data.Map as M
 
 import Common
 import AST
-import TypeCheckerLib
+import TypeLib
 import Indent
 
 instance Render ParseError
@@ -54,11 +54,12 @@ pSymbol = fmap T.pack $ check $ many1 $ oneOf symChars <* notFollowedBy (char '_
 pIdent :: Parser Char -> Parser T.Text
 pIdent firstChar = fmap T.pack $ check $ do
   first <- firstChar
-  rest <- many $ alphaNum <|> char '_'
-  bangs <- many $ char '!' <|> char '\''
+  rest <- many $ alphaNum <|> char '_' <|> char '-' <|> char '\''
+  bangs <- many $ char '!'
   case (first : rest ++ bangs) of
     "_" -> unexpected "Single underscore"
-    ident -> return ident
+    ident | last ident == '-' -> unexpected "Ends in a dash"
+          | otherwise -> return ident
 
 pVar :: Parser Expr
 pVar = do
@@ -89,10 +90,10 @@ pConstructor = Constructor <$> pIdent upper
 pDouble :: Parser Double
 pDouble = lexeme $ do
   ds <- many1 digit
-  option (read ds) $ do
-    exactSym "."
-    ds' <- many1 digit
-    return $ read (ds ++ "." ++ ds')
+  option (read ds) $ getDecimal ds
+  where getDecimal ds = try $ do exactSym "."
+                                 ds' <- many1 digit
+                                 return $ read (ds ++ "." ++ ds')
 
 pType :: Parser Type
 pType = choice [pTFunction]

@@ -10,7 +10,8 @@ module Common ( (!), (<!>), (<$>), (<$), (<*), (*>), (<*>), pure
               , intercalate, Identity(..), runState, evalState, (>>==)
               , trim, line, throwError, catchError, (~>), (<$$), Render(..)
               , isInt, ErrorList(..), throwError1, throwErrorC, addError
-              , addError', forever, isSpace, catMaybes, sortWith)  where
+              , addError', forever, isSpace, catMaybes, sortWith, each)
+              where
 
 import Control.Monad
 import Control.Monad.State
@@ -43,6 +44,14 @@ class Show a => Render a where
   render = show ~> T.pack
   renderIO :: a -> IO T.Text
   renderIO = return . render
+
+instance Render T.Text
+instance Render Int
+instance Render Char
+instance (Render a, Render b) => Render (a, b)
+
+instance Render String where
+  render = show ~> T.pack
 
 instance Render a => Render [a] where
   render as = "[" <> T.intercalate ", " (map render as) <> "]"
@@ -100,3 +109,5 @@ throwErrorC = throwError1 . mconcat
 throwError1 = throwError . ErrorList . pure
 addError msg (ErrorList msgs) = throwError $ ErrorList $ msg : msgs
 addError' = addError . mconcat
+
+each = flip map
