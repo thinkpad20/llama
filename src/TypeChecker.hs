@@ -67,6 +67,7 @@ instance Typable Expr where
     String _ -> only strT
     Constructor name -> only =<< lookupAndInstantiate name
     Var name -> only =<< lookupAndInstantiate name
+    Case expr argsBodies -> typeOfCase expr argsBodies
     Lambda param body -> do
       pushNameSpace "%l"
       (paramT, paramS) <- litTypeOf param
@@ -126,17 +127,56 @@ typeOfExtension name expr = lookup1 name >>= \case
     TMultiFunc  _ -> extend polytype
     type_ ->
       throwErrorC ["Can't extend non-function type `", render type_, "'"]
-  where extend polytype = do
-          newT <- unusedTypeVar
-          -- TODO: we need to figure out how to do recursive definitions in
-          -- this system.
-          pushNameSpace name
-          (newT', subs2) <- typeOf expr
-          popNameSpace
-          subs3 <- unify (newT, apply subs2 newT')
-          generalized <- generalize (apply subs3 newT)
-          store name (generalized <> polytype)
-          return (newT, subs3 <> subs2)
+  where
+    extend polytype = do
+      newT <- unusedTypeVar
+      pushNameSpace name
+      (newT', subs2) <- typeOf expr
+      popNameSpace
+      case newT' of
+        -- Make sure it's a function type.
+        TFunction from to ->
+          clashes polytype from ! \case
+            -- Make sure it doesn't overwrite anything.
+            False -> do
+              subs3 <- unify (newT, apply subs2 newT')
+              generalized <- generalize (apply subs3 newT)
+              store name (generalized <> polytype)
+              return (newT, subs3 <> subs2)
+            True -> throwErrorC [ "Declared function extension "
+                                    , "would overwrite existing "
+                                    , "version for type `", render from, "'"]
+        _ -> throwErrorC [ "Only functions can be extended, "
+                         , "and only with other functions"]
+    -- | TODO: "normalize" isn't a super-intelligent function. We might want
+    -- to use a generalized type or something.
+    clashes (Polytype _ t) from = case t of
+      TFunction from' _ -> normalize from == normalize from'
+      TMultiFunc set ->
+        any (\typ -> normalize typ == normalize from) (M.keys set)
+
+
+typeOfCase :: Expr -> [(Expr, Expr)] -> Typing (Type, Subs)
+typeOfCase expr patsBodies = do
+  (exprT, exprS) <- typeOf expr
+  applyToEnv exprS
+  -- Give each pattern and body a number, for separate namespaces
+  results <- forM (zip [0..] patsBodies) $ \(n, (pat, body)) -> do
+    -- Grab a copy of the type env
+    pushNameSpace ("%case" <> T.pack (show n))
+    (patT, patS) <- litTypeOf pat
+    patS' <- unify (patT, exprT) `catchError` addError "pattern type mismatch"
+    applyToEnv patS
+    (bodyT, bodyS) <- typeOf body
+    popNameSpace
+    applyToEnv bodyS
+    return (bodyT, mconcat [exprS, patS, patS', bodyS])
+  unify' results
+  where unify' ((t, subs):rest) = go (t, subs) rest
+        go (t, subs) [] = return (t, subs)
+        go (t, subs) ((t', subs'):rest) = do
+          subs' <- unify (t, t') `catchError` addError "case result type mismatch"
+          go (t, subs <> subs') rest
 
 typeOfIf :: (Expr, Expr, Expr) -> Typing (Type, Subs)
 typeOfIf (cond, true, false) = do

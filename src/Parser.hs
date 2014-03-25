@@ -248,12 +248,25 @@ pDeRef = pDotted >>= parseRest where
     <|> return res
 
 pDotted :: Parser Expr
-pDotted = (pLambda <|> pTerm) >>= parseRest where
-  parseRest res = do
-    exactSym "."
-    y <- pTerm
-    parseRest (Dot res y)
-    <|> return res
+pDotted = do
+  parseRest =<< (toIgnore >>= \case
+    True -> pTerm
+    False -> pLambda <|> pTerm)
+  where
+    parseRest res = do
+      exactSym "."
+      y <- pTerm
+      parseRest (Dot res y)
+      <|> return res
+
+pCase :: Parser Expr
+pCase = Case <$ keyword "case" <*> pExpr <* keyword "of" <*> alts
+  where alts = alt `sepBy1` exactSym "|"
+        alt = do
+          pat <- ignoreOn *> pRightAssociativeFunction <* ignoreOff
+          exactSym "=>"
+          body <- pExprOrBlock
+          return (pat, body)
 
 pTerm :: Parser Expr
 pTerm = lexeme $ choice [ Number <$> pDouble
@@ -261,7 +274,8 @@ pTerm = lexeme $ choice [ Number <$> pDouble
                         , pVar
                         , pConstructor
                         , pParens
-                        , pArray ]
+                        , pArray
+                        , pCase ]
 
 pOpenBrace = schar'  '{' >> notFollowedBy (oneOf "!j")
 pCloseBrace = schar'  '}'
@@ -342,12 +356,11 @@ pLambda = try $ do
   case argsBodies of
     [(arg, body)] -> return $ Lambda arg body
     _ -> return $ Lambdas argsBodies
+  where pArgBody = (,) <$$ pTerm <* exactSym "=>" <*> pExprOrBlock
 
 -- | Clearly, this isn't the final version :)
 unusedName :: Parser Name
 unusedName = return "(arg)"
-
-pArgBody = (,) <$$ pTerm <* exactSym "=>" <*> pExprOrBlock
 
 pBlockOrExpression = try pBlock <|> pExpression
 pThen = pBlock <|> do keyword "then" <|> return "then"

@@ -33,6 +33,12 @@ functionTests = TestGroup "functions" [
          (tTuple [strT, strT] ==> tTuple [strT, strT])
   , Test "lambda with tuple 2" "(x: Str, y: Num) => (y, x)"
          (tTuple [strT, numT] ==> tTuple [numT, strT])
+  , Test "lambda with literal in tuple"
+         "(x: Str, 2, y: Num) => (y, x)"
+         (tTuple [strT, numT, numT] ==> tTuple [numT, strT])
+  , Test "lambda with literal in tuple 2"
+         "(\"hello\", 2, y: Num) => y"
+         (tTuple [strT, numT, numT] ==> numT)
   , Test "polymorphic lambda" "x => Just x" (a ==> maybeT a)
   , Test "polymorphic lambda 2" "x => [x]" (a ==> arrayOf a)
   , Test "polymorphic lambda 2" "x => [x, x]" (a ==> arrayOf a)
@@ -44,6 +50,11 @@ functionTests = TestGroup "functions" [
          "foo = f: Num -> b => f 1; foo"
          ((numT ==> a) ==> a)
   , ShouldError "Fails occurs check" "x => x x"
+  , Test "recursive function"
+         "fact (n: Num) = if n < 2 then 1 else fact (n - 1)"
+         (numT ==> numT)
+  , Test "recursive function, non-terminating"
+         "bottom x = bottom x" (a ==> b)
   ]
 
 ifTests = TestGroup "if expressions" [
@@ -62,6 +73,13 @@ ifTests = TestGroup "if expressions" [
                 "if True then 1 else if False then 2 else \"hello\""
   , ShouldError "non-bool condition" "if 1 then 2 else 3"
  ]
+
+caseTests = TestGroup "case expressions" [
+    Test "basic" "case 1 of 2 => 3" numT
+  , Test "unified with alternative"
+         "foo => case foo of 1 => 2"
+         (numT ==> numT)
+  ]
 
 binaryTests = TestGroup "binary operators" [
     TestGroup "numbers" [
@@ -101,30 +119,41 @@ multifunctionTests = TestGroup "Multifunctions" [
     Test "can extend a function definition"
          ("foo (n: Num) = n + 1; " <>
           "foo (s: Str) &= s + \"!\"; foo")
-         (TMultiFunc (M.fromList [(numT, numT), (strT, strT)]))
+         (mf [(numT, numT), (strT, strT)])
   , Test "can extend a function definition with tuple"
          ("foo (n: Num) = n + 1; " <>
           "foo (s: Str) &= s + \"!\"; " <>
           "foo (s: Str, n: Num) &= s + \"!\"; foo")
-         (TMultiFunc (M.fromList [ (numT, numT)
-                                 , (strT, strT)
-                                 , (tTuple [strT, numT], strT)]))
-  , SkipTest "can extend a function definition with generic"
+         (mf [(numT, numT), (strT, strT), (tTuple [strT, numT], strT)])
+  , Test "can use recursion when extending a function"
+          ("foo (s: Str) = 2; " <>
+           "foo (n: Num) &= if n < 2 then 1 else foo (n - 1); foo")
+          (mf [(numT, numT), (strT, numT)])
+  , Test "can use recursion when extending a function 2"
+          ("foo (s: Str) = 2; " <>
+           "foo (n: Num) &= if n < 2 then foo (show 1) " <>
+           " else foo (n - 1); foo")
+          (mf [(numT, numT), (strT, numT)])
+  , Test "can extend a function definition with generic"
          ("foo (n: Num) = n + 1; " <>
           "foo (x: a) &= [x]; foo")
-         (TMultiFunc (M.fromList [(numT, numT), (a, arrayOf a)]))
+         (mf [(numT, numT), (a, arrayOf a)])
   , Test "can extend a binary function definition"
        "(n: Num) / (s: Str) &= n + 1; _/_"
-       (TMultiFunc (M.fromList [ (tTuple [numT, numT], numT)
-                               , (tTuple [numT, strT], numT)]))
+       (mf [ (tTuple [numT, numT], numT)
+           , (tTuple [numT, strT], numT)])
   , Test "can use a previous definition inside an extension"
        ("foo (n: Num) = n + 1; " <>
         "foo (s: Str) &= (s, foo 3); foo")
-        (TMultiFunc (M.fromList [ (numT, numT)
-                                 , (strT, tTuple [strT, numT])]))
+        (mf [(numT, numT), (strT, tTuple [strT, numT])])
   , Test "can apply a multifunction" "length \"hello\"" numT
   , Test "can apply a multifunction 2" "length [1,2,3]" numT
+  , ShouldError "overwriting multifunction"
+                "foo (n: Num) = n + 1; foo (n: Num) &= n - 1; foo"
+  , ShouldError "extending with a non-function"
+                "foo (n: Num) = n + 1; foo &= 1; foo"
   ]
+  where mf = TMultiFunc . M.fromList
 
 unifyTests1 = TestGroup "Unification" [
     subs "constants" ("Num", "Num") []
@@ -257,7 +286,7 @@ generalizeE (env, t) = Right $ generalize' env t
 
 group1 :: [Test String Type]
 group1 = [basicTests, functionTests, ifTests, binaryTests, vectorTests
-         , multifunctionTests]
+         , multifunctionTests, caseTests]
 
 main = runAllTests [ run typeIt group1
                    , run unifyIt [unifyTests1, unifyFailTests]

@@ -441,6 +441,19 @@ ifTests = TestGroup "If statements"
     [If (If true false true) one two]
   ]
 
+caseTests = TestGroup "Case statements"
+  [
+    Test "basic" "case 1 of 2 => 3" [Case one [(two, three)]]
+  , Test "multiple" "case 1 of 2 => 3 | 3 => 1"
+         [Case one [(two, three), (three, one)]]
+  , Test "with variable" "case foo of 2 => bar 3 | baz 3 => 1"
+         [Case foo [(two, Apply bar three), (Apply baz three, one)]]
+  , Test "separated by semicolon"
+         "case foo of 2 => bar 3 | baz 3 => 1; case 1 of 2 => 3"
+         [Case foo [(two, Apply bar three), (Apply baz three, one)]
+         , Case one [(two, three)]]
+  ]
+
 whileTests = TestGroup "While statements"
  [
     TestGroup "single statements" [
@@ -520,6 +533,7 @@ doTests = runTests grab [ expressionTests
                         , typingTests
                         , functionTests
                         , ifTests
+                        , caseTests
                         , flowTests
                         , rassocTests
                         ]
