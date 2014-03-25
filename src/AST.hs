@@ -38,7 +38,7 @@ data Expr = Var         !Name
           | After       !Expr !Expr
           | Before      !Expr !Expr
           | Continue
-          | Mutable     !Expr
+          | Modified    !Mod !Expr
           | TypeDef !Name !Type
           deriving (Show, Eq)
 

@@ -21,11 +21,11 @@ data Type = TVar       !Name
 type TypeMap = M.Map Type Type
 type TypeTable = M.Map Name Type
 
-data Mod = TMut
-         | TRef
-         | TPure
-         | TLocal
-         | TLazy
+data Mod = Mut
+         | Ref
+         | Pure
+         | Local
+         | Lazy
          deriving (Show, Eq, Ord)
 
 -- | A polytype represents a type with zero or more type variables bound in
@@ -147,11 +147,11 @@ instance Render Type where
             in T.intercalate ", " (map rPair pairs)
 
 instance Render Mod where
-  render TMut = "mut"
-  render TRef = "ref"
-  render TPure = "pure"
-  render TLocal = "local"
-  render TLazy = "lazy"
+  render Mut = "mut"
+  render Ref = "ref"
+  render Pure = "pure"
+  render Local = "local"
+  render Lazy = "lazy"
 
 instance Monoid Type where
   mempty = TMultiFunc mempty

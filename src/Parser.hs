@@ -14,7 +14,7 @@ import qualified Data.Map as M
 import Common
 import AST
 import TypeLib
-import Indent
+import ParserLib
 
 instance Render ParseError
 
@@ -25,7 +25,8 @@ skip = many (oneOf " \t") *> option () lineComment
                          (char '\n' >> return ()) <|> eof
 keywords = ["if", "do", "else", "case", "of", "infix", "typedef"
            , "object", "while", "for", "in", "then", "after", "before"
-           , "return", "multi"]
+           , "return", "break", "continue", "mut", "ref", "pure"
+           , "local", "lazy"]
 keySyms =  ["->", "|", "=", ";", "..", "=>", "?", ":", "#", ":=", "&="]
 
 keyword k = fmap T.pack $ go where
@@ -321,7 +322,16 @@ pDefPostfix (sym, f) = try $ do
   body <- exactSym sym *> pBlock
   return $ f ("_" <> op) $ Lambda arg body
 
-pMut = Mutable <$ keyword "mut" <*> pExpr
+pModified = Modified <$$ pMod <*> pExpr
+
+pMod = do
+  w <- choice $ map keyword ["mut", "ref", "pure", "local", "lazy"]
+  case w of
+    "pure"  -> return Pure
+    "mut"   -> return Mut
+    "ref"   -> return Ref
+    "local" -> return Local
+    "lazy"  -> return Lazy
 
 pAssign = try $ Assign <$$ pExpr <* exactSym ":=" <*> pExprOrBlock
 
@@ -384,7 +394,7 @@ pExpression = do
       "before" -> Before expr rest
 
 pExpr :: Parser Expr
-pExpr = lexeme $ choice [ pMut, pLambda, pRightAssociativeFunction, pIfOrIf' ]
+pExpr = lexeme $ choice [ pModified, pLambda, pRightAssociativeFunction, pIfOrIf' ]
 
 testE = parse pExpression
 testS = parse pExpressions

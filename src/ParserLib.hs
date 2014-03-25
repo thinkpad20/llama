@@ -1,7 +1,7 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
-module Indent (indent, dedent, same, parse, Parser(..), IndentState(..),
-               ignoreOn, ignoreOff, toIgnore) where
+module ParserLib (indent, dedent, same, parse, Parser(..), IndentState(..),
+               ignoreOn, ignoreOff, toIgnore, ignoring) where
 
 import Common
 import Text.Parsec hiding (parse)
@@ -99,3 +99,6 @@ ignoreOff = modifyState $ \s -> s {ignoreLambda = False}
 
 toIgnore :: Parser Bool
 toIgnore = getState <!> ignoreLambda
+
+ignoring :: Parser a -> Parser a
+ignoring p = ignoreOn *> p <* ignoreOff
