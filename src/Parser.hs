@@ -3,7 +3,6 @@
 module Parser ( grab
               , Expr(..)
               , Block
-              , ArrayLiteral(..)
               , grabT) where
 
 import Text.Parsec hiding (Parser, parse, State)
@@ -161,7 +160,7 @@ pString' = do
     c -> error $ "wtf is " ++ [c]
 
 pArray :: Parser Expr
-pArray = Array <$> between (schar '[') (schar ']') get where
+pArray = Literal <$> between (schar '[') (schar ']') get where
     get = try (do
       start <- pExpr
       exactSym ".."

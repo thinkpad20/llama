@@ -17,10 +17,10 @@ expr e = [e]
                            , tConst "Baz", tConst "Qux")
 print_ = Apply (Var "print")
 assert = Apply (Var "assert")
-arrayS exprs = expr $ Array $ ArrayLiteral exprs
-arrayE exprs = Array $ ArrayLiteral exprs
+arrayS exprs = expr $ Literal $ ArrayLiteral exprs
+arrayE exprs = Literal $ ArrayLiteral exprs
 rangeS start stop = rangeE start stop ! expr
-rangeE start stop = ArrayRange start stop ! Array
+rangeE start stop = ArrayRange start stop ! Literal
 ops = [ "+", "*", "-", "/", "^", "%", "<", ">", "<="
       , ">=", "==", "!=", "$", "|>", "<~", "~>", "||", "&&"]
 [ plus, times, minus, divide, expon, mod, lt, gt, leq, geq
@@ -53,7 +53,7 @@ expressionTests = TestGroup "Expressions"
     , test "variable with primes and others"
            "foo'oo''" (Var "foo'oo''")
     , test "variable with dashes and others"
-           "foo'oo''" (Var "foo'oo''")
+           "foo-oo--o" (Var "foo-oo--o")
     , test "variable with bang" "foo!" (Var "foo!")
     , test "variable with bangs" "foo!!" (Var "foo!!")
     , test "variable with bangs and things after it"  "foo!oo"

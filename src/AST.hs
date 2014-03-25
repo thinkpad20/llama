@@ -22,7 +22,7 @@ data Expr = Var         !Name
           | Lambdas     ![(Expr, Expr)]
           | Case        !Expr ![(Expr, Expr)]
           | Tuple       ![Expr]
-          | Array       !ArrayLiteral
+          | Literal     !Literal
           | DeRef       !Expr !Expr
           | Typed       !Expr !Type
           | If          !Expr !Expr !Expr
@@ -42,8 +42,12 @@ data Expr = Var         !Name
           | TypeDef !Name !Type
           deriving (Show, Eq)
 
-data ArrayLiteral = ArrayLiteral ![Expr]
-                  | ArrayRange !Expr !Expr deriving (Show, Eq)
+data Literal = ArrayLiteral ![Expr]
+             | ArrayRange   !Expr !Expr
+             | DictLiteral  ![(Expr, Expr)]
+             | SetLiteral   ![Expr]
+             | ListLiteral  ![Expr]
+             deriving (Show, Eq)
 
 type Block = [Expr]
 
@@ -63,8 +67,8 @@ instance Render Expr where
       Apply (Var op) e | isSymbol op -> return $ op <> " " <> render'' e
       Apply e1 e2 -> return $ render'' e1 <> " " <> render'' e2
       Tuple es -> return $ "(" <> (T.intercalate "," . map render) es <> ")"
-      Array (ArrayLiteral exprs) -> return $ "[" <> T.intercalate ", " (map render exprs) <> "]"
-      Array (ArrayRange start stop) -> return $ "[" <> render start <> ".." <> render stop <> "]"
+      Literal (ArrayLiteral exprs) -> return $ "[" <> T.intercalate ", " (map render exprs) <> "]"
+      Literal (ArrayRange start stop) -> return $ "[" <> render start <> ".." <> render stop <> "]"
       DeRef object index -> return $ render'' object <> "[:" <> render index <> "]"
       Lambda arg expr -> return $ render'' arg <> " => " <> render expr
       Case expr alts -> return $ "case " <> render expr <> " of " <> T.intercalate " | " rPairs
