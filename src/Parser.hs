@@ -25,7 +25,7 @@ skip = many (oneOf " \t") *> option () lineComment
 keywords = ["if", "do", "else", "case", "of", "infix", "typedef"
            , "object", "while", "for", "in", "then", "after", "before"
            , "return", "break", "continue", "mut", "ref", "pure"
-           , "local", "lazy", "extends"]
+           , "local", "lazy", "extends", "with"]
 keySyms =  ["->", "|", "=", ";", "..", "=>", "?", ":", "#", ":=", "&="]
 
 keyword k = fmap T.pack $ go where
@@ -47,6 +47,9 @@ check p = lexeme . try $ do
   if s `elem` (keywords ++ keySyms)
     then unexpected $ "reserved word " ++ show s
     else return s
+
+lowers :: Parser String
+lowers = check $ many1 lower
 
 pSymbol :: Parser T.Text
 pSymbol = fmap T.pack $ check $ many1 $ oneOf symChars <* notFollowedBy (char '_')
@@ -100,12 +103,14 @@ pObjectDec :: Parser ObjectDec
 pObjectDec = do
   keyword "object"
   name <- pIdent upper
+  vars <- many $ fmap T.pack lowers
   extends <- optionMaybe (keyword "extends" *> pIdent upper)
   exactSym "="
   (constrs, attrs) <- getConstrs
   return $ defObj {
       objName = name
     , objExtends = extends
+    , objVars = vars
     , objConstrs = constrs
     , objAttrs = attrs
     }
@@ -135,7 +140,7 @@ pConstructorDec = do
 pType :: Parser Type
 pType = choice [pTFunction]
 pTTerm = choice [pMultiFunc, pTVector, pTList, pTMap, pTSet, pTVar, pTConst, pTTuple]
-pTVar = TVar <$> fmap T.pack (many1 lower) <* skip
+pTVar = TVar <$> fmap T.pack lowers <* skip
 pTConst = TConst <$> pIdent upper
 pTParens = schar '(' *> sepBy pType (schar ',') <* schar ')'
 pTTuple = pTParens >>= \case
@@ -166,9 +171,6 @@ pMultiFunc = do
 pTypeDef :: Parser Expr
 pTypeDef =
   TypeDef <$ keyword "typedef" <*> pIdent upper <* exactSym "=" <*> pType
-
-pTypedVar :: Parser Expr
-pTypedVar = try $ Typed <$$ pVar <* exactSym ":" <*> pType
 
 pParens :: Parser Expr
 pParens = schar '(' *> exprs <* schar ')'

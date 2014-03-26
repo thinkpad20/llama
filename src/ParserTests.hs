@@ -377,11 +377,30 @@ objectTests = TestGroup "Object declarations" [
                                     , constrExtends = Just barC}
                              , barCr {constrExtends = Just fooC}]
                , objExtends = (Just "Bar")})
+  , test1 "constructors with logic"
+          ("object Foo extends Bar = {" <>
+           "Foo bar do baz = 1; " <>
+           "Bar {qux = foo bar; print \"hello\"}}")
+          (obj {objConstrs = [ fooCr {constrArgs = [bar]
+                                    , constrLogic = Just expr1}
+                             , barCr {constrLogic = Just expr2}]
+               , objExtends = (Just "Bar")})
+  , test1 "generics" "object Foo a = {Bar; Foo (bar: a)}"
+          (obj {objVars = ["a"],
+                objConstrs = [barCr, fooCr {constrArgs = [Typed bar a]}]})
+  , test1 "with attributes"
+          "object Foo a = {Bar; Foo (bar: a) with foo: Num; bar: Str}"
+          (obj { objVars = ["a"]
+               , objConstrs = [barCr, fooCr {constrArgs = [Typed bar a]}]
+               , objAttrs = [Typed foo numT, Typed bar strT]})
   ] where
       test1 desc input ex = Test desc input (expr $ ObjDec ex)
       obj = defObj { objName = "Foo", objConstrs = [fooCr]}
       fooCr = defConstr {constrName = "Foo"}
       barCr = defConstr {constrName = "Bar"}
+      expr1 = Define "baz" one
+      expr2 = Block [Define "qux" (Apply foo bar), print_ (String "hello")]
+      a = TVar "a"
 
 rassocTests = TestGroup "Right-associative functions"
   [
