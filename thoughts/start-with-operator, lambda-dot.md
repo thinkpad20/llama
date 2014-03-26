@@ -3,10 +3,9 @@
 Let's say we have this code:
 
 ```
-trait Monad (m: t -> t) = {
+trait Monad (m: t -> t) = 
   bind : m a -> (a -> m b) -> m b;
   lift : a -> m a;
-}
 
 impl Monad for Maybe = { 
   m.bind f = case m of
@@ -32,7 +31,7 @@ subFrom5 = sub 5
 sub4From n = n.sub 4
 sub4From' = .sub 4
 
-assert 5 - 4 == sub 5 4 == subFrom5 4 == sub4From 5 == sub4From' 5 == 1
+assert 5 - 4 == sub 5 4 == subFrom5 4 = sub4From 5 == sub4From' 5 == 1
 ```
 
 
@@ -53,13 +52,13 @@ bar = (((1) + 2 + 3) * 9) + 17
 assert foo == bar == 71
 ```
 
-Then we could just use the forward application operator `!` to simulate a Haskell `do`-block:
+Then we could just use the forward application operator `|>` to simulate a Haskell `do`-block:
 
 ```
 pipe m = {
   m;
-  ! .bind (n => lift (n + 1));
-  ! .bind (n => lift (n * 4));
+  |> .bind (n => lift (n + 1));
+  |> .bind (n => lift (n * 4));
 }
 ```
 
@@ -69,8 +68,8 @@ Using `rassoc` we can make it even nicer:
 rassoc .bind, lift
 pipe3 = {
   m;
-  ! .bind n => lift n + 1;
-  ! .bind n => lift n * 4;
+  |> .bind n => lift n + 1;
+  |> .bind n => lift n * 4;
 }
 ```
 
@@ -79,15 +78,15 @@ This becomes
 ```
 pipe m = {
   m;
-  ! (x => x.bind n => lift n + 1);
-  ! (x => x.bind n => lift n * 4);
+  |> (x => x.bind n => lift n + 1);
+  |> (x => x.bind n => lift n * 4);
 }
 ```
 
 Which equals:
 
 ```
-pipe m = (m ! x => x.bind n => lift n + 1) ! (x => x.bind n => lift n * 4)
+pipe m = (m |> x => x.bind n => lift n + 1) |> (x => x.bind n => lift n * 4)
 ```
 
 Which equals:
