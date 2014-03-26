@@ -63,6 +63,7 @@ applyToEnv subs = modify $ \s -> s {typeEnv = apply subs (typeEnv s)}
 
 instance Typable Expr where
   typeOf e = case e of
+    Block blk -> pushNameSpace "%b" *> typeOf blk <* popNameSpace
     Number _ -> only numT
     String _ -> only strT
     Constructor name -> only =<< lookupAndInstantiate name
@@ -78,8 +79,9 @@ instance Typable Expr where
     Define name expr -> typeOfDefinition name expr
     Extend name expr -> typeOfExtension name expr
     Apply func arg -> typeOfApply typeOf func arg
-    If c t f -> typeOfIf (c, t, f)
-    Array (ArrayLiteral arr) -> do
+    If c t f -> typeOfIf c t f
+    While c e -> typeOfWhile c e
+    Literal (ArrayLiteral arr) -> do
       (ts, subs) <- typeOfList typeOf arr
       case ts of
         [] -> do newT <- unusedTypeVar
@@ -178,11 +180,11 @@ typeOfCase expr patsBodies = do
           subs' <- unify (t, t') `catchError` addError "case result type mismatch"
           go (t, subs <> subs') rest
 
-typeOfIf :: (Expr, Expr, Expr) -> Typing (Type, Subs)
-typeOfIf (cond, true, false) = do
+typeOfIf :: Expr -> Expr -> Expr -> Typing (Type, Subs)
+typeOfIf cond true false = do
   (condT, condS) <- typeOf cond
   subs1 <- unify (condT, boolT)
-  applyToEnv subs1
+  applyToEnv (subs1 <> condS)
   (trueT, trueS) <- typeOf true
   applyToEnv trueS
   (falseT, falseS) <- typeOf false
@@ -190,6 +192,14 @@ typeOfIf (cond, true, false) = do
   subs2 <- unify (trueT, falseT)
   let subs = mconcat [subs2, falseS, trueS, subs1, condS]
   return (trueT, subs)
+
+typeOfWhile :: Expr -> Expr -> Typing (Type, Subs)
+typeOfWhile cond expr = do
+  (condT, condS) <- typeOf cond
+  subs <- unify (condT, boolT)
+  applyToEnv (subs <> condS)
+  (exprT, exprS) <- typeOf expr
+  return (maybeT exprT, condS <> exprS <> subs)
 
 -- | Similarly, inferring the type of an application is slightly
 -- different when looking for a literal type, so we provide which typeOf
@@ -242,7 +252,7 @@ litTypeOf expr = case expr of
   Number _ -> only numT
   String _ -> only strT
   Tuple exprs -> typeOfTuple litTypeOf exprs
-  Array (ArrayLiteral arr) -> do
+  Literal (ArrayLiteral arr) -> do
     (ts, subs) <- typeOfList litTypeOf arr
     case ts of
       [] -> only =<< (arrayOf <$> unusedTypeVar)
@@ -307,12 +317,11 @@ lookupAndInstantiate name = lookup name >>= \case
   Nothing -> throwErrorC ["Variable '", name, "' not defined in scope"]
 
 unify :: (Type, Type) -> Typing Subs
-unify types = case types of
+unify types = log' ["unifying ", render types] >> case types of
   (TVar name, typ) -> bind name typ
   (typ, TVar name) -> bind name typ
   (TConst n, TConst n') | n == n' -> return mempty
-  (TTuple ts, TTuple ts') | length ts == length ts' ->
-    mconcat <$> mapM unify (zip ts ts')
+  (TTuple ts, TTuple ts') | length ts == length ts' -> unifyTuple ts ts'
   (TFunction a b, TFunction a' b') -> do
     subs1 <- unify (a, a')
     subs2 <- unify (apply subs1 b, apply subs1 b')
@@ -332,6 +341,15 @@ bind name typ = case typ of
        else return (Subs $ M.singleton name typ)
   where occursCheck = throwErrorC ["Occurs check"]
 
+unifyTuple :: [Type] -> [Type] -> Typing Subs
+unifyTuple ts ts'
+  | length ts /= length ts' = throwError1 "Tuples of different lengths"
+  | otherwise = go mempty ts ts'
+  where go subs [] _ = return subs
+        go subs (t:ts) (t':ts') = do
+          subs' <- unify (apply subs t, apply subs t')
+          go (subs' <> subs) ts ts'
+
 unifyMultiMtoF :: TypeMap -> Type -> Type -> Typing Subs
 unifyMultiMtoF set from to = do
     -- Go through the multifunction's argument types. If we can
@@ -340,37 +358,72 @@ unifyMultiMtoF set from to = do
     -- Valid choices get wrapped in a @Just@, otherwise @Nothing@.
     subsTos <- forM (M.toList set) $ \(from', to') -> do
       log' ["trying to unify `", render from', "' with `", render from, "'"]
-      fmap (wrap to') (unify (from', from)) `catchError` skip
+      flip catchError skip $ do
+        subs <- unify (from', from)
+        log' ["success! subs are: ", render subs]
+        return $ Just (subs, to)
+      fmap (wrap to') (unify (from', from) <* log' ["success!"]) `catchError` skip
     -- Filter out the @Nothing@ values and sort by smallest subs.
     let valids = catMaybes subsTos ! sortWith (fst ~> size)
     log' ["valids: ", render valids]
     when (length valids == 0) $ throwError1 "no argument matches"
     tryAll mempty valids
   where
-    skip _ = return Nothing
+    skip _ = log' ["failed to unify"] >> return Nothing
     wrap type_ subs = Just (subs, type_)
-    tryAll subs valids = case valids of
+    tryAll subs valids = log' ["coming in with subs `", render subs, "'"] >> case valids of
       -- If there aren't any valids, it's incompatible.
       [] -> throwError1 "no return type matches"
       -- If there's exactly one, try to unify @to@ with it after adding the subs.
       [(subs', to')] -> do
         newSubs <- unify (apply (subs <> subs') to', apply (subs <> subs') to)
         return (newSubs <> subs' <> subs)
-      -- If the first two are of equal size, then it's ambiguous, an error.
-      (s1, _):(s2, _):_ | size s1 == size s2 -> ambiguousErr s1 s2
-      -- Otherwise, try to unify, and if it fails, move on to the next.
-      (subs', to'):rest -> do
-        -- Create new types by applying substitutions to existing.
-        let newTo  = apply (subs <> subs') to
-            newTo' = apply (subs <> subs') to'
-        newSubs <- unify (newTo', newTo) `catchError` \_ -> tryAll subs rest
-        return (newSubs <> subs' <> subs)
-    ambiguousErr s1 s2 = let (type1, type2) = (TMultiFunc set, TFunction from to) in
+      -- If the first two are of equal size:
+      (subs', to'):valids' -> do
+
+        -- Find all of the types of the same degree of ambiguity.
+        let (ambigs, rest) = span (\(s, _) -> size subs' == size s) valids'
+        log' ["ambigs: ", render ambigs]
+        case ambigs of
+          -- No ambiguity, can just finish
+          [] -> finish subs subs' to' rest
+          -- Some ambiguity. See if ambiguity goes away when we look
+          -- at the return types.
+          _  -> do
+            -- New valids: ones that the return type also unifies.
+            let subsTos = (subs', to'):ambigs
+            vs <- forM subsTos $ \(s, t) ->
+              flip catchError skip $ do
+                -- @s@ is our incoming subs. See if we can generate
+                -- a new set of subs by unifying @to@ with @t@.
+                s' <- unify (to, t)
+                -- If we can unify, compose @s@ with @s'@ and wrap in @Just@.
+                return $ Just (s <> s', t)
+            -- Filter out the Nothing values and sort by smallest
+            let vs' = catMaybes vs ! sortWith (fst ~> size)
+            log' ["subs: ", render subs]
+            log' ["vs, vs':", render vs']
+            case vs' of
+              -- None of these match: keep going
+              [] -> tryAll subs rest
+              -- One match: we can finish
+              [(s, t)] -> finish subs s t rest
+              -- More than one: ambiguous, to the max :(
+              _ -> ambiguousErr (map fst vs')
+    finish subs subs' to' rest = do
+      log' [render subs']
+      -- Create new types by applying substitutions to existing.
+      let newTo  = apply (subs <> subs') to
+          newTo' = apply (subs <> subs') to'
+      newSubs <- unify (newTo', newTo) `catchError` \_ -> tryAll subs rest
+      return (newSubs <> subs' <> subs)
+    ambiguousErr subs = let (type1, type2) = (TMultiFunc set, TFunction from to) in
       throwErrorC [
         "Ambiguous application of `", render type1, "' to `", render type2, "'. "
-      , "Multiple unification choices are equally valid: could be `", render s1
-      , "', or `", render s2, "'"
+      , "Multiple unification choices are equally valid: could be ", rsubs subs
       ]
+    rsubs :: [Subs] -> T.Text
+    rsubs  = foldr (\s s' -> "`" <> render s <> "', or `" <> render s' <> "'") ""
 
 -- | Takes a polytype and replaces any type variables in the type with unused
 -- variables.

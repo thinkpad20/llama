@@ -18,6 +18,9 @@ expr e = [e]
 print_ = Apply (Var "print")
 assert = Apply (Var "assert")
 arrayS exprs = expr $ Literal $ ArrayLiteral exprs
+listS exprs = expr $ Literal $ ListLiteral exprs
+setS exprs = expr $ Literal $ SetLiteral exprs
+dictS exprs = expr $ Literal $ DictLiteral exprs
 arrayE exprs = Literal $ ArrayLiteral exprs
 rangeS start stop = rangeE start stop ! expr
 rangeE start stop = ArrayRange start stop ! Literal
@@ -168,9 +171,9 @@ expressionTests = TestGroup "Expressions"
   ]
   where test i r e = Test i r (expr e)
 
-arrayTests = TestGroup "Arrays"
+arrayTests = TestGroup "Literals"
   [
-    TestGroup "literals" [
+    TestGroup "array literals" [
       Test "make array literals" "[foo, bar, baz]"
            (arrayS [foo, bar, baz])
     , Test "empty array" "[]" (arrayS [])
@@ -181,11 +184,19 @@ arrayTests = TestGroup "Arrays"
     , Test "use as arguments" "foo [1, bar, baz]"
            [Apply foo $ arrayE [one, bar, baz]]
     ]
-  , TestGroup "ranges" [
+  , TestGroup "array ranges" [
       Test "make array ranges" "[foo..bar]" (rangeS foo bar)
     , Test "nested with array literals" "[foo..[bar, baz]]"
            (rangeS foo (arrayE [bar, baz]))
     ]
+  , TestGroup "lists" [
+      Test "basics" "[l foo, bar]" (listS [foo, bar])
+  ]
+  , TestGroup "lists" [
+      Test "basics" "{s foo, bar}" (setS [foo, bar])
+  ], TestGroup "dicts" [
+      Test "basics" "{d foo => bar, baz => qux}" (dictS [(foo, bar), (baz, qux)])
+  ]
   , TestGroup "array dereference" [
       Test "make array reference" "foo[: bar]" [DeRef foo bar]
     , Test "can contain arbitrary expressions"

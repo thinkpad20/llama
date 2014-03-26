@@ -78,7 +78,6 @@ instance Types Polytype where
     Polytype vars (apply subs' type_)
 
 data Subs = Subs (M.Map Name Type)
-          | SubsList [Subs]
           deriving (Show, Eq)
 
 instance Render Subs where

@@ -10,7 +10,7 @@ module Common ( (!), (<!>), (<$>), (<$), (<*), (*>), (<*>), pure
               , intercalate, Identity(..), runState, evalState, (>>==)
               , trim, line, throwError, catchError, (~>), (<$$), Render(..)
               , isInt, ErrorList(..), throwError1, throwErrorC, addError
-              , addError', forever, isSpace, catMaybes, sortWith, each)
+              , addError', forever, isSpace, catMaybes, sortWith, each, unless)
               where
 
 import Control.Monad
@@ -48,7 +48,8 @@ class Show a => Render a where
 instance Render T.Text
 instance Render Int
 instance Render Char
-instance (Render a, Render b) => Render (a, b)
+instance (Render a, Render b) => Render (a, b) where
+  render (a, b) = "(" <> render a <> "," <> render b <> ")"
 
 instance Render String where
   render = show ~> T.pack

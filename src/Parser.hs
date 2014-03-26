@@ -159,14 +159,21 @@ pString' = do
     '"' -> return str
     c -> error $ "wtf is " ++ [c]
 
-pArray :: Parser Expr
-pArray = Literal <$> between (schar '[') (schar ']') get where
+pLiteral :: Parser Expr
+pLiteral = Literal <$> choice [try array, list, try set, dict] where
+  commas p = p `sepBy` schar ','
+  array = between (schar '[' <* notFollowedBy (char 'l')) (schar ']') get where
     get = try (do
       start <- pExpr
       exactSym ".."
       stop <- pExpr
       return $ ArrayRange start stop)
-      <|> ArrayLiteral <$> (sepBy pExpr (schar ','))
+      <|> ArrayLiteral <$> commas pExpr
+  list = between (exactSym "[l") (schar ']') (ListLiteral <$> commas pExpr)
+  set = between (exactSym "{s") (schar '}') (SetLiteral <$> commas pExpr)
+  rocket = (,) <$$ pTerm <* exactSym "=>" <*> pExpr
+  dict = between (exactSym "{d") (schar '}')
+                 (DictLiteral <$> commas rocket)
 
 pBinary :: Parser Expr
 pBinary = pBackwardApply where
@@ -274,7 +281,7 @@ pTerm = lexeme $ choice [ Number <$> pDouble
                         , pVar
                         , pConstructor
                         , pParens
-                        , pArray
+                        , pLiteral
                         , pCase ]
 
 pOpenBrace = schar'  '{' >> notFollowedBy (oneOf "!j")

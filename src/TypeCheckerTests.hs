@@ -57,22 +57,28 @@ functionTests = TestGroup "functions" [
          "bottom x = bottom x" (a ==> b)
   ]
 
-ifTests = TestGroup "if expressions" [
-    Test "basic" "if False then 1 else 2" numT
-  , Test "variable" "a = False; if a then 1 else 2" numT
-  , ShouldError "non-bool condition" "if 1 then 2 else 3"
-  , Test "nested" "if True then 0 else if False then 1 else 2" numT
-  , Test "nested 2"
-         "if True then if False then 1 else 2 else 3"
-         numT
-  , Test "nested 3"
-         "if (if False then True else False) then 1 else 2"
-         numT
-  , ShouldError "non-matching results" "if True then 1 else \"hello\""
-  , ShouldError "non-matching results 2"
-                "if True then 1 else if False then 2 else \"hello\""
-  , ShouldError "non-bool condition" "if 1 then 2 else 3"
- ]
+ifTests = TestGroup "conditionals" [
+    TestGroup "if statements" [
+      Test "basic" "if False then 1 else 2" numT
+    , Test "variable" "a = False; if a then 1 else 2" numT
+    , ShouldError "non-bool condition" "if 1 then 2 else 3"
+    , Test "nested" "if True then 0 else if False then 1 else 2" numT
+    , Test "nested 2"
+           "if True then if False then 1 else 2 else 3"
+           numT
+    , Test "nested 3"
+           "if (if False then True else False) then 1 else 2"
+           numT
+    , ShouldError "non-matching results" "if True then 1 else \"hello\""
+    , ShouldError "non-matching results 2"
+                  "if True then 1 else if False then 2 else \"hello\""
+    , ShouldError "non-bool condition" "if 1 then 2 else 3"
+  ]
+  , TestGroup "while expressions" [
+    Test "basic" "while True do 1" (maybeT numT)
+  , Test "basic 2 lines" "while True {1; \"hello\"}" (maybeT strT)
+  ]
+  ]
 
 caseTests = TestGroup "case expressions" [
     Test "basic" "case 1 of 2 => 3" numT
@@ -108,11 +114,11 @@ binaryTests = TestGroup "binary operators" [
 vectorTests = TestGroup "vectors" [
     Test "empty" "[]"                  (arrayOf a)
   , Test "basic" "[1,2,3]"             (arrayOf numT)
-  , SkipTest "extending" "[1,2,3] + [4,5]" (arrayOf numT)
+  , Test "extending" "[1,2,3] + [4,5]" (arrayOf numT)
   , Test "appending" "[1,2,3] + 4"     (arrayOf numT)
   , Test "appending 2" "[] + 4"        (arrayOf numT)
   , Test "prepending" "4 + [1,2,3]"    (arrayOf numT)
-  , SkipTest "prepending 2" "4 + []"       (arrayOf numT)
+  , Test "prepending 2" "4 + []"       (arrayOf numT)
   ]
 
 multifunctionTests = TestGroup "Multifunctions" [
@@ -152,6 +158,8 @@ multifunctionTests = TestGroup "Multifunctions" [
                 "foo (n: Num) = n + 1; foo (n: Num) &= n - 1; foo"
   , ShouldError "extending with a non-function"
                 "foo (n: Num) = n + 1; foo &= 1; foo"
+  , ShouldError "ambiguous application"
+      "foo (n: Num) = n + 1; foo (s: Str) &= s + \"hello\"; x => foo x"
   ]
   where mf = TMultiFunc . M.fromList
 
@@ -196,15 +204,12 @@ unifyTests1 = TestGroup "Unification" [
            [("a", numT), ("b", numT)]
     , subs "applied to a variable"
            ("{m Str -> Num}", "a -> Num") [("a", strT)]
-    --, subs "applied to a variable 2"
-    --       ("{m Str -> Num, Num -> Str}", "a -> Num") [("a", strT)]
-    --, subsList "applied to two variables"
-    --          ("{m Str -> Num, Num -> Str}", "a -> b")
-    --          [[("a", strT), ("b", numT)], [("a", numT), ("b", strT)]]
-    --, subs "applied to tuple"
-    --       ("{m (Num, Num) -> Num, (a, [a]) -> [a], " <>
-    --        "([a], a) -> [a], ([a], [a]) -> [a]}", "(Num, [b]) -> c")
-    --       [("b", arrayOf numT), ("c", arrayOf numT)]
+    , subs "applied to a variable 2"
+           ("{m Str -> Num, Num -> Str}", "a -> Num") [("a", strT)]
+    , subs "applied to tuple"
+           ("{m (Num, Num) -> Num, (a, [a]) -> [a]}"
+           , "(Num, [b]) -> c")
+           [("a", numT), ("b", numT), ("c", arrayOf numT)]
     , subs "with applied type"
            ("{m Maybe Num -> Num, Str -> Num}", "Maybe Num -> Num") []
     , subs "with applied type 2"
@@ -218,7 +223,7 @@ unifyTests1 = TestGroup "Unification" [
   ]
   where
     subs name inputs subs' = Test name inputs (fromList subs')
-    subsList name inputs subs' = Test name inputs (SubsList $ map fromList subs')
+    subsOnly name inputs subs' = TestOnly name inputs (fromList subs')
 
 unifyFailTests = TestGroup "Invalid unifications" [
     ShouldError "non-matching constants" ("Num", "Str")
