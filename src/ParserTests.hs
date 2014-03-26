@@ -13,6 +13,7 @@ import Parser (grab)
 
 expr e = [e]
 (foo, bar, baz, qux) = (Var "foo", Var "bar", Var "baz", Var "qux")
+[fooC, barC, bazC, quxC] = map Constructor ["Foo", "Bar", "Baz", "Qux"]
 (fooT, barT, bazT, quxT) = ( tConst "Foo", tConst "Bar"
                            , tConst "Baz", tConst "Qux")
 print_ = Apply (Var "print")
@@ -348,6 +349,40 @@ assignmentTests = TestGroup "Assignments"
          [Assign (Apply foo bar) $ baz `times` Apply qux foo]
   ]
 
+objectTests = TestGroup "Object declarations" [
+    test1 "can declare a basic object" "object Foo = {Foo}" obj
+  , test1 "can declare an object with multiple constructors"
+          "object Foo = {Foo; Bar}" (obj {objConstrs = [fooCr, barCr]})
+  , test1 "can declare constructors with args"
+          "object Foo = {Foo bar}"
+          (obj {objConstrs = [fooCr {constrArgs = [bar]}]})
+  , test1 "can declare multiple constructors with args"
+          "object Foo = {Foo bar; Bar foo}"
+          (obj {objConstrs = [ fooCr {constrArgs = [bar]}
+                             , barCr {constrArgs = [foo]}]})
+  , test1 "can declare extends"
+          "object Foo extends Bar = {Foo}"
+          (obj {objExtends = (Just "Bar")})
+  , test1 "can declare extends"
+          "object Foo extends Bar = {Foo}"
+          (obj {objExtends = (Just "Bar")})
+  , test1 "can declare extends with constructors"
+          "object Foo extends Bar = {Foo bar; Bar foo}"
+          (obj {objConstrs = [ fooCr {constrArgs = [bar]}
+                             , barCr {constrArgs = [foo]}]
+               , objExtends = (Just "Bar")})
+  , test1 "can declare extends with constructors that extend"
+          "object Foo extends Bar = {Foo bar extends Bar; Bar extends Foo}"
+          (obj {objConstrs = [ fooCr {constrArgs = [bar]
+                                    , constrExtends = Just barC}
+                             , barCr {constrExtends = Just fooC}]
+               , objExtends = (Just "Bar")})
+  ] where
+      test1 desc input ex = Test desc input (expr $ ObjDec ex)
+      obj = defObj { objName = "Foo", objConstrs = [fooCr]}
+      fooCr = defConstr {constrName = "Foo"}
+      barCr = defConstr {constrName = "Bar"}
+
 rassocTests = TestGroup "Right-associative functions"
   [
     Test "rassoc doesn't matter when single expr"
@@ -547,6 +582,7 @@ doTests = runTests grab [ expressionTests
                         , caseTests
                         , flowTests
                         , rassocTests
+                        , objectTests
                         ]
 
 main = doTests

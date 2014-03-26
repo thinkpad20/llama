@@ -36,6 +36,7 @@ data Expr = Var         !Name
           | Break       !Expr
           | After       !Expr !Expr
           | Before      !Expr !Expr
+          | ObjDec      !ObjectDec
           | Continue
           | Modified    !Mod !Expr
           | TypeDef !Name !Type
@@ -50,10 +51,44 @@ data Literal = ArrayLiteral ![Expr]
 
 type Block = [Expr]
 
+data ObjectDec = ObjectDec {
+    objName :: Name
+  , objExtends :: Maybe Name
+  , objVars :: [Name]
+  , objConstrs :: [ConstructorDec]
+  , objAttrs :: [Expr]
+  }
+  deriving (Show, Eq)
+
+defObj :: ObjectDec
+defObj = ObjectDec {
+    objName = "(some object)"
+  , objExtends = Nothing
+  , objVars = []
+  , objConstrs = []
+  , objAttrs = []
+  }
+
+data ConstructorDec = ConstructorDec {
+    constrName :: Name
+  , constrArgs :: [Expr]
+  , constrExtends :: Maybe Expr
+  , constrLogic :: Maybe Expr
+  }
+  deriving (Show, Eq)
+
+defConstr :: ConstructorDec
+defConstr = ConstructorDec {
+    constrName = "(some constructor)"
+  , constrArgs = []
+  , constrExtends = Nothing
+  , constrLogic = Nothing
+  }
+
 instance Render Expr where
   render e = evalState (render' e) 0 where
     render' :: Expr -> State Int T.Text
-    render' stmt = case stmt of
+    render' expr = case expr of
       Var name -> return name
       Constructor name -> return name
       Number n | isInt n -> return $ T.pack $ show $ floor n
@@ -98,7 +133,7 @@ instance Render Expr where
       Throw e -> line $ "throw " <> render e
       Return e -> line $ "return " <> render e
       TypeDef name typ -> line $ "typedef " <> name <> " = " <> render typ
-      _ -> return $ T.pack $ show stmt
+      _ -> return $ T.pack $ show expr
     line str = get >>= \i -> return $ T.replicate i " " <> str
     join = return . T.intercalate "\n"
     block blk = up *> fmap (T.intercalate "; ") (mapM render' blk) <* down

@@ -79,6 +79,7 @@ instance Typable Expr where
     Define name expr -> typeOfDefinition name expr
     Extend name expr -> typeOfExtension name expr
     Apply func arg -> typeOfApply typeOf func arg
+    Dot a b -> typeOfDot typeOf a b
     If c t f -> typeOfIf c t f
     While c e -> typeOfWhile c e
     Literal (ArrayLiteral arr) -> do
@@ -214,6 +215,19 @@ typeOfApply f func arg = do
   return (retT, mconcat [subs1, subs2, subs3])
   where uniError = addError' ["When attempting to apply `", render func
                              , " to argument ", render arg]
+
+typeOfDot :: TypeOf Expr -> Expr -> Expr -> Typing (Type, Subs)
+typeOfDot f a b = do
+  (aT, aS) <- f a
+  case b of
+    Var name ->
+      aT `getAttribute` name >>= \case
+        Just t -> return (t, aS)
+        Nothing -> typeOfApply f b a
+    _ -> typeOfApply f b a
+
+getAttribute :: Type -> Name -> Typing (Maybe Type)
+getAttribute _ _ = return Nothing
 
 instance Typable Block where
   -- Returns the type of the last statement. Operates in a new context.

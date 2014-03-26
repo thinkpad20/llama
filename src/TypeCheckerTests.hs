@@ -19,7 +19,7 @@ basicTests = TestGroup "Basic expressions" [
   , Test "booleans" "False" boolT
   , Test "booleans 2" "True" boolT
   , Test "variable definitions" "a = 3" numT
-  , Test "variables" "a = 3; a" numT
+  , Test "storing variables" "a = 3; a" numT
   , Test "blocks" "a = 0; 1; \"hello\"; 2; False; a" numT
   ]
 
@@ -87,6 +87,16 @@ caseTests = TestGroup "case expressions" [
          (numT ==> numT)
   ]
 
+appTests = TestGroup "applications" [
+    TestGroup "normal function application" [
+      test "basic" "foo 1" numT
+    ]
+  , TestGroup "dotted function application" [
+      test "basic" "1.foo" numT
+    ]
+  ]
+  where test desc s = Test desc ("foo (n: Num) = n + 1; " <> s)
+
 binaryTests = TestGroup "binary operators" [
     TestGroup "numbers" [
       Test "plus" "1 + 2" numT
@@ -138,7 +148,7 @@ multifunctionTests = TestGroup "Multifunctions" [
   , Test "can use recursion when extending a function 2"
           ("foo (s: Str) = 2; " <>
            "foo (n: Num) &= if n < 2 then foo (show 1) " <>
-           " else foo (n - 1); foo")
+           "else foo (n - 1); foo")
           (mf [(numT, numT), (strT, numT)])
   , Test "can extend a function definition with generic"
          ("foo (n: Num) = n + 1; " <>
@@ -223,7 +233,6 @@ unifyTests1 = TestGroup "Unification" [
   ]
   where
     subs name inputs subs' = Test name inputs (fromList subs')
-    subsOnly name inputs subs' = TestOnly name inputs (fromList subs')
 
 unifyFailTests = TestGroup "Invalid unifications" [
     ShouldError "non-matching constants" ("Num", "Str")
@@ -291,7 +300,7 @@ generalizeE (env, t) = Right $ generalize' env t
 
 group1 :: [Test String Type]
 group1 = [basicTests, functionTests, ifTests, binaryTests, vectorTests
-         , multifunctionTests, caseTests]
+         , multifunctionTests, caseTests, appTests]
 
 main = runAllTests [ run typeIt group1
                    , run unifyIt [unifyTests1, unifyFailTests]

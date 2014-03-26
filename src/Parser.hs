@@ -25,7 +25,7 @@ skip = many (oneOf " \t") *> option () lineComment
 keywords = ["if", "do", "else", "case", "of", "infix", "typedef"
            , "object", "while", "for", "in", "then", "after", "before"
            , "return", "break", "continue", "mut", "ref", "pure"
-           , "local", "lazy"]
+           , "local", "lazy", "extends"]
 keySyms =  ["->", "|", "=", ";", "..", "=>", "?", ":", "#", ":=", "&="]
 
 keyword k = fmap T.pack $ go where
@@ -95,10 +95,47 @@ pDouble = lexeme $ do
                                  ds' <- many1 digit
                                  return $ read (ds ++ "." ++ ds')
 
+
+pObjectDec :: Parser ObjectDec
+pObjectDec = do
+  keyword "object"
+  name <- pIdent upper
+  extends <- optionMaybe (keyword "extends" *> pIdent upper)
+  exactSym "="
+  (constrs, attrs) <- getConstrs
+  return $ defObj {
+      objName = name
+    , objExtends = extends
+    , objConstrs = constrs
+    , objAttrs = attrs
+    }
+
+getConstrs = do
+  schar '{'
+  constrs <- pConstructorDec `sepBy1` schar ';'
+  attrs <- option [] $ do
+    keyword "with"
+    pTerm `sepBy1` schar ';'
+  schar '}'
+  return (constrs, attrs)
+
+pConstructorDec :: Parser ConstructorDec
+pConstructorDec = do
+  name <- pIdent upper
+  args <- many pTerm
+  extends <- optionMaybe (keyword "extends" >> pExpr)
+  logic <- optionMaybe pExprOrBlock
+  return $ defConstr {
+      constrName = name
+    , constrArgs = args
+    , constrExtends = extends
+    , constrLogic = logic
+    }
+
 pType :: Parser Type
 pType = choice [pTFunction]
 pTTerm = choice [pMultiFunc, pTVector, pTList, pTMap, pTSet, pTVar, pTConst, pTTuple]
-pTVar = varConstructor <$> fmap T.pack (many1 lower) <* skip
+pTVar = TVar <$> fmap T.pack (many1 lower) <* skip
 pTConst = TConst <$> pIdent upper
 pTParens = schar '(' *> sepBy pType (schar ',') <* schar ')'
 pTTuple = pTParens >>= \case
@@ -388,7 +425,6 @@ pReturn = do keyword "return"
 
 pExpression :: Parser Expr
 pExpression = do
-  -- optionally grab annotations here
   many pAnnotation
   expr <- lexeme $ choice $ [ pDefine, pExtend, pAssign
                             , pWhile, pFor, pReturn, pExpr ]
@@ -405,11 +441,12 @@ pExpr = lexeme $ choice [ pModified, pLambda, pRightAssociativeFunction, pIfOrIf
 testE = parse pExpression
 testS = parse pExpressions
 
-pTopLevelExpressions =
-  (pExpression <|> pTypeDef) `sepEndBy1` (getSame <|> schar'  ';') <* eof
+pEntryPoint = pTopLevel `sepEndBy1` (getSame <|> schar'  ';') <* eof
+
+pTopLevel = choice [pExpression, pTypeDef, ObjDec <$> pObjectDec]
 
 grab :: String -> Either ParseError [Expr]
-grab = parse pTopLevelExpressions
+grab = parse pEntryPoint
 
 grabT :: String -> Either ErrorList Type
 grabT input = case parse pType input of
@@ -419,5 +456,3 @@ grabT input = case parse pType input of
 grab' input = case grab input of
   Right statements -> map show statements ! intercalate "\n"
   Left err -> error $ show err
-
-varConstructor = TVar
