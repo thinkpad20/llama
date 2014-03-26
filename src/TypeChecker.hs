@@ -91,12 +91,12 @@ instance Typable Expr where
                 then return (arrayOf t, subs)
                 else throwError1 "Multiple types in array literal"
 
-    Tuple exprs -> typeOfTuple typeOf exprs
+    Tuple exprs kw -> typeOfTuple typeOf exprs kw
     expr -> throwErrorC ["Can't handle ", render expr]
     where only t = return (t, mempty)
 
-typeOfTuple :: TypeOf Expr -> [Expr] -> Typing (Type, Subs)
-typeOfTuple f exprs = do
+typeOfTuple :: TypeOf Expr -> [Expr] -> KWArgs -> Typing (Type, Subs)
+typeOfTuple f exprs _ = do
   (ts, subs) <- typeOfList f exprs
   return (tTuple ts, subs)
 
@@ -265,7 +265,7 @@ litTypeOf expr = case expr of
     only type_
   Number _ -> only numT
   String _ -> only strT
-  Tuple exprs -> typeOfTuple litTypeOf exprs
+  Tuple exprs kw -> typeOfTuple litTypeOf exprs kw
   Literal (ArrayLiteral arr) -> do
     (ts, subs) <- typeOfList litTypeOf arr
     case ts of
@@ -335,7 +335,9 @@ unify types = log' ["unifying ", render types] >> case types of
   (TVar name, typ) -> bind name typ
   (typ, TVar name) -> bind name typ
   (TConst n, TConst n') | n == n' -> return mempty
-  (TTuple ts, TTuple ts') | length ts == length ts' -> unifyTuple ts ts'
+  (TTuple ts kw, TTuple ts' kw') -> unifyTuple (ts, kw) (ts', kw')
+  (TTuple ts kw, typ) -> unifyTuple (ts, kw) ([typ], mempty)
+  (typ, TTuple ts kw) -> unifyTuple (ts, kw) ([typ], mempty)
   (TFunction a b, TFunction a' b') -> do
     subs1 <- unify (a, a')
     subs2 <- unify (apply subs1 b, apply subs1 b')
@@ -355,8 +357,8 @@ bind name typ = case typ of
        else return (Subs $ M.singleton name typ)
   where occursCheck = throwErrorC ["Occurs check"]
 
-unifyTuple :: [Type] -> [Type] -> Typing Subs
-unifyTuple ts ts'
+unifyTuple :: ([Type], TKwargs) -> ([Type], TKwargs) -> Typing Subs
+unifyTuple (ts, _) (ts', _)
   | length ts /= length ts' = throwError1 "Tuples of different lengths"
   | otherwise = go mempty ts ts'
   where go subs [] _ = return subs
@@ -477,7 +479,7 @@ refine typ = fst <$> runStateT (look typ) mempty where
           Just typ'' -> modify (S.insert name) >> look typ''
     TFunction a b -> TFunction <$$ look a <*> look b
     TApply a b -> TApply <$$ look a <*> look b
-    TTuple ts -> TTuple <$> mapM look ts
+    TTuple ts kw -> fmap (\ts' -> TTuple ts' kw) $ mapM look ts
 
 testInstantiate :: Polytype -> Either ErrorList Type
 testInstantiate p = case fst $ runTypeChecker $ instantiate p of

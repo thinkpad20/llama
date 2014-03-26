@@ -4,14 +4,14 @@ module TypeLib where
 import qualified Data.Map as M
 import qualified Data.Set as S
 import qualified Data.Text as T
+import Data.HashMap hiding (map, delete)
 
 import Common
 
--- | A variable can be rigid (fixed in scope), or polymorphic (free to take on
--- multiple forms in the same scope).
+type TKwargs = Map Name Type
 data Type = TVar       !Name
           | TConst     !Name
-          | TTuple     ![Type]
+          | TTuple     ![Type] !TKwargs
           | TApply     !Type !Type
           | TFunction  !Type !Type
           | TMod       !Mod !Type
@@ -57,7 +57,7 @@ instance Types Type where
     TVar name -> S.singleton name
     TConst _ -> mempty
     TMod _ typ' -> free typ'
-    TTuple types -> free types
+    TTuple types _ -> free types
     TApply t1 t2 -> free t1 <> free t2
     TFunction t1 t2 -> free t1 <> free t2
     TMultiFunc tset -> free tset
@@ -66,7 +66,7 @@ instance Types Type where
     TConst _ -> typ
     TMod mods typ' -> TMod mods $ apply subs typ'
     TVar name -> M.findWithDefault (TVar name) name s
-    TTuple ts -> TTuple $ apply subs ts
+    TTuple ts kw -> TTuple (apply subs ts) kw
     TApply t1 t2 -> TApply (apply subs t1) (apply subs t2)
     TFunction t1 t2 -> TFunction (apply subs t1) (apply subs t2)
     TMultiFunc tset -> TMultiFunc $ apply subs tset
@@ -127,7 +127,7 @@ instance Render Type where
   render t = case t of
     TVar name -> name
     TConst name -> name
-    TTuple ts -> "(" <> T.intercalate ", " (map render ts) <> ")"
+    TTuple ts _ -> "(" <> T.intercalate ", " (map render ts) <> ")"
     TApply (TConst "[]") typ -> "[" <> render typ <> "]"
     TApply (TConst "[!]") typ -> "[!" <> render typ <> "]"
     TApply a b -> render a <> " " <> render' b
@@ -181,7 +181,7 @@ arrayOf = TApply (TConst "[]")
 listOf = TApply (TConst "[!]")
 setOf = TApply (TConst "{s}")
 maybeT = TApply (TConst "Maybe")
-tTuple = TTuple
+tTuple ts = TTuple ts mempty
 tConst = TConst
 mapOf (key, val) = TApply (TApply (TConst "{}") key) val
 (==>) = TFunction
@@ -243,7 +243,7 @@ normalize t = evalState (go t) ("a", mempty) where
         Just n -> return (TVar n)
     TApply a b -> TApply <$$ go a <*> go b
     TFunction a b -> TFunction <$$ go a <*> go b
-    TTuple ts -> tTuple <$> mapM go ts
+    TTuple ts kw -> tTuple <$> mapM go ts
     TConst _ -> return type_
     TMultiFunc set -> do
       let pairs = M.toList set

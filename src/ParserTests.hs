@@ -154,20 +154,20 @@ expressionTests = TestGroup "Expressions"
     , test "dots work on decimals" "2.34.foo" (Dot (Number 2.34) foo)
     ]
   , TestGroup "Tuples" [
-      test "tuples" "(foo, bar)" (Tuple [foo, bar])
-    , test "tuples 2" "(foo, bar, baz)" (Tuple [foo, bar, baz])
-    , test "empty tuple" "()" (Tuple [])
+      test "tuples" "(foo, bar)" (tuple [foo, bar])
+    , test "tuples 2" "(foo, bar, baz)" (tuple [foo, bar, baz])
+    , test "empty tuple" "()" (tuple [])
     , test "tuple of 1 is not a tuple" "(foo)" foo
     , test "nested tuples" "(foo, (bar, baz))"
-            (Tuple [foo, Tuple [bar, baz]])
+            (tuple [foo, tuple [bar, baz]])
     , test "nested tuples 2" "((bar, baz, qux), foo)"
-            (Tuple [Tuple [bar, baz, qux], foo])
+            (tuple [tuple [bar, baz, qux], foo])
     , test "tuples with expressions inside" "(foo + 1, bar baz)"
-            (Tuple [plus foo one, Apply bar baz])
+            (tuple [plus foo one, Apply bar baz])
     , test "tuples as arguments" "foo(bar, baz)"
-            (Apply foo $ Tuple [bar, baz])
+            (Apply foo $ tuple [bar, baz])
     , test "tuples as arguments 2" "foo()bar"
-            (Apply (Apply foo $ Tuple []) bar)
+            (Apply (Apply foo $ tuple []) bar)
     ]
   ]
   where test i r e = Test i r (expr e)
@@ -225,7 +225,7 @@ typingTests = TestGroup "Typed expressions"
          "foo: Maybe a" (maybeT a)
   , test "typing with type tuple" "foo: (Foo, Bar)" (tTuple [fooT, barT])
   , Test "a typed tuple" "(foo: Foo, bar: Bar)"
-         [Tuple [Typed foo fooT, Typed bar barT]]
+         [tuple [Typed foo fooT, Typed bar barT]]
   , test "a function" "foo: a -> b" (a ==> b)
   , test "a function 2" "foo: Num -> b" (numT ==> b)
   , test "a function with a tuple" "foo: (Num, Str) -> b"
@@ -295,7 +295,7 @@ functionTests = TestGroup "Functions"
     , Test "should be able to be used in a binary operator"
            "foo $ bar: Bar => bar + 2"
            (expr $ Apply (Var "$")
-                 $ Tuple [foo, (Lambda (Typed bar barT)
+                 $ tuple [foo, (Lambda (Typed bar barT)
                                (plus bar two))])
     , Test "should grab as much as we can"
            "bar: Bar => bar + 2 $ foo"
@@ -323,7 +323,7 @@ functionTests = TestGroup "Functions"
                          $ Apply bar baz]
     , Test "should make a function definition with a symbol"
            "(bar: a) <*> (baz: b) = bar baz"
-           [Define "<*>" $ Lambda (Tuple [ Typed bar (TVar "a")
+           [Define "<*>" $ Lambda (tuple [ Typed bar (TVar "a")
                                          , Typed baz (TVar "b")])
                          $ Apply bar baz]
     , Test "should make a prefix function definition"
@@ -334,7 +334,7 @@ functionTests = TestGroup "Functions"
            [Define "_!" $ Lambda (Typed foo numT) (Apply (Var "fact") foo)]
     ]
   ]
-  where tup1 = Tuple [Typed foo fooT, Typed bar barT]
+  where tup1 = tuple [Typed foo fooT, Typed bar barT]
         eLambda arg body = expr $ Lambda arg body
         lambdas abds = Lambdas abds
         eLambdas = expr . lambdas
@@ -476,7 +476,7 @@ blockTests = TestGroup "Blocks"
 
 flowTests = TestGroup "Program flow"
   [
-    Test "return" "return" [Return $ Tuple []]
+    Test "return" "return" [Return unit]
   , Test "return with expr" "return 3" [Return three]
   , Test "return in a series of statements"
          "foo bar; return 3; baz qux"

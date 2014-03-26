@@ -176,7 +176,7 @@ pParens :: Parser Expr
 pParens = schar '(' *> exprs <* schar ')'
   where exprs = expr `sepBy` schar ',' >>= \case
                   [e] -> return e
-                  es  -> return $ Tuple es
+                  es  -> return $ tuple es
         expr = choice [pExpr, Var <$> pSymbol]
 
 pString, pString' :: Parser T.Text
@@ -353,7 +353,7 @@ pDefBinary (sym, f) = try $ do
   op   <- pSymbol
   arg2 <- pTerm
   body <- exactSym sym *> pBlock
-  return $ f op $ Lambda (Tuple [arg1, arg2]) body
+  return $ f op $ Lambda (tuple [arg1, arg2]) body
 
 pDefPrefix (sym, f) = try $ do
   op <- pSymbol
@@ -413,17 +413,13 @@ pLambda = try $ do
     _ -> return $ Lambdas argsBodies
   where pArgBody = (,) <$$ pTerm <* exactSym "=>" <*> pExprOrBlock
 
--- | Clearly, this isn't the final version :)
-unusedName :: Parser Name
-unusedName = return "(arg)"
-
 pBlockOrExpression = try pBlock <|> pExpression
 pThen = pBlock <|> do keyword "then" <|> return "then"
                       pExpression
 pElse = keyword "else" *> pBlock
 
 pReturn = do keyword "return"
-             option (Return $ Tuple []) $ Return <$> pExpr
+             option unit $ Return <$> pExpr
 
 pExpression :: Parser Expr
 pExpression = do
