@@ -22,8 +22,6 @@ data Expr = Var         !Name
           | Block       !Block
           | Dot         !Expr !Expr
           | Apply       !Expr !Expr
-          | Kwarg       !Name !Expr
-          | Unary       !String !Expr
           | Lambda      !Expr !Expr
           | Lambdas     ![(Expr, Expr)]
           | Case        !Expr ![(Expr, Expr)]
