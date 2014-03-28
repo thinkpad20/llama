@@ -170,6 +170,8 @@ multifunctionTests = TestGroup "Multifunctions" [
                 "foo (n: Num) = n + 1; foo &= 1; foo"
   , ShouldError "ambiguous application"
       "foo (n: Num) = n + 1; foo (s: Str) &= s + \"hello\"; x => foo x"
+  , ShouldError "mismatched rigid type variables"
+                "foo (f: a->a) = (); bar (g: a->b) = foo g"
   ]
   where mf = TMultiFunc . M.fromList
 

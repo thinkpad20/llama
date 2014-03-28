@@ -9,13 +9,12 @@ import Prelude (IO, Show(..), Eq(..), Ord(..), Bool(..),
                 ($), (.), floor, map, Functor(..), mapM,
                 (+), (-), elem, Either(..))
 import Data.Text hiding (map)
-import Data.HashMap hiding (map)
 import Data.Monoid
 
 import Common hiding (intercalate)
 import TypeLib
 
-type KWArgs = Map Name (Either Expr Type)
+type Kwargs = [(Name, Either Expr Type)]
 data Expr = Var         !Name
           | Number      !Double
           | String      !Text
@@ -23,11 +22,12 @@ data Expr = Var         !Name
           | Block       !Block
           | Dot         !Expr !Expr
           | Apply       !Expr !Expr
+          | Kwarg       !Name !Expr
           | Unary       !String !Expr
           | Lambda      !Expr !Expr
           | Lambdas     ![(Expr, Expr)]
           | Case        !Expr ![(Expr, Expr)]
-          | Tuple       ![Expr] KWArgs
+          | Tuple       ![Expr] Kwargs
           | Literal     !Literal
           | DeRef       !Expr !Expr
           | Typed       !Expr !Type
@@ -156,7 +156,7 @@ instance Render Block where
   render b = "{" <> (line . trim . intercalate "; " . map render) b <> "}"
 
 symChars :: String
-symChars = "><=+-*/^~!%@&$:.#|?"
+symChars = "><=+-*/^~!%&$:.#|?"
 
 isSymbol :: Text -> Bool
 isSymbol = all (`elem` symChars)

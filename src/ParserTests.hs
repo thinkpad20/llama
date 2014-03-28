@@ -168,6 +168,14 @@ expressionTests = TestGroup "Expressions"
             (Apply foo $ tuple [bar, baz])
     , test "tuples as arguments 2" "foo()bar"
             (Apply (Apply foo $ tuple []) bar)
+    , test "tuple with eq kwarg" "(foo, @bar=baz)"
+            (Tuple [foo] [("bar", Left baz)])
+    , test "tuple with typed kwarg" "(foo, @bar:baz)"
+            (Tuple [foo] [("bar", Right (TVar "baz"))])
+    , test "tuple with both kwargs" "(foo, @bar=baz, @qux: Num)"
+            (Tuple [foo] [("bar", Left baz), ("qux", Right numT)])
+    , test "tuple with only kwarg" "(@foo=bar)" (Tuple [] [("foo", Left bar)])
+    , ShouldError "kwargs not at the end" "(@foo=bar, baz)"
     ]
   ]
   where test i r e = Test i r (expr e)

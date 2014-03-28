@@ -8,9 +8,10 @@ module Common ( (!), (<!>), (<$>), (<$), (<*), (*>), (<*>), pure
               , get, modify, put, lift, forM_, forM, when, Monoid(..)
               , (<>), StateT(..), State, ErrorT(..), indentBy, Name
               , intercalate, Identity(..), runState, evalState, (>>==)
-              , trim, line, throwError, catchError, (~>), (<$$), Render(..)
+              , trim, line, throwError, catchError, (~>), Render(..)
               , isInt, ErrorList(..), throwError1, throwErrorC, addError
-              , addError', forever, isSpace, catMaybes, sortWith, each, unless)
+              , addError', forever, isSpace, catMaybes, sortWith, each
+              , unless, mconcatMapM)
               where
 
 import Control.Monad
@@ -77,9 +78,6 @@ infixl 4 <!>
 (~>) = flip (.)
 infixl 9 ~>
 
-(<$$) :: Applicative f => (a -> b) -> f a -> f b
-a <$$ f = pure a <*> f
-
 (>>==) :: Monad m => m b -> (b -> m a) -> m b
 action1 >>== action2 = action1 >>= \r -> action2 r >> return r
 
@@ -112,3 +110,6 @@ addError msg (ErrorList msgs) = throwError $ ErrorList $ msg : msgs
 addError' = addError . mconcat
 
 each = flip map
+
+mconcatMapM :: (Monad f, Functor f, Monoid t) => (a -> f t) -> [a] -> f t
+mconcatMapM f list = mconcat <$> mapM f list

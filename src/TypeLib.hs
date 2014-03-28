@@ -1,6 +1,12 @@
-{-# LANGUAGE OverloadedStrings, NoMonomorphismRestriction #-}
+{-# LANGUAGE OverlappingInstances #-}
+{-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE TypeSynonymInstances #-}
+{-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE NoMonomorphismRestriction #-}
+{-# LANGUAGE OverloadedStrings #-}
 module TypeLib where
 
+import Prelude hiding (log)
 import qualified Data.Map as M
 import qualified Data.Set as S
 import qualified Data.Text as T
@@ -33,6 +39,49 @@ data Mod = Mut
 -- a type @Foo a@, where a is free to be anything within that scope.
 data Polytype = Polytype [Name] Type deriving (Show, Eq, Ord)
 instance Render Polytype
+
+type PurityEnv = M.Map Name PurityType
+data PurityType = PTPure | PTLocal | PTImpure deriving (Show, Eq, Ord)
+instance Monoid PurityType where
+  mempty = PTPure
+  a `mappend` b = case (a, b) of
+    (PTPure, PTPure) -> PTPure
+    (PTPure, PTLocal) -> PTLocal
+    (PTLocal, PTPure) -> PTLocal
+    (_, PTImpure) -> PTImpure
+    (PTImpure, _) -> PTImpure
+
+class Typable a where
+  typeOf :: TypeOf a
+
+type TypeOf a = a -> Typing (Type, Subs)
+type NameSpace = [Name]
+data TypingState = TypingState { aliases :: M.Map Name Type
+                               , nameSpace :: [Name]
+                               , typeEnv :: TypeEnv
+                               , purityEnv :: PurityEnv
+                               , freshName :: Name } deriving (Show)
+type Typing = ErrorT ErrorList (StateT TypingState IO)
+
+defaultTypingState :: TypingState
+defaultTypingState = TypingState { aliases = mempty
+                                 , nameSpace = []
+                                 , typeEnv = builtIns
+                                 , purityEnv = builtInPurities
+                                 , freshName = "a0"}
+
+instance Render TypingState where
+  render state =
+    let (TE env) = typeEnv state
+        bi = (\(TE b) -> b) builtIns
+        env' = TE $ M.filterWithKey (\k _ -> M.notMember k bi) env in
+    line $ mconcat ["Names: ", render env']
+
+instance Render [M.Map Name Type] where
+  render mps = line $ "[" <> (T.intercalate ", " $ map render mps) <> "]"
+
+instance Render NameSpace where
+  render = T.intercalate "/" . reverse
 
 class Types t where
   -- Get the free type variables out of the type.
@@ -230,6 +279,17 @@ builtIns =
         [a, b, c] = TVar <$> ["a", "b", "c"]
         (ab, bc, ac) = (a ==> b, b ==> c, a ==> c)
 
+builtInPurities :: PurityEnv
+builtInPurities = M.fromList [ ("+", PTPure), ("-", PTPure), ("/", PTPure), ("*", PTPure)
+             , ("%", PTPure), (">", PTPure), ("<", PTPure), (">=", PTPure)
+             , ("<=", PTPure), ("==", PTPure), ("!=", PTPure), ("<|", PTPure)
+             , ("|>", PTPure), ("~>", PTPure), ("<~", PTPure), ("!_", PTPure)
+             , ("_!", PTPure), ("print", PTImpure), ("show", PTPure)
+             , ("length", PTPure), ("Just", PTPure), ("Nothing", PTPure)
+             , ("@call", PTPure), ("True", PTPure), ("False", PTPure)
+             , ("push!", PTLocal)
+             ]
+
 -- | Like generalizing, but creates a normal type. Basically it's just to
 -- make all the type variables start from "a".
 normalize :: Type -> Type
@@ -241,14 +301,32 @@ normalize t = evalState (go t) ("a", mempty) where
         Nothing -> do modify (\(n, m) -> (next n, M.insert name name' m))
                       return (TVar name')
         Just n -> return (TVar n)
-    TApply a b -> TApply <$$ go a <*> go b
-    TFunction a b -> TFunction <$$ go a <*> go b
+    TApply a b -> TApply <$> go a <*> go b
+    TFunction a b -> TFunction <$> go a <*> go b
     TTuple ts kw -> tTuple <$> mapM go ts
     TConst _ -> return type_
     TMultiFunc set -> do
       let pairs = M.toList set
-      pairs' <- forM pairs $ \(from, to) -> (,) <$$ go from <*> go to
+      pairs' <- forM pairs $ \(from, to) -> (,) <$> go from <*> go to
       return $ TMultiFunc (M.fromList pairs')
   next name = case T.last name of
     c | c < 'z' -> T.init name `T.snoc` succ c
       | True    -> name `T.snoc` 'a'
+
+log :: T.Text -> Typing ()
+log s = if hideLogs then return () else lift2 $ putStrLn $ T.unpack s
+log' = mconcat ~> log
+
+lift2 = lift . lift
+
+hideLogs = True
+
+fullName :: Name -> Typing T.Text
+fullName name = get <!> nameSpace <!> (name:) <!> render
+
+
+pushNameSpace :: Name -> Typing ()
+pushNameSpace name = modify $ \s -> s { nameSpace = name : nameSpace s }
+
+popNameSpace :: Typing ()
+popNameSpace = modify $ \s -> s { nameSpace = tail $ nameSpace s }

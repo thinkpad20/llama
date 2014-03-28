@@ -22,10 +22,10 @@ skip = many (oneOf " \t") *> option () lineComment
   where lineComment = do char '#'
                          many (noneOf "\n")
                          (char '\n' >> return ()) <|> eof
-keywords = ["if", "do", "else", "case", "of", "infix", "typedef"
+keywords = [ "if", "do", "else", "case", "of", "infix", "typedef"
            , "object", "while", "for", "in", "then", "after", "before"
            , "return", "break", "continue", "mut", "ref", "pure"
-           , "local", "lazy", "extends", "with"]
+           , "local", "lazy", "extends", "with", "block"]
 keySyms =  ["->", "|", "=", ";", "..", "=>", "?", ":", "#", ":=", "&="]
 
 keyword k = fmap T.pack $ go where
@@ -174,10 +174,23 @@ pTypeDef =
 
 pParens :: Parser Expr
 pParens = schar '(' *> exprs <* schar ')'
-  where exprs = expr `sepBy` schar ',' >>= \case
-                  [e] -> return e
-                  es  -> return $ tuple es
+  where exprs = exprsAndKwargs >>= \case
+          Tuple [e] k | k == mempty -> return e
+          tup -> return tup
+        getExprs = try pExpr `sepEndBy` schar ','
+        exprsOnly = tuple <$> getExprs
+        kwargsOnly = Tuple [] <$> kwargs
+        exprsAndKwargs = Tuple <$> getExprs <*> kwargs
+        kwarg = do
+          name <- char '@' *> pIdent lower
+          x <- choice [ fmap Left $ exactSym "=" *> pExpr
+                      , fmap Right $ exactSym ":" *> pType ]
+          return (name, x)
+        kwargs = kwarg `sepBy` schar ','
         expr = choice [pExpr, Var <$> pSymbol]
+
+pKwarg :: Parser Expr
+pKwarg = Kwarg <$ char '@' <*> pIdent lower <* exactSym "=" <*> pExpr
 
 pString, pString' :: Parser T.Text
 pString = char '"' >> pString'
@@ -210,7 +223,7 @@ pLiteral = Literal <$> choice [try array, list, try set, dict] where
       <|> ArrayLiteral <$> commas pExpr
   list = between (exactSym "[l") (schar ']') (ListLiteral <$> commas pExpr)
   set = between (exactSym "{s") (schar '}') (SetLiteral <$> commas pExpr)
-  rocket = (,) <$$ pTerm <* exactSym "=>" <*> pExpr
+  rocket = (,) <$> pTerm <* exactSym "=>" <*> pExpr
   dict = between (exactSym "{d") (schar '}')
                  (DictLiteral <$> commas rocket)
 
@@ -257,7 +270,7 @@ pRightAssociativeFunction = do
   names <- getRANames >>= (many . choice . map exactStr)
   expr <- optionMaybe pUnary
   case (names, expr) of
-    ([], Nothing) -> unexpected "Empty input"
+    ([], Nothing) -> unexpected "empty input, not an expression"
     (names, Nothing) -> return $ foldr1 Apply (Var <$> names)
     (names, Just expr) -> return $ foldr (Apply . Var) expr names
 
@@ -367,7 +380,7 @@ pDefPostfix (sym, f) = try $ do
   body <- exactSym sym *> pBlock
   return $ f ("_" <> op) $ Lambda arg body
 
-pModified = Modified <$$ pMod <*> pExpr
+pModified = Modified <$> pMod <*> pExpr
 
 pMod = do
   w <- choice $ map keyword ["mut", "ref", "pure", "local", "lazy"]
@@ -378,7 +391,7 @@ pMod = do
     "local" -> return Local
     "lazy"  -> return Lazy
 
-pAssign = try $ Assign <$$ pExpr <* exactSym ":=" <*> pExprOrBlock
+pAssign = try $ Assign <$> pExpr <* exactSym ":=" <*> pExprOrBlock
 
 getSame = same
 pExpressionsNoWS = do
@@ -411,15 +424,14 @@ pLambda = try $ do
   case argsBodies of
     [(arg, body)] -> return $ Lambda arg body
     _ -> return $ Lambdas argsBodies
-  where pArgBody = (,) <$$ pTerm <* exactSym "=>" <*> pExprOrBlock
+  where pArgBody = (,) <$> pTerm <* exactSym "=>" <*> pExprOrBlock
 
 pBlockOrExpression = try pBlock <|> pExpression
 pThen = pBlock <|> do keyword "then" <|> return "then"
                       pExpression
 pElse = keyword "else" *> pBlock
 
-pReturn = do keyword "return"
-             option unit $ Return <$> pExpr
+pReturn = Return <$ keyword "return" <*> option unit pExpr
 
 pExpression :: Parser Expr
 pExpression = do
@@ -434,17 +446,19 @@ pExpression = do
       "before" -> Before expr rest
 
 pExpr :: Parser Expr
-pExpr = lexeme $ choice [ pModified, pLambda, pRightAssociativeFunction, pIfOrIf' ]
+pExpr = lexeme $ choice [ pModified
+                        , pLambda
+                        , pRightAssociativeFunction
+                        , pIfOrIf' ]
 
 testE = parse pExpression
 testS = parse pExpressions
-
-pEntryPoint = pTopLevel `sepEndBy1` (getSame <|> schar'  ';') <* eof
 
 pTopLevel = choice [pExpression, pTypeDef, ObjDec <$> pObjectDec]
 
 grab :: String -> Either ParseError [Expr]
 grab = parse pEntryPoint
+  where pEntryPoint = pTopLevel `sepEndBy1` (getSame <|> schar'  ';') <* eof
 
 grabT :: String -> Either ErrorList Type
 grabT input = case parse pType input of
