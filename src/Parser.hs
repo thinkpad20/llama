@@ -3,7 +3,8 @@
 module Parser ( grab
               , Expr(..)
               , Block
-              , grabT) where
+              , grabT
+              , grabOrError) where
 
 import Text.Parsec hiding (Parser, parse, State)
 import Control.Applicative hiding (many, (<|>))
@@ -443,3 +444,8 @@ grabT input = case parse pType input of
 grab' input = case grab input of
   Right statements -> map show statements ! intercalate "\n"
   Left err -> error $ show err
+
+grabOrError :: String -> Expr
+grabOrError input = case grab input of
+  Left err -> error $ show err
+  Right exprs -> Block exprs
