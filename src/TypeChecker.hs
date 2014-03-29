@@ -21,36 +21,6 @@ import AST
 import TypeLib
 import Parser (grab, grabT)
 
-class Typable a where
-  typeOf :: TypeOf a
-
-type TypeOf a = a -> Typing (Type, Subs)
-type NameSpace = [Name]
-data TypingState = TypingState { aliases :: M.Map Name Type
-                               , nameSpace :: [Name]
-                               , typeEnv :: TypeEnv
-                               , freshName :: Name } deriving (Show)
-type Typing = ErrorT ErrorList (StateT TypingState IO)
-
-defaultTypingState :: TypingState
-defaultTypingState = TypingState { aliases = mempty
-                                 , nameSpace = []
-                                 , typeEnv = builtIns
-                                 , freshName = "a0"}
-
-instance Render TypingState where
-  render state =
-    let (TE env) = typeEnv state
-        bi = (\(TE b) -> b) builtIns
-        env' = TE $ M.filterWithKey (\k _ -> M.notMember k bi) env in
-    line $ mconcat ["Names: ", render env']
-
-instance Render [M.Map Name Type] where
-  render mps = line $ "[" <> (T.intercalate ", " $ map render mps) <> "]"
-
-instance Render NameSpace where
-  render = T.intercalate "/" . reverse
-
 unifyAdd :: Type -> Type -> Typing ()
 unifyAdd t1 t2 = unify (t1, t2) >>= toList ~> mapM_ (uncurry addTypeAlias)
 
@@ -79,6 +49,7 @@ instance Typable Expr where
     Define name expr -> typeOfDefinition name expr
     Extend name expr -> typeOfExtension name expr
     Apply func arg -> typeOfApply typeOf func arg
+    Dot a b -> typeOfDot typeOf a b
     If c t f -> typeOfIf c t f
     While c e -> typeOfWhile c e
     Literal (ArrayLiteral arr) -> do
@@ -90,12 +61,12 @@ instance Typable Expr where
                 then return (arrayOf t, subs)
                 else throwError1 "Multiple types in array literal"
 
-    Tuple exprs -> typeOfTuple typeOf exprs
+    Tuple exprs kw -> typeOfTuple typeOf exprs kw
     expr -> throwErrorC ["Can't handle ", render expr]
     where only t = return (t, mempty)
 
-typeOfTuple :: TypeOf Expr -> [Expr] -> Typing (Type, Subs)
-typeOfTuple f exprs = do
+typeOfTuple :: TypeOf Expr -> [Expr] -> Kwargs -> Typing (Type, Subs)
+typeOfTuple f exprs _ = do
   (ts, subs) <- typeOfList f exprs
   return (tTuple ts, subs)
 
@@ -215,6 +186,19 @@ typeOfApply f func arg = do
   where uniError = addError' ["When attempting to apply `", render func
                              , " to argument ", render arg]
 
+typeOfDot :: TypeOf Expr -> Expr -> Expr -> Typing (Type, Subs)
+typeOfDot f a b = do
+  (aT, aS) <- f a
+  case b of
+    Var name ->
+      aT `getAttribute` name >>= \case
+        Just t -> return (t, aS)
+        Nothing -> typeOfApply f b a
+    _ -> typeOfApply f b a
+
+getAttribute :: Type -> Name -> Typing (Maybe Type)
+getAttribute _ _ = return Nothing
+
 instance Typable Block where
   -- Returns the type of the last statement. Operates in a new context.
   typeOf block = do
@@ -247,11 +231,14 @@ litTypeOf expr = case expr of
     store name (Polytype [] newT)
     only newT
   Typed (Var name) type_ -> do
+    -- TODO: find a way to "rigidify" this type, so that the (a->a)/(a->b)
+    -- unification fails as it should (basically, type variables in type
+    -- signatures should be treated as constants).
     store name $ Polytype [] type_
     only type_
   Number _ -> only numT
   String _ -> only strT
-  Tuple exprs -> typeOfTuple litTypeOf exprs
+  Tuple exprs kw -> typeOfTuple litTypeOf exprs kw
   Literal (ArrayLiteral arr) -> do
     (ts, subs) <- typeOfList litTypeOf arr
     case ts of
@@ -265,12 +252,6 @@ litTypeOf expr = case expr of
 
 getAliases :: Typing (M.Map Name Type)
 getAliases = get <!> aliases
-
-pushNameSpace :: Name -> Typing ()
-pushNameSpace name = modify $ \s -> s { nameSpace = name : nameSpace s }
-
-popNameSpace :: Typing ()
-popNameSpace = modify $ \s -> s { nameSpace = tail $ nameSpace s }
 
 store :: Name -> Polytype -> Typing ()
 store name ptype = do
@@ -312,8 +293,11 @@ lookup name = do
           Nothing -> loop ns
 
 lookupAndInstantiate :: Name -> Typing Type
-lookupAndInstantiate name = lookup name >>= \case
-  Just typ -> instantiate typ
+lookupAndInstantiate name = lookupAndError name >>= instantiate
+
+lookupAndError :: Name -> Typing Polytype
+lookupAndError name = lookup name >>= \case
+  Just typ -> return typ
   Nothing -> throwErrorC ["Variable '", name, "' not defined in scope"]
 
 unify :: (Type, Type) -> Typing Subs
@@ -321,7 +305,9 @@ unify types = log' ["unifying ", render types] >> case types of
   (TVar name, typ) -> bind name typ
   (typ, TVar name) -> bind name typ
   (TConst n, TConst n') | n == n' -> return mempty
-  (TTuple ts, TTuple ts') | length ts == length ts' -> unifyTuple ts ts'
+  (TTuple ts kw, TTuple ts' kw') -> unifyTuple (ts, kw) (ts', kw')
+  (TTuple ts kw, typ) -> unifyTuple (ts, kw) ([typ], mempty)
+  (typ, TTuple ts kw) -> unifyTuple (ts, kw) ([typ], mempty)
   (TFunction a b, TFunction a' b') -> do
     subs1 <- unify (a, a')
     subs2 <- unify (apply subs1 b, apply subs1 b')
@@ -341,8 +327,8 @@ bind name typ = case typ of
        else return (Subs $ M.singleton name typ)
   where occursCheck = throwErrorC ["Occurs check"]
 
-unifyTuple :: [Type] -> [Type] -> Typing Subs
-unifyTuple ts ts'
+unifyTuple :: ([Type], TKwargs) -> ([Type], TKwargs) -> Typing Subs
+unifyTuple (ts, _) (ts', _)
   | length ts /= length ts' = throwError1 "Tuples of different lengths"
   | otherwise = go mempty ts ts'
   where go subs [] _ = return subs
@@ -433,7 +419,7 @@ instantiate (Polytype names type_) = do
   return $ apply subs type_
 
 generalize :: Type -> Typing Polytype
-generalize typ = generalize' <$$ fmap typeEnv get <*> pure typ
+generalize typ = generalize' <$> fmap typeEnv get <*> pure typ
 
 generalize' :: TypeEnv -> Type -> Polytype
 generalize' env type_ =
@@ -461,17 +447,14 @@ refine typ = fst <$> runStateT (look typ) mempty where
         M.lookup name <$> (lift getAliases) >>= \case
           Nothing -> return typ
           Just typ'' -> modify (S.insert name) >> look typ''
-    TFunction a b -> TFunction <$$ look a <*> look b
-    TApply a b -> TApply <$$ look a <*> look b
-    TTuple ts -> TTuple <$> mapM look ts
+    TFunction a b -> TFunction <$> look a <*> look b
+    TApply a b -> TApply <$> look a <*> look b
+    TTuple ts kw -> fmap (\ts' -> TTuple ts' kw) $ mapM look ts
 
 testInstantiate :: Polytype -> Either ErrorList Type
 testInstantiate p = case fst $ runTypeChecker $ instantiate p of
   Left err -> Left $ ErrorList [render err]
   Right type_ -> Right type_
-
-fullName :: Name -> Typing T.Text
-fullName name = get <!> nameSpace <!> (name:) <!> render
 
 -- NOTE: using unsafePerformIO for testing purposes only. This will
 -- all be pure code in the end.
@@ -501,12 +484,3 @@ unifyIt (input1, input2) = do
   type1 <- grabT input1
   type2 <- grabT input2
   fst $ runUnify type1 type2
-
-log :: T.Text -> Typing ()
-log s = if hideLogs then return () else lift2 $ putStrLn $ T.unpack s
-log' = mconcat ~> log
-
-lift2 = lift . lift
-
-
-hideLogs = True

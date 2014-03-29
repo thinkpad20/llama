@@ -13,6 +13,7 @@ import Parser (grab)
 
 expr e = [e]
 (foo, bar, baz, qux) = (Var "foo", Var "bar", Var "baz", Var "qux")
+[fooC, barC, bazC, quxC] = map Constructor ["Foo", "Bar", "Baz", "Qux"]
 (fooT, barT, bazT, quxT) = ( tConst "Foo", tConst "Bar"
                            , tConst "Baz", tConst "Qux")
 print_ = Apply (Var "print")
@@ -91,38 +92,14 @@ expressionTests = TestGroup "Expressions"
     , test "prefix on its own" "+_" (Var "+_")
     , test "postfix on its own" "_+" (Var "_+")
   ] ++ binOpsTests)
-  , TestGroup "unary operators" [
-      test "prefix operator"
-           "-1"
-           (Apply (Var "-_") one)
-    , test "prefix operator 2"
-           "++foo"
-           (Apply (Var "++_") foo)
-    , test "postfix operator"
-           "3!"
-           (Apply (Var "_!") three)
-    , test "prefix operator in argument"
-           "foo (++bar)"
-           (Apply foo (Apply (Var "++_") bar))
-    , test "postfix operator in argument"
-           "foo (bar++)"
-           (Apply foo (Apply (Var "_++") bar))
-    , test "postfix operator after an application"
-           "foo bar++"
-           (Apply (Var "_++") $ Apply foo bar)
-    , test "mixing postfix and infix operators"
-           "foo + bar ++"
-           (Apply (Var "_++") $ plus foo bar)
-    , test "mixing postfix and infix operators 2"
-           "foo + (bar++)"
-           (plus foo $ Apply (Var "_++") bar)
-    , test "mixing prefix and infix operators"
-           "++foo + bar"
-           (Apply (Var "++_") $ plus foo bar)
-    , test "high precedence prefix"
-           "++_ foo" (Apply (Var "++_") foo)
-    , test "high precedence prefix 2"
-           "++_ foo bar" (Apply (Apply (Var "++_") foo) bar)
+  , SkipTestGroup "prefixes" [
+      test "prefix operator" "-1" (Prefix "-" one)
+    , test "prefix operator 2" "++foo" (Prefix "++" foo)
+    , Test "prefix after a statement" "1; +2" [one, Prefix "+" two]
+    , ShouldError "prefix operator in argument" "foo (++bar)"
+    , ShouldError "mixing prefix and infix operators" "++foo + bar"
+    , ShouldError "high precedence prefix" "++_ foo"
+    , ShouldError "high precedence prefix 2" "++_ foo bar"
   ]
   , test "apply" "foo bar" (Apply foo bar)
   , test "apply associates to the left"
@@ -153,20 +130,28 @@ expressionTests = TestGroup "Expressions"
     , test "dots work on decimals" "2.34.foo" (Dot (Number 2.34) foo)
     ]
   , TestGroup "Tuples" [
-      test "tuples" "(foo, bar)" (Tuple [foo, bar])
-    , test "tuples 2" "(foo, bar, baz)" (Tuple [foo, bar, baz])
-    , test "empty tuple" "()" (Tuple [])
+      test "tuples" "(foo, bar)" (tuple [foo, bar])
+    , test "tuples 2" "(foo, bar, baz)" (tuple [foo, bar, baz])
+    , test "empty tuple" "()" (tuple [])
     , test "tuple of 1 is not a tuple" "(foo)" foo
     , test "nested tuples" "(foo, (bar, baz))"
-            (Tuple [foo, Tuple [bar, baz]])
+            (tuple [foo, tuple [bar, baz]])
     , test "nested tuples 2" "((bar, baz, qux), foo)"
-            (Tuple [Tuple [bar, baz, qux], foo])
+            (tuple [tuple [bar, baz, qux], foo])
     , test "tuples with expressions inside" "(foo + 1, bar baz)"
-            (Tuple [plus foo one, Apply bar baz])
+            (tuple [plus foo one, Apply bar baz])
     , test "tuples as arguments" "foo(bar, baz)"
-            (Apply foo $ Tuple [bar, baz])
+            (Apply foo $ tuple [bar, baz])
     , test "tuples as arguments 2" "foo()bar"
-            (Apply (Apply foo $ Tuple []) bar)
+            (Apply (Apply foo $ tuple []) bar)
+    , test "tuple with eq kwarg" "(foo, @bar=baz)"
+            (Tuple [foo] [("bar", Left baz)])
+    , test "tuple with typed kwarg" "(foo, @bar:baz)"
+            (Tuple [foo] [("bar", Right (TVar "baz"))])
+    , test "tuple with both kwargs" "(foo, @bar=baz, @qux: Num)"
+            (Tuple [foo] [("bar", Left baz), ("qux", Right numT)])
+    , test "tuple with only kwarg" "(@foo=bar)" (Tuple [] [("foo", Left bar)])
+    , ShouldError "kwargs not at the end" "(@foo=bar, baz)"
     ]
   ]
   where test i r e = Test i r (expr e)
@@ -224,7 +209,7 @@ typingTests = TestGroup "Typed expressions"
          "foo: Maybe a" (maybeT a)
   , test "typing with type tuple" "foo: (Foo, Bar)" (tTuple [fooT, barT])
   , Test "a typed tuple" "(foo: Foo, bar: Bar)"
-         [Tuple [Typed foo fooT, Typed bar barT]]
+         [tuple [Typed foo fooT, Typed bar barT]]
   , test "a function" "foo: a -> b" (a ==> b)
   , test "a function 2" "foo: Num -> b" (numT ==> b)
   , test "a function with a tuple" "foo: (Num, Str) -> b"
@@ -294,7 +279,7 @@ functionTests = TestGroup "Functions"
     , Test "should be able to be used in a binary operator"
            "foo $ bar: Bar => bar + 2"
            (expr $ Apply (Var "$")
-                 $ Tuple [foo, (Lambda (Typed bar barT)
+                 $ tuple [foo, (Lambda (Typed bar barT)
                                (plus bar two))])
     , Test "should grab as much as we can"
            "bar: Bar => bar + 2 $ foo"
@@ -322,18 +307,19 @@ functionTests = TestGroup "Functions"
                          $ Apply bar baz]
     , Test "should make a function definition with a symbol"
            "(bar: a) <*> (baz: b) = bar baz"
-           [Define "<*>" $ Lambda (Tuple [ Typed bar (TVar "a")
+           [Define "<*>" $ Lambda (tuple [ Typed bar (TVar "a")
                                          , Typed baz (TVar "b")])
                          $ Apply bar baz]
-    , Test "should make a prefix function definition"
-           "!(foo: Bool) = not foo"
-           [Define "!_" $ Lambda (Typed foo boolT) (Apply (Var "not") foo)]
-    , Test "should make a postfix function definition"
-           "(foo: Num)! = fact foo"
-           [Define "_!" $ Lambda (Typed foo numT) (Apply (Var "fact") foo)]
     ]
+  , TestGroup "LambdaDots" [
+      Test "basic" ".foo" [LambdaDot foo]
+    , Test "with other args" ".foo bar" [Apply (LambdaDot foo) bar]
+    , Test "in assignment" "foo = .bar" [Define "foo" $ LambdaDot bar]
+    , Test "in assignment with other exprs" "foo = .bar baz"
+           [Define "foo" $ Apply (LambdaDot bar) baz]
   ]
-  where tup1 = Tuple [Typed foo fooT, Typed bar barT]
+  ]
+  where tup1 = tuple [Typed foo fooT, Typed bar barT]
         eLambda arg body = expr $ Lambda arg body
         lambdas abds = Lambdas abds
         eLambdas = expr . lambdas
@@ -347,6 +333,59 @@ assignmentTests = TestGroup "Assignments"
   , Test "can make complex assignments" "foo bar := baz * qux foo"
          [Assign (Apply foo bar) $ baz `times` Apply qux foo]
   ]
+
+objectTests = TestGroup "Object declarations" [
+    test1 "can declare a basic object" "object Foo = {Foo}" obj
+  , test1 "can declare an object with multiple constructors"
+          "object Foo = {Foo; Bar}" (obj {objConstrs = [fooCr, barCr]})
+  , test1 "can declare constructors with args"
+          "object Foo = {Foo bar}"
+          (obj {objConstrs = [fooCr {constrArgs = [bar]}]})
+  , test1 "can declare multiple constructors with args"
+          "object Foo = {Foo bar; Bar foo}"
+          (obj {objConstrs = [ fooCr {constrArgs = [bar]}
+                             , barCr {constrArgs = [foo]}]})
+  , test1 "can declare extends"
+          "object Foo extends Bar = {Foo}"
+          (obj {objExtends = (Just "Bar")})
+  , test1 "can declare extends"
+          "object Foo extends Bar = {Foo}"
+          (obj {objExtends = (Just "Bar")})
+  , test1 "can declare extends with constructors"
+          "object Foo extends Bar = {Foo bar; Bar foo}"
+          (obj {objConstrs = [ fooCr {constrArgs = [bar]}
+                             , barCr {constrArgs = [foo]}]
+               , objExtends = (Just "Bar")})
+  , test1 "can declare extends with constructors that extend"
+          "object Foo extends Bar = {Foo bar extends Bar; Bar extends Foo}"
+          (obj {objConstrs = [ fooCr {constrArgs = [bar]
+                                    , constrExtends = Just barC}
+                             , barCr {constrExtends = Just fooC}]
+               , objExtends = (Just "Bar")})
+  , test1 "constructors with logic"
+          ("object Foo extends Bar = {" <>
+           "Foo bar do baz = 1; " <>
+           "Bar {qux = foo bar; print \"hello\"}}")
+          (obj {objConstrs = [ fooCr {constrArgs = [bar]
+                                    , constrLogic = Just expr1}
+                             , barCr {constrLogic = Just expr2}]
+               , objExtends = (Just "Bar")})
+  , test1 "generics" "object Foo a = {Bar; Foo (bar: a)}"
+          (obj {objVars = ["a"],
+                objConstrs = [barCr, fooCr {constrArgs = [Typed bar a]}]})
+  , test1 "with attributes"
+          "object Foo a = {Bar; Foo (bar: a) with foo: Num; bar: Str}"
+          (obj { objVars = ["a"]
+               , objConstrs = [barCr, fooCr {constrArgs = [Typed bar a]}]
+               , objAttrs = [Typed foo numT, Typed bar strT]})
+  ] where
+      test1 desc input ex = Test desc input (expr $ ObjDec ex)
+      obj = defObj { objName = "Foo", objConstrs = [fooCr]}
+      fooCr = defConstr {constrName = "Foo"}
+      barCr = defConstr {constrName = "Bar"}
+      expr1 = Define "baz" one
+      expr2 = Block [Define "qux" (Apply foo bar), print_ (String "hello")]
+      a = TVar "a"
 
 rassocTests = TestGroup "Right-associative functions"
   [
@@ -422,7 +461,7 @@ blockTests = TestGroup "Blocks"
 
 flowTests = TestGroup "Program flow"
   [
-    Test "return" "return" [Return $ Tuple []]
+    Test "return" "return" [Return unit]
   , Test "return with expr" "return 3" [Return three]
   , Test "return in a series of statements"
          "foo bar; return 3; baz qux"
@@ -547,6 +586,7 @@ doTests = runTests grab [ expressionTests
                         , caseTests
                         , flowTests
                         , rassocTests
+                        , objectTests
                         ]
 
 main = doTests

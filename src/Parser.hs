@@ -22,10 +22,10 @@ skip = many (oneOf " \t") *> option () lineComment
   where lineComment = do char '#'
                          many (noneOf "\n")
                          (char '\n' >> return ()) <|> eof
-keywords = ["if", "do", "else", "case", "of", "infix", "typedef"
+keywords = [ "if", "do", "else", "case", "of", "infix", "typedef"
            , "object", "while", "for", "in", "then", "after", "before"
            , "return", "break", "continue", "mut", "ref", "pure"
-           , "local", "lazy"]
+           , "local", "lazy", "extends", "with", "block"]
 keySyms =  ["->", "|", "=", ";", "..", "=>", "?", ":", "#", ":=", "&="]
 
 keyword k = fmap T.pack $ go where
@@ -35,7 +35,7 @@ exactStr = keyword
 
 
 exactSym k = fmap T.pack go where
-  go = lexeme . try $ string k <* notFollowedBy (oneOf symChars)
+  go = lexeme . try $ string k <* notFollowedBy (oneOf (symChars <> "."))
 
 lexeme p = p <* skip
 sstring s = fmap T.pack (lexeme $ string s)
@@ -47,6 +47,9 @@ check p = lexeme . try $ do
   if s `elem` (keywords ++ keySyms)
     then unexpected $ "reserved word " ++ show s
     else return s
+
+lowers :: Parser String
+lowers = check $ many1 lower
 
 pSymbol :: Parser T.Text
 pSymbol = fmap T.pack $ check $ many1 $ oneOf symChars <* notFollowedBy (char '_')
@@ -95,10 +98,49 @@ pDouble = lexeme $ do
                                  ds' <- many1 digit
                                  return $ read (ds ++ "." ++ ds')
 
+
+pObjectDec :: Parser ObjectDec
+pObjectDec = do
+  keyword "object"
+  name <- pIdent upper
+  vars <- many $ fmap T.pack lowers
+  extends <- optionMaybe (keyword "extends" *> pIdent upper)
+  exactSym "="
+  (constrs, attrs) <- getConstrs
+  return $ defObj {
+      objName = name
+    , objExtends = extends
+    , objVars = vars
+    , objConstrs = constrs
+    , objAttrs = attrs
+    }
+
+getConstrs = do
+  schar '{'
+  constrs <- pConstructorDec `sepBy1` schar ';'
+  attrs <- option [] $ do
+    keyword "with"
+    pTerm `sepBy1` schar ';'
+  schar '}'
+  return (constrs, attrs)
+
+pConstructorDec :: Parser ConstructorDec
+pConstructorDec = do
+  name <- pIdent upper
+  args <- many pTerm
+  extends <- optionMaybe (keyword "extends" >> pExpr)
+  logic <- optionMaybe pExprOrBlock
+  return $ defConstr {
+      constrName = name
+    , constrArgs = args
+    , constrExtends = extends
+    , constrLogic = logic
+    }
+
 pType :: Parser Type
 pType = choice [pTFunction]
 pTTerm = choice [pMultiFunc, pTVector, pTList, pTMap, pTSet, pTVar, pTConst, pTTuple]
-pTVar = varConstructor <$> fmap T.pack (many1 lower) <* skip
+pTVar = TVar <$> fmap T.pack lowers <* skip
 pTConst = TConst <$> pIdent upper
 pTParens = schar '(' *> sepBy pType (schar ',') <* schar ')'
 pTTuple = pTParens >>= \case
@@ -130,14 +172,21 @@ pTypeDef :: Parser Expr
 pTypeDef =
   TypeDef <$ keyword "typedef" <*> pIdent upper <* exactSym "=" <*> pType
 
-pTypedVar :: Parser Expr
-pTypedVar = try $ Typed <$$ pVar <* exactSym ":" <*> pType
-
 pParens :: Parser Expr
 pParens = schar '(' *> exprs <* schar ')'
-  where exprs = expr `sepBy` schar ',' >>= \case
-                  [e] -> return e
-                  es  -> return $ Tuple es
+  where exprs = exprsAndKwargs >>= \case
+          Tuple [e] k | k == mempty -> return e
+          tup -> return tup
+        getExprs = try pExpr `sepEndBy` schar ','
+        exprsOnly = tuple <$> getExprs
+        kwargsOnly = Tuple [] <$> kwargs
+        exprsAndKwargs = Tuple <$> getExprs <*> kwargs
+        kwarg = do
+          name <- char '@' *> pIdent lower
+          x <- choice [ fmap Left $ exactSym "=" *> pExpr
+                      , fmap Right $ exactSym ":" *> pType ]
+          return (name, x)
+        kwargs = kwarg `sepBy` schar ','
         expr = choice [pExpr, Var <$> pSymbol]
 
 pString, pString' :: Parser T.Text
@@ -171,7 +220,7 @@ pLiteral = Literal <$> choice [try array, list, try set, dict] where
       <|> ArrayLiteral <$> commas pExpr
   list = between (exactSym "[l") (schar ']') (ListLiteral <$> commas pExpr)
   set = between (exactSym "{s") (schar '}') (SetLiteral <$> commas pExpr)
-  rocket = (,) <$$ pTerm <* exactSym "=>" <*> pExpr
+  rocket = (,) <$> pTerm <* exactSym "=>" <*> pExpr
   dict = between (exactSym "{d") (schar '}')
                  (DictLiteral <$> commas rocket)
 
@@ -197,28 +246,16 @@ pBinary = pBackwardApply where
 
 pPrefixSymbol :: Parser Expr
 pPrefixSymbol = do
-  sym <- optionMaybe pSymbol
-  expr <- pPostfixSymbol
-  case sym of
-    Nothing -> return expr
-    Just op -> return $ Apply (Var (op <> "_")) expr
-
-pPostfixSymbol :: Parser Expr
-pPostfixSymbol = do
-  expr <- pBinary
-  option expr $ do
-    sym <- pSymbol
-    return $ Apply (Var ("_" <> sym)) expr
-
-pUnary :: Parser Expr
-pUnary = pPrefixSymbol
+  sym <- pSymbol
+  expr <- pRightAssociativeFunction
+  return $ Prefix sym expr
 
 pRightAssociativeFunction :: Parser Expr
 pRightAssociativeFunction = do
   names <- getRANames >>= (many . choice . map exactStr)
-  expr <- optionMaybe pUnary
+  expr <- optionMaybe pBinary
   case (names, expr) of
-    ([], Nothing) -> unexpected "Empty input"
+    ([], Nothing) -> unexpected "empty input, not an expression"
     (names, Nothing) -> return $ foldr1 Apply (Var <$> names)
     (names, Just expr) -> return $ foldr (Apply . Var) expr names
 
@@ -266,6 +303,9 @@ pDotted = do
       parseRest (Dot res y)
       <|> return res
 
+pLambdaDot :: Parser Expr
+pLambdaDot = LambdaDot <$ exactSym "." <*> pTerm
+
 pCase :: Parser Expr
 pCase = Case <$ keyword "case" <*> pExpr <* keyword "of" <*> alts
   where alts = alt `sepBy1` exactSym "|"
@@ -278,6 +318,7 @@ pCase = Case <$ keyword "case" <*> pExpr <* keyword "of" <*> alts
 pTerm :: Parser Expr
 pTerm = lexeme $ choice [ Number <$> pDouble
                         , String <$> pString
+                        , pLambdaDot
                         , pVar
                         , pConstructor
                         , pParens
@@ -298,10 +339,8 @@ pFor = For <$ keyword "for" <*> pExpr <* keyword "in"
 pExprOrBlock :: Parser Expr
 pExprOrBlock = choice [ try pBlock, pIf, pExpr ]
 
-pDefine = choice $ map ($ ("=", Define)) [ pDefPrefix, pDefPostfix
-                                         , pDefBinary, pDefFunction]
-pExtend = choice $ map ($ ("&=", Extend)) [ pDefPrefix, pDefPostfix
-                                          , pDefBinary, pDefFunction]
+pDefine = choice $ map ($ ("=", Define)) [ pDefBinary, pDefFunction]
+pExtend = choice $ map ($ ("&=", Extend)) [ pDefBinary, pDefFunction]
 
 pDefFunction (sym, f) = try $ do
   name <- pIdent lower <|> (schar '(' *> pSymbol <* schar ')')
@@ -314,21 +353,9 @@ pDefBinary (sym, f) = try $ do
   op   <- pSymbol
   arg2 <- pTerm
   body <- exactSym sym *> pBlock
-  return $ f op $ Lambda (Tuple [arg1, arg2]) body
+  return $ f op $ Lambda (tuple [arg1, arg2]) body
 
-pDefPrefix (sym, f) = try $ do
-  op <- pSymbol
-  arg <- pTerm
-  body <- exactSym sym *> pBlock
-  return $ f (op <> "_") $ Lambda arg body
-
-pDefPostfix (sym, f) = try $ do
-  arg <- pTerm
-  op <- pSymbol
-  body <- exactSym sym *> pBlock
-  return $ f ("_" <> op) $ Lambda arg body
-
-pModified = Modified <$$ pMod <*> pExpr
+pModified = Modified <$> pMod <*> pExpr
 
 pMod = do
   w <- choice $ map keyword ["mut", "ref", "pure", "local", "lazy"]
@@ -339,7 +366,7 @@ pMod = do
     "local" -> return Local
     "lazy"  -> return Lazy
 
-pAssign = try $ Assign <$$ pExpr <* exactSym ":=" <*> pExprOrBlock
+pAssign = try $ Assign <$> pExpr <* exactSym ":=" <*> pExprOrBlock
 
 getSame = same
 pExpressionsNoWS = do
@@ -372,23 +399,17 @@ pLambda = try $ do
   case argsBodies of
     [(arg, body)] -> return $ Lambda arg body
     _ -> return $ Lambdas argsBodies
-  where pArgBody = (,) <$$ pTerm <* exactSym "=>" <*> pExprOrBlock
-
--- | Clearly, this isn't the final version :)
-unusedName :: Parser Name
-unusedName = return "(arg)"
+  where pArgBody = (,) <$> pTerm <* exactSym "=>" <*> pExprOrBlock
 
 pBlockOrExpression = try pBlock <|> pExpression
 pThen = pBlock <|> do keyword "then" <|> return "then"
                       pExpression
 pElse = keyword "else" *> pBlock
 
-pReturn = do keyword "return"
-             option (Return $ Tuple []) $ Return <$> pExpr
+pReturn = Return <$ keyword "return" <*> option unit pExpr
 
 pExpression :: Parser Expr
 pExpression = do
-  -- optionally grab annotations here
   many pAnnotation
   expr <- lexeme $ choice $ [ pDefine, pExtend, pAssign
                             , pWhile, pFor, pReturn, pExpr ]
@@ -400,16 +421,19 @@ pExpression = do
       "before" -> Before expr rest
 
 pExpr :: Parser Expr
-pExpr = lexeme $ choice [ pModified, pLambda, pRightAssociativeFunction, pIfOrIf' ]
+pExpr = lexeme $ choice [ pModified
+                        , pLambda
+                        , pRightAssociativeFunction
+                        , pIfOrIf' ]
 
 testE = parse pExpression
 testS = parse pExpressions
 
-pTopLevelExpressions =
-  (pExpression <|> pTypeDef) `sepEndBy1` (getSame <|> schar'  ';') <* eof
+pTopLevel = choice [pPrefixSymbol, pExpression, pTypeDef, ObjDec <$> pObjectDec]
 
 grab :: String -> Either ParseError [Expr]
-grab = parse pTopLevelExpressions
+grab = parse pEntryPoint
+  where pEntryPoint = pTopLevel `sepEndBy1` (getSame <|> schar'  ';') <* eof
 
 grabT :: String -> Either ErrorList Type
 grabT input = case parse pType input of
@@ -419,5 +443,3 @@ grabT input = case parse pType input of
 grab' input = case grab input of
   Right statements -> map show statements ! intercalate "\n"
   Left err -> error $ show err
-
-varConstructor = TVar
