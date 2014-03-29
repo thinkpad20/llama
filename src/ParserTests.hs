@@ -92,38 +92,14 @@ expressionTests = TestGroup "Expressions"
     , test "prefix on its own" "+_" (Var "+_")
     , test "postfix on its own" "_+" (Var "_+")
   ] ++ binOpsTests)
-  , TestGroup "unary operators" [
-      test "prefix operator"
-           "-1"
-           (Apply (Var "-_") one)
-    , test "prefix operator 2"
-           "++foo"
-           (Apply (Var "++_") foo)
-    , test "postfix operator"
-           "3!"
-           (Apply (Var "_!") three)
-    , test "prefix operator in argument"
-           "foo (++bar)"
-           (Apply foo (Apply (Var "++_") bar))
-    , test "postfix operator in argument"
-           "foo (bar++)"
-           (Apply foo (Apply (Var "_++") bar))
-    , test "postfix operator after an application"
-           "foo bar++"
-           (Apply (Var "_++") $ Apply foo bar)
-    , test "mixing postfix and infix operators"
-           "foo + bar ++"
-           (Apply (Var "_++") $ plus foo bar)
-    , test "mixing postfix and infix operators 2"
-           "foo + (bar++)"
-           (plus foo $ Apply (Var "_++") bar)
-    , test "mixing prefix and infix operators"
-           "++foo + bar"
-           (Apply (Var "++_") $ plus foo bar)
-    , test "high precedence prefix"
-           "++_ foo" (Apply (Var "++_") foo)
-    , test "high precedence prefix 2"
-           "++_ foo bar" (Apply (Apply (Var "++_") foo) bar)
+  , SkipTestGroup "prefixes" [
+      test "prefix operator" "-1" (Prefix "-" one)
+    , test "prefix operator 2" "++foo" (Prefix "++" foo)
+    , Test "prefix after a statement" "1; +2" [one, Prefix "+" two]
+    , ShouldError "prefix operator in argument" "foo (++bar)"
+    , ShouldError "mixing prefix and infix operators" "++foo + bar"
+    , ShouldError "high precedence prefix" "++_ foo"
+    , ShouldError "high precedence prefix 2" "++_ foo bar"
   ]
   , test "apply" "foo bar" (Apply foo bar)
   , test "apply associates to the left"
@@ -334,13 +310,14 @@ functionTests = TestGroup "Functions"
            [Define "<*>" $ Lambda (tuple [ Typed bar (TVar "a")
                                          , Typed baz (TVar "b")])
                          $ Apply bar baz]
-    , Test "should make a prefix function definition"
-           "!(foo: Bool) = not foo"
-           [Define "!_" $ Lambda (Typed foo boolT) (Apply (Var "not") foo)]
-    , Test "should make a postfix function definition"
-           "(foo: Num)! = fact foo"
-           [Define "_!" $ Lambda (Typed foo numT) (Apply (Var "fact") foo)]
     ]
+  , TestGroup "LambdaDots" [
+      Test "basic" ".foo" [LambdaDot foo]
+    , Test "with other args" ".foo bar" [Apply (LambdaDot foo) bar]
+    , Test "in assignment" "foo = .bar" [Define "foo" $ LambdaDot bar]
+    , Test "in assignment with other exprs" "foo = .bar baz"
+           [Define "foo" $ Apply (LambdaDot bar) baz]
+  ]
   ]
   where tup1 = tuple [Typed foo fooT, Typed bar barT]
         eLambda arg body = expr $ Lambda arg body

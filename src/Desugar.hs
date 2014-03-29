@@ -1,80 +1,239 @@
+{-# LANGUAGE OverlappingInstances #-}
+{-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE TypeSynonymInstances #-}
+{-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE NoMonomorphismRestriction #-}
+{-# LANGUAGE OverloadedStrings #-}
 module Desugar where
 
+import Prelude hiding (log)
 import qualified Data.Map as M
 import qualified Data.Set as S
+import System.IO.Unsafe
 
 import Common
 import AST
-import TypeLib
+import TypeLib hiding (log, log')
+import Parser
+
+data Desugaring a = Desugaring (a -> Bool) (a -> Desugarer a)
 
 data DesugarerEnv = DesugarerEnv {
     dsNameSpace :: [Name]
   , dsConstructors :: M.Map Name Type
+  , dsDesugarers :: [Desugaring Expr]
+  , dsNamesInUse :: [S.Set Name]
   }
-type Desugarer = StateT [S.Set Name] Identity
+type Desugarer = StateT DesugarerEnv IO
 
 class Recursable a where
-  recurse :: (a -> Bool) -> (a -> Desugarer a) -> a -> Desugarer a
-
-instance Recursable Literal where
-  recurse = undefined
+  recurse :: Desugaring a -> a -> Desugarer a
 
 instance Recursable Expr where
-  recurse test f e | test e = f e
-                   | otherwise = case e of
-    Var _ -> return e
-    Number _ -> return e
-    String _ -> return e
-    Constructor _ -> return e
-    Continue -> return e
-    TypeDef _ _ -> return e
-    Block blk -> Block <$> mapM rec blk
-    Dot e1 e2 -> Dot <$> rec e1 <*> rec e2
-    Apply e1 e2 -> Apply <$> rec e1 <*> rec e2
-    Lambda arg body -> Lambda <$> rec arg <*> rec body
-    Lambdas argsBodies -> Lambdas <$> mapM recTup argsBodies
-    Case expr patsBodies -> Case <$> rec expr <*> mapM recTup patsBodies
-    Tuple exprs kws -> Tuple <$> mapM rec exprs <*> mapM recKw kws
-    Literal (ArrayLiteral exprs) -> Literal . ArrayLiteral <$> mapM rec exprs
-    Literal (ListLiteral exprs) -> Literal . ListLiteral <$> mapM rec exprs
-    Literal (SetLiteral exprs) -> Literal . SetLiteral <$> mapM rec exprs
-    DeRef e1 e2 -> DeRef <$> rec e1 <*> rec e2
-    Typed expr t -> rec expr >>= \e' -> return $ Typed e' t
-    If c t f -> If <$> rec c <*> rec t <*> rec f
-    If' c t -> If' <$> rec c <*> rec t
-    While c b -> While <$> rec c <*> rec b
-    For e1 e2 e3 -> For <$> rec e1 <*> rec e2 <*> rec e3
-    Define name expr -> Define name <$> rec expr
-    Extend name expr -> Extend name <$> rec expr
-    Assign e1 e2 -> Assign <$> rec e1 <*> rec e2
-    Return expr -> Return <$> rec expr
-    Throw expr -> Throw <$> rec expr
-    Break expr -> Break <$> rec expr
-    After e1 e2 -> After <$> rec e1 <*> rec e2
-    Before e1 e2 -> Before <$> rec e1 <*> rec e2
-    --ObjDec ObjectDec
-    Modified m expr -> Modified m <$> rec expr
-    where rec = recurse test f
-          recTup (a,b) = (,) <$> rec a <*> rec b
-          recKw = undefined
+  recurse ds@(Desugaring test transform) e
+    | test e = transform e
+    | otherwise = case e of
+      Var _ -> return e
+      Number _ -> return e
+      String _ -> return e
+      Constructor _ -> return e
+      Continue -> return e
+      TypeDef _ _ -> return e
+      Block blk -> Block <$> mapM (recNS "%b") blk
+      Dot e1 e2 -> Dot <$> rec e1 <*> rec e2
+      Apply e1 e2 -> Apply <$> rec e1 <*> rec e2
+      Lambda arg body -> Lambda <$> recNS "%l" arg <*> recNS "%l" body
+      Lambdas argsBodies -> Lambdas <$> mapM (recTupNS "%l") argsBodies
+      Case expr patsBodies -> Case <$> recNS "%c" expr <*> mapM (recTupNS "%c") patsBodies
+      Tuple exprs kws -> Tuple <$> mapM rec exprs <*> mapM recKw kws
+      Literal (ArrayLiteral exprs) -> Literal . ArrayLiteral <$> mapM rec exprs
+      Literal (ListLiteral exprs) -> Literal . ListLiteral <$> mapM rec exprs
+      Literal (SetLiteral exprs) -> Literal . SetLiteral <$> mapM rec exprs
+      DeRef e1 e2 -> DeRef <$> rec e1 <*> rec e2
+      Typed expr t -> rec expr >>= \e' -> return $ Typed e' t
+      If c t f -> If <$> recNS "%if" c <*> recNS "%if" t <*> recNS "%if" f
+      If' c t -> If' <$> recNS "%if" c <*> recNS "%if" t
+      While c b -> While <$> recNS "%w" c <*> recNS "%w" b
+      For e1 e2 e3 -> For <$> recNS "%f" e1 <*> recNS "%f" e2 <*> recNS "%f" e3
+      Define name expr -> Define name <$> recNS name expr
+      Extend name expr -> Extend name <$> recNS name expr
+      Assign e1 e2 -> Assign <$> rec e1 <*> rec e2
+      Return expr -> Return <$> rec expr
+      Throw expr -> Throw <$> rec expr
+      Break expr -> Break <$> rec expr
+      After e1 e2 -> After <$> rec e1 <*> rec e2
+      Before e1 e2 -> Before <$> rec e1 <*> rec e2
+      --ObjDec ObjectDec
+      Modified m expr -> Modified m <$> rec expr
+      LambdaDot e' -> LambdaDot <$> recNS "%l" e'
+      Prefix name e' -> Prefix name <$> rec e'
+      _ -> error $ "Expression not covered in desugarer: " <> show e
+      where rec = recurse ds
+            recNS n e = pushNS n *> rec e <* popNS
+            recTup (a,b) = (,) <$> rec a <*> rec b
+            recTupNS n (a, b) = pushNS n *> recTup (a, b) <* popNS
+            recKw = undefined
 
---desugarObject :: Expr -> Desugarer Expr
---desugarObject e = case e of
 
-desugarBeforeAfter :: Expr -> Desugarer Expr
-desugarBeforeAfter e = recurse test desugar e where
+getDesugarers = get <!> dsDesugarers
+
+desugar :: Expr -> Desugarer Expr
+desugar e = do
+  ds's <- getDesugarers
+  go ds's e
+  where
+    go [] e = return e
+    go (Desugaring test trans:ds) e | test e = trans e
+                                    | otherwise = recurse e
+    recurse e = case e of
+      Var _ -> return e
+      Number _ -> return e
+      String _ -> return e
+      Constructor _ -> return e
+      Continue -> return e
+      TypeDef _ _ -> return e
+      Block blk -> Block <$> mapM (recNS "%b") blk
+      Dot e1 e2 -> Dot <$> rec e1 <*> rec e2
+      Apply e1 e2 -> Apply <$> rec e1 <*> rec e2
+      Lambda arg body -> Lambda <$> recNS "%l" arg <*> recNS "%l" body
+      Lambdas argsBodies -> Lambdas <$> mapM (recTupNS "%l") argsBodies
+      Case expr patsBodies -> Case <$> recNS "%c" expr <*> mapM (recTupNS "%c") patsBodies
+      Tuple exprs kws -> Tuple <$> mapM rec exprs <*> mapM recKw kws
+      Literal (ArrayLiteral exprs) -> Literal . ArrayLiteral <$> mapM rec exprs
+      Literal (ListLiteral exprs) -> Literal . ListLiteral <$> mapM rec exprs
+      Literal (SetLiteral exprs) -> Literal . SetLiteral <$> mapM rec exprs
+      DeRef e1 e2 -> DeRef <$> rec e1 <*> rec e2
+      Typed expr t -> rec expr >>= \e' -> return $ Typed e' t
+      If c t f -> If <$> recNS "%if" c <*> recNS "%if" t <*> recNS "%if" f
+      If' c t -> If' <$> recNS "%if" c <*> recNS "%if" t
+      While c b -> While <$> recNS "%w" c <*> recNS "%w" b
+      For e1 e2 e3 -> For <$> recNS "%f" e1 <*> recNS "%f" e2 <*> recNS "%f" e3
+      Define name expr -> Define name <$> recNS name expr
+      Extend name expr -> Extend name <$> recNS name expr
+      Assign e1 e2 -> Assign <$> rec e1 <*> rec e2
+      Return expr -> Return <$> rec expr
+      Throw expr -> Throw <$> rec expr
+      Break expr -> Break <$> rec expr
+      After e1 e2 -> After <$> rec e1 <*> rec e2
+      Before e1 e2 -> Before <$> rec e1 <*> rec e2
+      --ObjDec ObjectDec
+      Modified m expr -> Modified m <$> rec expr
+      LambdaDot e' -> LambdaDot <$> recNS "%l" e'
+      Prefix name e' -> Prefix name <$> rec e'
+      _ -> error $ "Expression not covered in desugarer: " <> show e
+      where rec = desugar
+            recNS n e = pushNS n *> rec e <* popNS
+            recTup (a,b) = (,) <$> rec a <*> rec b
+            recTupNS n (a, b) = pushNS n *> recTup (a, b) <* popNS
+            recKw = undefined
+
+
+
+pushNS :: Name -> Desugarer ()
+pushNS name = do
+  modify $ \s -> s { dsNameSpace = name : dsNameSpace s
+                   , dsNamesInUse = S.singleton name : dsNamesInUse s}
+popNS = modify $ \s -> s { dsNameSpace = tail $ dsNameSpace s
+                         , dsNamesInUse = tail $ dsNamesInUse s}
+
+--desugar :: Expr -> Desugarer Expr
+--desugar expr = go desugarers expr where
+--  go [] e = return e
+--  go (d:ds) e = recurse d e >>= go ds
+
+desugarers = [dsAfter, dsLambdaDot, dsPrefixLine]
+
+dsAfter :: Desugaring Expr
+dsAfter = Desugaring test ds where
   test (After _ _) = True
-  test (Before _ _) = True
   test _ = False
-  desugar expr = case expr of
-    e `After` (Block es) -> do
-      es' <- mapM rec es
-      e' <- rec e
-      return $ Block $ es' ++ [e']
-    e1 `After` e2 -> do
-      e1' <- rec e1
-      e2' <- rec e2
-      return $ Block [e2', e1']
-    _ `Before` _ -> error $ "Haven't implemented `Before` yet"
-    where rec = desugarBeforeAfter
+  ds (e `After` Block es) = do
+    es' <- mapM desugar es
+    e' <- desugar e
+    return $ Block $ es' ++ [e']
+  ds (e1 `After` e2) = do
+    e1' <- desugar e1
+    e2' <- desugar e2
+    return $ Block [e2', e1']
 
+dsLambdaDot :: Desugaring Expr
+dsLambdaDot = Desugaring test ds where
+  test (LambdaDot _) = True
+  test _ = False
+  ds (LambdaDot e) = do
+    name <- unusedVar
+    Lambda (Var name) <$> desugar e
+
+dsPrefixLine :: Desugaring Expr
+dsPrefixLine = Desugaring test ds where
+  test (Block _) = True
+  test _ = False
+  ds (Block blk) = Block <$> first blk
+  first (Prefix _ _ : _) = error "Block that starts with a prefix"
+  first (e:rest) = go (e:rest)
+  go [] = return []
+  go (e:Prefix op e':rest) = do
+    newE <- desugar e
+    newE' <- desugar e'
+    go (binary op newE newE' : rest)
+  go (e:rest) = doRest e rest
+  doRest e rest = (:) <$> desugar e <*> go rest
+
+
+addUsedName :: Name -> Desugarer Name
+addUsedName name = do
+  top:rest <- dsNamesInUse <$> get >>= \case
+    [] -> return (mempty:[])
+    tr -> return tr
+  modify $ \s -> s {dsNamesInUse = S.insert name top : rest}
+  return name
+
+unusedVar :: Desugarer Name
+unusedVar = loop Nothing where
+  toName Nothing = "_arg"
+  toName (Just num) = "_arg" <> render num
+  loop :: Maybe Int -> Desugarer Name
+  loop n = let name = toName n in
+    isNameInUse (toName n) >>= \case
+      True -> loop . Just $ case n of
+        Nothing -> 0
+        Just n -> n + 1
+      False -> addUsedName name
+
+isNameInUse :: Name -> Desugarer Bool
+isNameInUse name = do
+  names <- get <!> dsNamesInUse
+  loop names
+  where loop [] = return False
+        loop (names:ns) = case S.member name names of
+          True -> return True
+          False -> loop ns
+
+defaultEnv = DesugarerEnv {
+    dsNameSpace = mempty
+  , dsConstructors = mempty
+  , dsNamesInUse = mempty
+  , dsDesugarers = [dsAfter, dsLambdaDot, dsPrefixLine]
+  }
+
+log = lift . putStrLn
+log' = log . mconcat
+
+runDesugarWith :: DesugarerEnv -> Expr -> (Expr, DesugarerEnv)
+runDesugarWith state e = unsafePerformIO $ runStateT (desugar e) state
+
+runOneDesugarerWith state ds e = unsafePerformIO $ runStateT (recurse ds e) state
+runOneDesugarer ds a = fst $ (runOneDesugarerWith defaultEnv ds a)
+
+runDesugar :: Expr -> Expr
+runDesugar = fst . runDesugarWith defaultEnv
+
+desugarIt :: String -> Expr
+desugarIt input = case grab input of
+  Left err -> error $ show err
+  Right exprs -> runDesugar (Block exprs)
+
+desugarOne :: Desugaring Expr -> String -> Expr
+desugarOne ds input = case grab input of
+  Left err -> error $ show err
+  Right exprs -> runOneDesugarer ds (Block exprs)

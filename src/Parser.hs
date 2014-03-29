@@ -35,7 +35,7 @@ exactStr = keyword
 
 
 exactSym k = fmap T.pack go where
-  go = lexeme . try $ string k <* notFollowedBy (oneOf symChars)
+  go = lexeme . try $ string k <* notFollowedBy (oneOf (symChars <> "."))
 
 lexeme p = p <* skip
 sstring s = fmap T.pack (lexeme $ string s)
@@ -189,9 +189,6 @@ pParens = schar '(' *> exprs <* schar ')'
         kwargs = kwarg `sepBy` schar ','
         expr = choice [pExpr, Var <$> pSymbol]
 
-pKwarg :: Parser Expr
-pKwarg = Kwarg <$ char '@' <*> pIdent lower <* exactSym "=" <*> pExpr
-
 pString, pString' :: Parser T.Text
 pString = char '"' >> pString'
 pString' = do
@@ -249,26 +246,14 @@ pBinary = pBackwardApply where
 
 pPrefixSymbol :: Parser Expr
 pPrefixSymbol = do
-  sym <- optionMaybe pSymbol
-  expr <- pPostfixSymbol
-  case sym of
-    Nothing -> return expr
-    Just op -> return $ Apply (Var (op <> "_")) expr
-
-pPostfixSymbol :: Parser Expr
-pPostfixSymbol = do
-  expr <- pBinary
-  option expr $ do
-    sym <- pSymbol
-    return $ Apply (Var ("_" <> sym)) expr
-
-pUnary :: Parser Expr
-pUnary = pPrefixSymbol
+  sym <- pSymbol
+  expr <- pRightAssociativeFunction
+  return $ Prefix sym expr
 
 pRightAssociativeFunction :: Parser Expr
 pRightAssociativeFunction = do
   names <- getRANames >>= (many . choice . map exactStr)
-  expr <- optionMaybe pUnary
+  expr <- optionMaybe pBinary
   case (names, expr) of
     ([], Nothing) -> unexpected "empty input, not an expression"
     (names, Nothing) -> return $ foldr1 Apply (Var <$> names)
@@ -318,6 +303,9 @@ pDotted = do
       parseRest (Dot res y)
       <|> return res
 
+pLambdaDot :: Parser Expr
+pLambdaDot = LambdaDot <$ exactSym "." <*> pTerm
+
 pCase :: Parser Expr
 pCase = Case <$ keyword "case" <*> pExpr <* keyword "of" <*> alts
   where alts = alt `sepBy1` exactSym "|"
@@ -330,6 +318,7 @@ pCase = Case <$ keyword "case" <*> pExpr <* keyword "of" <*> alts
 pTerm :: Parser Expr
 pTerm = lexeme $ choice [ Number <$> pDouble
                         , String <$> pString
+                        , pLambdaDot
                         , pVar
                         , pConstructor
                         , pParens
@@ -350,10 +339,8 @@ pFor = For <$ keyword "for" <*> pExpr <* keyword "in"
 pExprOrBlock :: Parser Expr
 pExprOrBlock = choice [ try pBlock, pIf, pExpr ]
 
-pDefine = choice $ map ($ ("=", Define)) [ pDefPrefix, pDefPostfix
-                                         , pDefBinary, pDefFunction]
-pExtend = choice $ map ($ ("&=", Extend)) [ pDefPrefix, pDefPostfix
-                                          , pDefBinary, pDefFunction]
+pDefine = choice $ map ($ ("=", Define)) [ pDefBinary, pDefFunction]
+pExtend = choice $ map ($ ("&=", Extend)) [ pDefBinary, pDefFunction]
 
 pDefFunction (sym, f) = try $ do
   name <- pIdent lower <|> (schar '(' *> pSymbol <* schar ')')
@@ -367,18 +354,6 @@ pDefBinary (sym, f) = try $ do
   arg2 <- pTerm
   body <- exactSym sym *> pBlock
   return $ f op $ Lambda (tuple [arg1, arg2]) body
-
-pDefPrefix (sym, f) = try $ do
-  op <- pSymbol
-  arg <- pTerm
-  body <- exactSym sym *> pBlock
-  return $ f (op <> "_") $ Lambda arg body
-
-pDefPostfix (sym, f) = try $ do
-  arg <- pTerm
-  op <- pSymbol
-  body <- exactSym sym *> pBlock
-  return $ f ("_" <> op) $ Lambda arg body
 
 pModified = Modified <$> pMod <*> pExpr
 
@@ -454,7 +429,7 @@ pExpr = lexeme $ choice [ pModified
 testE = parse pExpression
 testS = parse pExpressions
 
-pTopLevel = choice [pExpression, pTypeDef, ObjDec <$> pObjectDec]
+pTopLevel = choice [pPrefixSymbol, pExpression, pTypeDef, ObjDec <$> pObjectDec]
 
 grab :: String -> Either ParseError [Expr]
 grab = parse pEntryPoint

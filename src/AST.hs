@@ -42,9 +42,11 @@ data Expr = Var         !Name
           | After       !Expr !Expr
           | Before      !Expr !Expr
           | ObjDec      !ObjectDec
-          | Continue
           | Modified    !Mod !Expr
-          | TypeDef !Name !Type
+          | TypeDef     !Name !Type
+          | Prefix      !Name !Expr
+          | LambdaDot   !Expr
+          | Continue
           deriving (Show, Eq)
 
 data Literal = ArrayLiteral ![Expr]
@@ -154,7 +156,7 @@ instance Render Block where
   render b = "{" <> (line . trim . intercalate "; " . map render) b <> "}"
 
 symChars :: String
-symChars = "><=+-*/^~!%&$:.#|?"
+symChars = "><=+-*/^~!%&$:#|?"
 
 isSymbol :: Text -> Bool
 isSymbol = all (`elem` symChars)
