@@ -6,8 +6,9 @@
 {-# LANGUAGE OverloadedStrings #-}
 module TypeLib where
 
-import Prelude hiding (log)
+import Prelude hiding (log, show)
 import qualified Data.Map as M
+import qualified Prelude as P
 import qualified Data.Set as S
 import qualified Data.Text as T
 import Data.HashMap hiding (map, delete)
@@ -208,7 +209,7 @@ instance Monoid Type where
   TFunction from to `mappend` TMultiFunc s = TMultiFunc $ M.insert from to s
   TFunction f1 t1 `mappend` TFunction f2 t2 =
     TMultiFunc $ M.fromList [(f1, t1), (f2, t2)]
-  t1 `mappend` t2 = error $ "Invalid <>s: " <> show t1 <> ", " <> show t2
+  t1 `mappend` t2 = error $ "Invalid <>s: " <> P.show t1 <> ", " <> P.show t2
 
 instance Monoid Polytype where
   mempty = Polytype [] mempty

@@ -1,5 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
-module ParserTests (doTests) where
+module ParserTests (allTests, main) where
 
 import qualified Data.Map as M
 import qualified Data.Text as T
@@ -51,6 +51,7 @@ expressionTests = TestGroup "Expressions"
   , TestGroup "variables" [
       test "basic variable" "foo" foo
     , test "variable with underscores" "foo_bar" (Var "foo_bar")
+    , test "variable starting with underscores" "_foo" (Var "_foo")
     , test "variable with dashes" "foo-bar" (Var "foo-bar")
     , ShouldError "ends with a dash" "foo-"
     , test "variable with primes" "foo'bar" (Var "foo'bar")
@@ -327,6 +328,8 @@ functionTests = TestGroup "Functions"
 assignmentTests = TestGroup "Assignments"
   [
     Test "can make definitions" "foo = bar" [Define "foo" bar]
+  , Test "can make definitions with underscores"
+         "_foo = bar" [Define "_foo" bar]
   , Test "can make assignments" "foo := bar" [Assign foo bar]
   , Test "can make complex definitions" "foo = bar + baz"
          [Define "foo" $ bar `plus` baz]
@@ -588,5 +591,21 @@ doTests = runTests grab [ expressionTests
                         , rassocTests
                         , objectTests
                         ]
+
+allTests = [run grab [ expressionTests
+                     , assignmentTests
+                     , arrayTests
+                     , blockTests
+                     , whileTests
+                     , forTests
+                     , typingTests
+                     , functionTests
+                     , ifTests
+                     , caseTests
+                     , flowTests
+                     , rassocTests
+                     , objectTests
+                     ]
+            ]
 
 main = doTests

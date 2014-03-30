@@ -5,7 +5,13 @@ module Parser ( grab
               , Block
               , grabT
               , grabOrError) where
-
+import Prelude (IO, Eq(..), Ord(..), Bool(..),
+                Double, String, Maybe(..), Int, Monad(..),
+                ($), (.), floor, map, Functor(..), mapM,
+                (+), (-), elem, Either(..), Char, last,
+                otherwise, (=<<), Read(..), error, foldl,
+                foldr, foldr1)
+import qualified Prelude as P
 import Text.Parsec hiding (Parser, parse, State)
 import Control.Applicative hiding (many, (<|>))
 import qualified Data.Text as T
@@ -45,8 +51,8 @@ schar' c = lexeme (char c) >> return ()
 
 check p = lexeme . try $ do
   s <- p
-  if s `elem` (keywords ++ keySyms)
-    then unexpected $ "reserved word " ++ show s
+  if s `elem` (keywords <> keySyms)
+    then unexpected $ "reserved word " <> P.show s
     else return s
 
 lowers :: Parser String
@@ -60,7 +66,7 @@ pIdent firstChar = fmap T.pack $ check $ do
   first <- firstChar
   rest <- many $ alphaNum <|> char '_' <|> char '-' <|> char '\''
   bangs <- many $ char '!'
-  case (first : rest ++ bangs) of
+  case (first : rest <> bangs) of
     "_" -> unexpected "Single underscore"
     ident | last ident == '-' -> unexpected "Ends in a dash"
           | otherwise -> return ident
@@ -73,12 +79,12 @@ pVar = do
     return $ Typed var typ
   where getVar = choice $ map (fmap Var . try) ps
         chk s = if s `elem` keySyms
-          then unexpected $ "reserved symbol " ++ show s
+          then unexpected $ "reserved symbol " <> P.show s
           else return s
         prefix = do
           s <- chk =<< many1 (oneOf symChars)
           c <- char '_'
-          return $ T.pack $ s ++ [c]
+          return $ T.pack $ s <> [c]
         postfix = do
           c <- char '_'
           s <- chk =<< many1 (oneOf symChars)
@@ -94,10 +100,10 @@ pConstructor = Constructor <$> pIdent upper
 pDouble :: Parser Double
 pDouble = lexeme $ do
   ds <- many1 digit
-  option (read ds) $ getDecimal ds
+  option (P.read ds) $ getDecimal ds
   where getDecimal ds = try $ do exactSym "."
                                  ds' <- many1 digit
-                                 return $ read (ds ++ "." ++ ds')
+                                 return $ P.read (ds <> "." <> ds')
 
 
 pObjectDec :: Parser ObjectDec
@@ -203,11 +209,11 @@ pString' = do
       'b'  -> escape '\b'
       '"'  -> escape '"'
       c | c `elem` [' ', '\n', '\t'] -> consume
-      c -> unexpected $ "Unrecognized escape character `" ++ [c] ++ "'"
+      c -> unexpected $ "Unrecognized escape character `" <> [c] <> "'"
       where escape c = pString' >>= \rest -> return $ str <> T.singleton c <> rest
             consume = spaces >> pString' >>= \s -> return (str <> s)
     '"' -> return str
-    c -> error $ "wtf is " ++ [c]
+    c -> error $ "wtf is " <> [c]
 
 pLiteral :: Parser Expr
 pLiteral = Literal <$> choice [try array, list, try set, dict] where
@@ -264,7 +270,7 @@ getRANames :: Parser [Name]
 getRANames = getState <!> raNames
 
 addRAssocs :: [Name] -> Parser ()
-addRAssocs names = modifyState $ \s -> s {raNames = names ++ raNames s}
+addRAssocs names = modifyState $ \s -> s {raNames = names <> raNames s}
 
 pRAssoc :: Parser ()
 pRAssoc = do
@@ -344,10 +350,11 @@ pDefine = choice $ map ($ ("=", Define)) [ pDefBinary, pDefFunction]
 pExtend = choice $ map ($ ("&=", Extend)) [ pDefBinary, pDefFunction]
 
 pDefFunction (sym, f) = try $ do
-  name <- pIdent lower <|> (schar '(' *> pSymbol <* schar ')')
+  name <- getVar <|> (schar '(' *> pSymbol <* schar ')')
   args <- many pTerm
   body <- exactSym sym *> pBlock
   return $ f name $ foldr Lambda body args
+  where getVar = pIdent (lower <|> char '_')
 
 pDefBinary (sym, f) = try $ do
   arg1 <- pTerm
@@ -438,14 +445,14 @@ grab = parse pEntryPoint
 
 grabT :: String -> Either ErrorList Type
 grabT input = case parse pType input of
-  Left err -> Left $ ErrorList [T.pack $ show err]
+  Left err -> Left $ ErrorList [show err]
   Right typ -> return typ
 
 grab' input = case grab input of
-  Right statements -> map show statements ! intercalate "\n"
-  Left err -> error $ show err
+  Right statements -> map P.show statements ! intercalate "\n"
+  Left err -> error $ P.show err
 
 grabOrError :: String -> Expr
 grabOrError input = case grab input of
-  Left err -> error $ show err
+  Left err -> error $ P.show err
   Right exprs -> Block exprs

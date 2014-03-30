@@ -9,7 +9,13 @@ module TypeChecker ( Typable(..), Typing, TypeTable, TypingState(..)
                    , typeIt, unifyIt, runTypeChecker, testInstantiate
                    , generalize') where
 
-import Prelude hiding (lookup, log)
+import Prelude (IO, Eq(..), Ord(..), Bool(..),
+                Double, String, Maybe(..), Int, Monad(..),
+                ($), (.), floor, map, Functor(..), mapM,
+                (+), (-), elem, Either(..), Char, last,
+                otherwise, (=<<), Read(..), error, foldl,
+                foldr, foldr1, all, reverse, any, zip, succ,
+                head, length, flip, fst, span, snd)
 import System.IO.Unsafe
 import Control.Monad.Error.Class
 import qualified Data.Map as M
@@ -20,9 +26,6 @@ import Common
 import AST
 import TypeLib
 import Parser (grab, grabT)
-
-unifyAdd :: Type -> Type -> Typing ()
-unifyAdd t1 t2 = unify (t1, t2) >>= toList ~> mapM_ (uncurry addTypeAlias)
 
 addTypeAlias :: Name -> Type -> Typing ()
 addTypeAlias name typ =
@@ -62,7 +65,7 @@ instance Typable Expr where
                 else throwError1 "Multiple types in array literal"
 
     Tuple exprs kw -> typeOfTuple typeOf exprs kw
-    expr -> throwErrorC ["Can't handle ", render expr]
+    expr -> throwErrorC ["Can't handle ", show expr, " or needs desugaring"]
     where only t = return (t, mempty)
 
 typeOfTuple :: TypeOf Expr -> [Expr] -> Kwargs -> Typing (Type, Subs)
@@ -136,7 +139,7 @@ typeOfCase expr patsBodies = do
   -- Give each pattern and body a number, for separate namespaces
   results <- forM (zip [0..] patsBodies) $ \(n, (pat, body)) -> do
     -- Grab a copy of the type env
-    pushNameSpace ("%case" <> T.pack (show n))
+    pushNameSpace ("%case" <> show n)
     (patT, patS) <- litTypeOf pat
     patS' <- unify (patT, exprT) `catchError` addError "pattern type mismatch"
     applyToEnv patS
@@ -476,11 +479,11 @@ runTypeChecker typing =
 
 typeIt :: String -> Either ErrorList Type
 typeIt input = case grab input of
-  Left err -> Left $ ErrorList ["Parse error:\n" <> (T.pack $ show err)]
+  Left err -> Left $ ErrorList ["Parse error:\n" <> show err]
   Right block -> fst $ runTyping block
 
 unifyIt :: (String, String) -> Either ErrorList Subs
 unifyIt (input1, input2) = do
-  type1 <- grabT input1
-  type2 <- grabT input2
-  fst $ runUnify type1 type2
+  e1 <- grabT input1
+  e2 <- grabT input2
+  fst (runUnify e1 e2)

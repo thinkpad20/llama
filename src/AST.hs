@@ -4,10 +4,11 @@
 {-# LANGUAGE OverloadedStrings #-}
 module AST where
 
-import Prelude (IO, Show(..), Eq(..), Ord(..), Bool(..),
+import Prelude (IO, Eq(..), Ord(..), Bool(..),
                 Double, String, Maybe(..), Int, Monad(..),
                 ($), (.), floor, map, Functor(..), mapM,
                 (+), (-), elem, Either(..))
+import qualified Prelude as P
 import Data.Text hiding (map)
 import Data.Monoid
 
@@ -47,14 +48,14 @@ data Expr = Var         !Name
           | Prefix      !Name !Expr
           | LambdaDot   !Expr
           | Continue
-          deriving (Show, Eq)
+          deriving (P.Show, Eq)
 
 data Literal = ArrayLiteral ![Expr]
              | ArrayRange   !Expr !Expr
              | DictLiteral  ![(Expr, Expr)]
              | SetLiteral   ![Expr]
              | ListLiteral  ![Expr]
-             deriving (Show, Eq)
+             deriving (P.Show, Eq)
 
 type Block = [Expr]
 
@@ -65,7 +66,7 @@ data ObjectDec = ObjectDec {
   , objConstrs :: [ConstructorDec]
   , objAttrs :: [Expr]
   }
-  deriving (Show, Eq)
+  deriving (P.Show, Eq)
 
 defObj :: ObjectDec
 defObj = ObjectDec {
@@ -82,7 +83,7 @@ data ConstructorDec = ConstructorDec {
   , constrExtends :: Maybe Expr
   , constrLogic :: Maybe Expr
   }
-  deriving (Show, Eq)
+  deriving (P.Show, Eq)
 
 defConstr :: ConstructorDec
 defConstr = ConstructorDec {
@@ -98,10 +99,10 @@ instance Render Expr where
     render' expr = case expr of
       Var name -> return name
       Constructor name -> return name
-      Number n | isInt n -> return $ pack $ show $ floor n
-      Number n -> return $ pack $ show n
+      Number n | isInt n -> return $ show $ floor n
+      Number n -> return $ show n
       Block blk -> block blk
-      String s -> return $ pack $ show s
+      String s -> return $ show s
       Dot e1 e2 -> return $ render'' e1 <> "." <> render'' e2
       Apply (Var op) (Tuple [e1, e2] _)
         | isSymbol op -> return $ render'' e1 <> " " <> op <> " " <> render'' e2
@@ -140,7 +141,7 @@ instance Render Expr where
       Throw e -> line $ "throw " <> render e
       Return e -> line $ "return " <> render e
       TypeDef name typ -> line $ "typedef " <> name <> " = " <> render typ
-      _ -> return $ pack $ show expr
+      _ -> return $ show expr
     line str = get >>= \i -> return $ replicate i " " <> str
     join = return . intercalate "\n"
     block blk = up *> fmap (intercalate "; ") (mapM render' blk) <* down
@@ -164,5 +165,7 @@ isSymbol = all (`elem` symChars)
 binary :: Name -> Expr -> Expr -> Expr
 binary name e1 e2 = Apply (Var name) $ Tuple [e1, e2] mempty
 
+tuple :: [Expr] -> Expr
 tuple exprs = Tuple exprs mempty
+unit :: Expr
 unit = tuple []

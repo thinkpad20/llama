@@ -6,17 +6,33 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Desugar where
 
-import Prelude hiding (log)
+import Prelude (IO, Show(..), Eq(..), Ord(..), Bool(..),
+                Double, String, Maybe(..), Int, Monad(..),
+                ($), (.), floor, map, Functor(..), mapM,
+                (+), (-), elem, Either(..), tail, otherwise,
+                error, undefined, fst, putStrLn, (||), foldl)
 import qualified Data.Map as M
 import qualified Data.Set as S
+import qualified Prelude as P
 import System.IO.Unsafe
 
 import Common
 import AST
 import TypeLib hiding (log, log')
 import Parser
+import Data.Text hiding (tail, foldl)
 
 type Desugarer a = (a -> Bool, a -> Desugar a)
+
+instance Show (Desugarer a) where
+  show _ = "some desugarer"
+instance Render (Desugarer a) where
+  render _ = "some desugarer"
+
+dsAppend :: Desugarer a -> Desugarer a -> Desugarer a
+(test1, t1) `dsAppend` (test2, t2) = (test, trans) where
+  test e = test1 e || test2 e
+  trans expr = if test1 expr then t1 expr else t2 expr
 
 data DesugarerEnv = DesugarerEnv {
     dsNameSpace :: [Name]
@@ -26,14 +42,14 @@ data DesugarerEnv = DesugarerEnv {
 
 type Desugar = ErrorT ErrorList (StateT DesugarerEnv IO)
 
-test :: Desugarer Expr -> Expr -> Bool
-test (t, _) e = t e
+doTest :: Desugarer Expr -> Expr -> Bool
+doTest (t, _) e = t e
 
-transform :: Desugarer Expr -> Expr -> Desugar Expr
-transform (_, t) e = t e
+doTransform :: Desugarer Expr -> Expr -> Desugar Expr
+doTransform (_, t) e = t e
 
 traverse :: Desugarer Expr -> Expr -> Desugar Expr
-traverse ds e | test ds e = transform ds e
+traverse ds e | doTest ds e = doTransform ds e
               | otherwise = case e of
   Var _ -> return e
   Number _ -> return e
@@ -69,9 +85,9 @@ traverse ds e | test ds e = transform ds e
   Modified m expr -> Modified m <$> rec expr
   LambdaDot e' -> LambdaDot <$> recNS "%l" e'
   Prefix name e' -> Prefix name <$> rec e'
-  _ -> error $ "Expression not covered in desugarer: " <> show e
+  _ -> error $ "Expression not covered in desugarer: " <> P.show e
   where rec = traverse ds
-        recNS n e = pushNS n *> rec e <* popNS
+        recNS n expr = pushNS n *> rec expr <* popNS
         recTup (a,b) = (,) <$> rec a <*> rec b
         recTupNS n (a, b) = pushNS n *> recTup (a, b) <* popNS
         recKw = undefined
@@ -87,6 +103,8 @@ pushNS :: Name -> Desugar ()
 pushNS name = do
   modify $ \s -> s { dsNameSpace = name : dsNameSpace s
                    , dsNamesInUse = S.singleton name : dsNamesInUse s}
+
+popNS :: Desugar ()
 popNS = modify $ \s -> s { dsNameSpace = tail $ dsNameSpace s
                          , dsNamesInUse = tail $ dsNamesInUse s}
 
@@ -94,39 +112,70 @@ popNS = modify $ \s -> s { dsNameSpace = tail $ dsNameSpace s
 -- which determines if it should run (essentially, matching on the
 -- constructor type of the expression) and a transforming function
 -- which takes that expression and returns its desugared version.
-dsAfter, dsLambdaDot, dsDot, dsLambdas, dsPrefixLine :: Desugarer Expr
-dsAfter = (test, ds) where
+dsAfterBefore, dsLambdaDot, dsDot, dsLambdas, dsPrefixLine :: Desugarer Expr
+dsAfterBefore = (test, ds) where
   test (After _ _) = True
+  test (Before _ _) = True
   test _ = False
   ds (e `After` Block es) = do
     es' <- mapM rec es
     e' <- rec e
-    return $ Block $ es' ++ [e']
+    return $ Block $ es' <> [e']
   ds (e1 `After` e2) = do
     e1' <- rec e1
     e2' <- rec e2
     return $ Block [e2', e1']
+  ds (e `Before` Block es) = do
+    var <- unusedVar "_var"
+    e' <- rec e
+    es' <- mapM rec es
+    return $ Block $ Define var e':es' <> [Var var]
+  ds (e1 `Before` e2) = do
+    var <- unusedVar "_var"
+    e1' <- rec e1
+    e2' <- rec e2
+    return $ Block [Define var e1', e2', Var var]
   rec = traverse (test, ds)
 
 dsLambdaDot = (test, ds) where
   test (LambdaDot _) = True
+  test (Apply _ _) = True
   test _ = False
   ds (LambdaDot e) = do
-    name <- unusedVar
-    Lambda (Var name) <$> rec e
+    name <- unusedVar "_arg"
+    Lambda (Var name) . Dot (Var name) <$> rec e
+  ds e@(Apply _ _) = do
+    name <- unusedVar "_arg"
+    let (exprs, root) = getApplies e
+    exprs' <- mapM rec exprs
+    case root of
+      LambdaDot expr -> do
+        expr' <- rec expr
+        let body = foldl Apply (Dot (Var name) expr') exprs'
+        return $ Lambda (Var name) body
+      expr -> foldl Apply <$> rec expr <*> pure exprs'
   rec = traverse (test, ds)
+  -- | getApplies "unwinds" a series of applies into a list of
+  -- expressions that are on the right side, paired with the
+  -- root-level expression. So for example `foo bar baz` which
+  -- is `Apply (Apply foo bar) baz` would become `([baz, bar], foo)`.
+  getApplies :: Expr -> ([Expr], Expr)
+  getApplies expr = go [] expr where
+    go exprs (Apply a b) = go (b:exprs) a
+    go exprs root = (exprs, root)
 
 
 dsDot = (test, ds) where
   test (Dot _ _) = True
   test _ = False
-  ds (Dot a b) = return (Apply b a)
+  ds (Dot a b) = Apply <$> rec b <*> rec a
+  rec = traverse (test, ds)
 
 dsLambdas = (test, ds) where
   test (Lambdas _) = True
   test _ = False
   ds (Lambdas argsBodies) = do
-    name <- unusedVar
+    name <- unusedVar "_arg"
     Lambda (Var name) <$> rec (Case (Var name) argsBodies)
   rec = traverse (test, ds)
 
@@ -160,16 +209,16 @@ addUsedName name = do
   modify $ \s -> s {dsNamesInUse = S.insert name top : rest}
   return name
 
-unusedVar :: Desugar Name
-unusedVar = loop Nothing where
-  toName Nothing = "_arg"
-  toName (Just num) = "_arg" <> render num
+unusedVar :: Name -> Desugar Name
+unusedVar start = loop Nothing where
+  toName Nothing = start
+  toName (Just num) = start <> render num
   loop :: Maybe Int -> Desugar Name
   loop n = let name = toName n in
     isNameInUse (toName n) >>= \case
       True -> loop . Just $ case n of
         Nothing -> 0
-        Just n -> n + 1
+        Just n' -> n' + 1
       False -> addUsedName name
 
 isNameInUse :: Name -> Desugar Bool
@@ -181,38 +230,55 @@ isNameInUse name = do
           True -> return True
           False -> loop ns
 
+defaultEnv :: DesugarerEnv
 defaultEnv = DesugarerEnv {
     dsNameSpace = mempty
   , dsConstructors = mempty
   , dsNamesInUse = mempty
   }
 
-desugarers = [dsAfter, dsLambdaDot, dsPrefixLine, dsLambdas, dsDot]
+desugarers :: [Desugarer Expr]
+desugarers = [ dsAfterBefore
+             , dsLambdaDot
+             , dsPrefixLine
+             , dsLambdas
+             , dsDot]
 
+desugar :: Expr -> Desugar Expr
 desugar expr = go desugarers expr where
   go [] e = return e
   go (d:ds) e = traverse d e >>= go ds
 
-log = lift . putStrLn
+log :: Text -> Desugar ()
+log = lift . lift . putStrLn . unpack
+log' :: [Text] -> Desugar ()
 log' = log . mconcat
 
 runDesugarWith :: DesugarerEnv -> Expr -> (Either ErrorList Expr, DesugarerEnv)
 runDesugarWith state e =
   unsafePerformIO $ runStateT (runErrorT (desugar e)) state
 
+runDesugarWith' :: Desugarer Expr -> DesugarerEnv -> Expr -> (Either ErrorList Expr, DesugarerEnv)
 runDesugarWith' ds state e =
   unsafePerformIO $ runStateT (runErrorT (traverse ds e)) state
 
 runDesugar :: Expr -> Either ErrorList Expr
 runDesugar = fst . runDesugarWith defaultEnv
 
+runDesugar' :: Desugarer Expr -> Expr -> Either ErrorList Expr
 runDesugar' ds expr = fst $ runDesugarWith' ds defaultEnv expr
 
 desugarIt :: String -> Either ErrorList Expr
 desugarIt input = case grab input of
-  Left err -> error $ show err
-  Right exprs -> runDesugar (Block exprs)
+  Left err -> error $ P.show err
+  Right exprs -> runDesugar (Block exprs) >>= \case
+    Block [Block exprs'] -> return $ Block exprs'
+    result -> return result
 
-desugarIt' ds input = case grab input of
-  Left err -> error $ show err
-  Right exprs -> runDesugar' ds (Block exprs)
+
+desugarIt' :: (Desugarer Expr, String) -> Either ErrorList Expr
+desugarIt' (ds, input) = case grab input of
+  Left err -> error $ P.show err
+  Right exprs -> runDesugar' ds (Block exprs) >>= \case
+    Block [Block exprs'] -> return $ Block exprs'
+    result -> return result

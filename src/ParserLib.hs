@@ -3,16 +3,22 @@
 module ParserLib (indent, dedent, same, parse, Parser(..), IndentState(..),
                ignoreOn, ignoreOff, toIgnore, ignoring) where
 
+import Prelude (IO, Eq(..), Ord(..), Bool(..),
+                Double, String, Maybe(..), Int, Monad(..),
+                ($), (.), floor, map, Functor(..), mapM,
+                (+), (-), elem, Either(..), length, unwords)
+
+import qualified Prelude as P
 import Common
 import Text.Parsec hiding (parse)
 import Control.Monad.Identity
 
 -- These are for testing only and not exported
-data Expression = Id String deriving (Show)
+data Expression = Id String deriving (P.Show)
 type Block = [Statement]
 data Statement = Expr Expression
                | While Expression Block
-               deriving (Show)
+               deriving (P.Show)
 
 data IndentState = IndentState { currentLevel :: Int
                                , stepAmount :: Maybe Int
@@ -26,7 +32,7 @@ lexeme p = p <* many (oneOf " \t")
 sstring :: String -> Parser String
 sstring = lexeme . string
 
-schar :: Char -> Parser Char
+schar :: P.Char -> Parser P.Char
 schar = lexeme . char
 
 getLevel = currentLevel <$> getState
@@ -47,11 +53,11 @@ indent = newline >> go where
         Nothing -> setLevel nspaces >> setStepAmount step
         Just step' -> if step == step' then setLevel nspaces
                       else unexpected $ unwords [
-                          "Wrong indentation step: was recorded as", show step'
-                        , "but found an indentation of", show step]
+                          "Wrong indentation step: was recorded as", P.show step'
+                        , "but found an indentation of", P.show step]
       False -> unexpected $ unwords ["Not an indent: looked for more than"
-                                    , show level, "spaces, but found"
-                                    , show nspaces]
+                                    , P.show level, "spaces, but found"
+                                    , P.show nspaces]
 dedent = eof <|> (newline >> go) where
   go = lookAhead $ do
     nspaces <- length <$> (many $ char ' ')
@@ -59,8 +65,8 @@ dedent = eof <|> (newline >> go) where
     case nspaces < level of
       True -> setLevel nspaces
       False -> unexpected $ unwords ["Not a dedent: looked for less than"
-                                    , show level, "spaces, but found"
-                                    , show nspaces]
+                                    , P.show level, "spaces, but found"
+                                    , P.show nspaces]
 
 same = (many emptyLine >> eof) <|> (newline >> go) where
   go = try $ do
@@ -69,8 +75,8 @@ same = (many emptyLine >> eof) <|> (newline >> go) where
     case nspaces == level of
       True -> return ()
       False -> unexpected $ unwords ["Not the same indentation:"
-                                    , "looked for", show level
-                                    , "spaces, but found", show nspaces]
+                                    , "looked for", P.show level
+                                    , "spaces, but found", P.show nspaces]
 
 block :: Parser Block
 block = indent *> statements <* dedent
