@@ -4,6 +4,7 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE NoMonomorphismRestriction #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE RecordWildCards #-}
 module TypeChecker ( Typable(..), Typing, TypeTable, TypingState(..)
                    , runTyping, runTypingWith, defaultTypingState
                    , typeIt, unifyIt, runTypeChecker, testInstantiate
@@ -15,12 +16,15 @@ import Prelude (IO, Eq(..), Ord(..), Bool(..),
                 (+), (-), elem, Either(..), Char, last,
                 otherwise, (=<<), Read(..), error, foldl,
                 foldr, foldr1, all, reverse, any, zip, succ,
-                head, length, flip, fst, span, snd)
+                head, length, flip, fst, span, snd,
+                undefined)
 import System.IO.Unsafe
 import Control.Monad.Error.Class
 import qualified Data.Map as M
 import qualified Data.Set as S
 import qualified Data.Text as T
+import qualified Prelude as P
+import Data.List (nub)
 
 import Common
 import AST
@@ -55,6 +59,7 @@ instance Typable Expr where
     Dot a b -> typeOfDot typeOf a b
     If c t f -> typeOfIf c t f
     While c e -> typeOfWhile c e
+    ObjDec dec -> handleObjDec dec >> only unitT
     Literal (ArrayLiteral arr) -> do
       (ts, subs) <- typeOfList typeOf arr
       case ts of
@@ -290,10 +295,10 @@ lookup :: Name -> Typing (Maybe Polytype)
 lookup name = do
   ns <- get <!> nameSpace
   loop ns
-  where loop [] = lookup1 name
-        loop (n:ns) = lookup1 (render $ name:n:ns) >>= \case
+  where loop (NameSpace []) = lookup1 name
+        loop (NameSpace (n:ns)) = lookup1 (render $ NameSpace $ name:n:ns) >>= \case
           Just typ -> return (Just typ)
-          Nothing -> loop ns
+          Nothing -> loop $ NameSpace ns
 
 lookupAndInstantiate :: Name -> Typing Type
 lookupAndInstantiate name = lookupAndError name >>= instantiate
@@ -458,6 +463,64 @@ testInstantiate :: Polytype -> Either ErrorList Type
 testInstantiate p = case fst $ runTypeChecker $ instantiate p of
   Left err -> Left $ ErrorList [render err]
   Right type_ -> Right type_
+
+handleObjDec :: ObjectDec -> Typing ()
+handleObjDec (ObjectDec { objName=name, objVars=vars
+                        , objConstrs=constrs, objAttrs=attrs}) = do
+  -- Make sure type's name is unique.
+  whenM (objNameExists name) alreadyExists
+  -- Make sure var list has no duplicates
+  unless (nub vars == vars) notUnique
+  let kind = foldr step (TVar "*") vars
+  attribs <- getAttribs attrs
+  let fullType = foldl TApply (TConst name) (map TVar vars)
+  forM_ constrs $ handleConstructor vars fullType
+  registerObject name kind
+  where
+    step _ = TFunction (TVar "*")
+    notUnique = throwErrorC ["Duplicate type variable in list: ", render vars]
+    alreadyExists = throwErrorC [ "Object named ", name, " has already been "
+                                , "declared in scope"]
+
+objNameExists :: Name -> Typing Bool
+objNameExists name = do
+  fName <- fullName name
+  M.member fName . knownTypes <$> get
+
+-- TODO
+getAttribs :: [Expr] -> Typing [(Name, Either Expr Type)]
+getAttribs exprs = forM exprs $ \case
+  Define name expr -> return (name, Left expr)
+  Typed (Var name) type_ -> return (name, Right type_)
+  expr -> throwErrorC ["Illegal attribute declaration: ", render expr]
+
+registerObject :: Name -> Kind -> Typing ()
+registerObject name kind = do
+  fName <- fullName name
+  cTypes <- get <!> knownTypes
+  modify $ \s -> s {knownTypes = M.insert name kind cTypes}
+
+-- Need to fix this
+handleConstructor :: [Name] -> Type -> ConstructorDec -> Typing ()
+handleConstructor vars finalType dec = do
+  let (name, args) = (constrName dec, constrArgs dec)
+  types <- getTypes args
+  let type_ = foldr TFunction finalType types
+  store name =<< generalize type_
+  where getTypes args = forM args $ \case
+          Typed (Var _) type_ -> return type_
+          Var name -> return $ TVar name
+          Constructor name -> return $ TConst name
+          expr -> throwErrorC ["Illegal constructor argument: ", render expr]
+        notInArgs name = throwErrorC ["Unknown type variable '", name, "'"]
+        check type_ = case type_ of
+          TVar name | name `elem` vars -> return type_
+                    | otherwise -> notInArgs name
+          TConst _ -> return type_ -- TODO look this up
+          TFunction a b -> TFunction <$> check a <*> check b
+          TApply a b -> TApply <$> check a <*> check b
+          TTuple ts kw | kw == mempty -> tTuple <$> mapM check ts
+          _ -> error $ "Check not implemented: " <> P.show type_
 
 -- NOTE: using unsafePerformIO for testing purposes only. This will
 -- all be pure code in the end.

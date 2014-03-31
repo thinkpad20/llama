@@ -28,12 +28,7 @@ data Type = TVar       !Name
 type TypeMap = M.Map Type Type
 type TypeTable = M.Map Name Type
 
-data Mod = Mut
-         | Ref
-         | Pure
-         | Local
-         | Lazy
-         deriving (Show, Eq, Ord)
+data Mod = Mut | Ref | Pure | Local | Lazy deriving (Show, Eq, Ord)
 
 -- | A polytype represents a type with zero or more type variables bound in
 -- its scope. For example, Polytype ["a"] (TApply (TConst "Foo") TVar "a") is
@@ -55,21 +50,36 @@ instance Monoid PurityType where
 class Typable a where
   typeOf :: TypeOf a
 
+type Kind = Type
+
 type TypeOf a = a -> Typing (Type, Subs)
-type NameSpace = [Name]
+type TypeRecord = (Kind, [(Name, Type)])
+newtype NameSpace = NameSpace [Name] deriving Show
 data TypingState = TypingState { aliases :: M.Map Name Type
-                               , nameSpace :: [Name]
+                               , nameSpace :: NameSpace
                                , typeEnv :: TypeEnv
                                , purityEnv :: PurityEnv
+                               , knownTypes :: M.Map Name Kind
                                , freshName :: Name } deriving (Show)
 type Typing = ErrorT ErrorList (StateT TypingState IO)
 
+instance Monoid NameSpace where
+  mempty = NameSpace mempty
+  (NameSpace ns) `mappend` (NameSpace ns') = NameSpace (ns <> ns')
+
+(+:) :: Name -> NameSpace -> NameSpace
+name +: (NameSpace ns) = NameSpace (name : ns)
+
+nsTail :: NameSpace -> NameSpace
+nsTail (NameSpace ns) = NameSpace (tail ns)
+
 defaultTypingState :: TypingState
 defaultTypingState = TypingState { aliases = mempty
-                                 , nameSpace = []
+                                 , nameSpace = mempty
                                  , typeEnv = builtIns
                                  , purityEnv = builtInPurities
-                                 , freshName = "a0"}
+                                 , freshName = "a0"
+                                 , knownTypes = mempty}
 
 instance Render TypingState where
   render state =
@@ -82,7 +92,7 @@ instance Render [M.Map Name Type] where
   render mps = line $ "[" <> (T.intercalate ", " $ map render mps) <> "]"
 
 instance Render NameSpace where
-  render = T.intercalate "/" . reverse
+  render (NameSpace ns) = T.intercalate "/" $ reverse ns
 
 class Types t where
   -- Get the free type variables out of the type.
@@ -320,14 +330,20 @@ log' = mconcat ~> log
 
 lift2 = lift . lift
 
-hideLogs = True
-
 fullName :: Name -> Typing T.Text
-fullName name = get <!> nameSpace <!> (name:) <!> render
+fullName name = do
+  (NameSpace ns) <- get <!> nameSpace
+  return $ render (NameSpace $ name:ns)
 
 
 pushNameSpace :: Name -> Typing ()
-pushNameSpace name = modify $ \s -> s { nameSpace = name : nameSpace s }
+pushNameSpace name = do
+  ns <- get <!> nameSpace
+  modify $ \s -> s { nameSpace = name +: ns }
 
 popNameSpace :: Typing ()
-popNameSpace = modify $ \s -> s { nameSpace = tail $ nameSpace s }
+popNameSpace = do
+  ns <- get <!> nameSpace
+  modify $ \s -> s { nameSpace = nsTail ns }
+
+hideLogs = True

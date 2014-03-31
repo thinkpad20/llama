@@ -4,6 +4,7 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE NoMonomorphismRestriction #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE RecordWildCards #-}
 module Desugar where
 
 import Prelude (IO, Show(..), Eq(..), Ord(..), Bool(..),
@@ -15,38 +16,35 @@ import qualified Data.Map as M
 import qualified Data.Set as S
 import qualified Prelude as P
 import System.IO.Unsafe
+import Data.List (partition)
 
 import Common
 import AST
 import TypeLib hiding (log, log')
 import Parser
-import Data.Text hiding (tail, foldl)
+import Data.Text hiding (tail, foldl, partition)
 
-type Desugarer a = (a -> Bool, a -> Desugar a)
+type Desugarer a = (Name, a -> Bool, a -> Desugar a)
 
 instance Show (Desugarer a) where
-  show _ = "some desugarer"
+  show (n, _, _) = "Desugarer '" <> unpack n <> "'"
 instance Render (Desugarer a) where
-  render _ = "some desugarer"
-
-dsAppend :: Desugarer a -> Desugarer a -> Desugarer a
-(test1, t1) `dsAppend` (test2, t2) = (test, trans) where
-  test e = test1 e || test2 e
-  trans expr = if test1 expr then t1 expr else t2 expr
+  render (n, _, _) = "Desugarer '" <> n <> "'"
 
 data DesugarerEnv = DesugarerEnv {
-    dsNameSpace :: [Name]
+    dsNameSpace :: NameSpace
   , dsConstructors :: M.Map Name Type
   , dsNamesInUse :: [S.Set Name]
+  , dsObjDecs :: M.Map Name ObjectDec
   }
 
 type Desugar = ErrorT ErrorList (StateT DesugarerEnv IO)
 
 doTest :: Desugarer Expr -> Expr -> Bool
-doTest (t, _) e = t e
+doTest (_, t, _) e = t e
 
 doTransform :: Desugarer Expr -> Expr -> Desugar Expr
-doTransform (_, t) e = t e
+doTransform (_, _, t) e = t e
 
 traverse :: Desugarer Expr -> Expr -> Desugar Expr
 traverse ds e | doTest ds e = doTransform ds e
@@ -81,7 +79,7 @@ traverse ds e | doTest ds e = doTransform ds e
   Break expr -> Break <$> rec expr
   After e1 e2 -> After <$> rec e1 <*> rec e2
   Before e1 e2 -> Before <$> rec e1 <*> rec e2
-  --ObjDec ObjectDec
+  ObjDec od -> ObjDec <$> recOd od
   Modified m expr -> Modified m <$> rec expr
   LambdaDot e' -> LambdaDot <$> recNS "%l" e'
   Prefix name e' -> Prefix name <$> rec e'
@@ -91,6 +89,18 @@ traverse ds e | doTest ds e = doTransform ds e
         recTup (a,b) = (,) <$> rec a <*> rec b
         recTupNS n (a, b) = pushNS n *> recTup (a, b) <* popNS
         recKw = undefined
+        recMaybe Nothing = return Nothing
+        recMaybe (Just e) = Just <$> rec e
+        recCr cr@(ConstructorDec { constrArgs=args, constrExtends=extends
+                                 , constrLogic=logic }) = do
+          args' <- mapM rec args
+          extends' <- recMaybe extends
+          logic' <- recMaybe logic
+          return cr {constrArgs=args', constrExtends=extends', constrLogic=logic'}
+        recOd od@(ObjectDec {objConstrs=constrs, objAttrs=attrs}) = do
+          constrs' <- mapM recCr constrs
+          attrs' <- mapM rec attrs
+          return $ od {objConstrs=constrs', objAttrs=attrs'}
 
 {-
 TODO: we're repeating steps unnecessarily here. We should really treat it more
@@ -101,11 +111,11 @@ sit down and take a critical look at what's the most efficient way to do this!
 
 pushNS :: Name -> Desugar ()
 pushNS name = do
-  modify $ \s -> s { dsNameSpace = name : dsNameSpace s
+  modify $ \s -> s { dsNameSpace = name +: dsNameSpace s
                    , dsNamesInUse = S.singleton name : dsNamesInUse s}
 
 popNS :: Desugar ()
-popNS = modify $ \s -> s { dsNameSpace = tail $ dsNameSpace s
+popNS = modify $ \s -> s { dsNameSpace = nsTail $ dsNameSpace s
                          , dsNamesInUse = tail $ dsNamesInUse s}
 
 -- | We have a series of desugarers. Each of which has a test
@@ -113,7 +123,7 @@ popNS = modify $ \s -> s { dsNameSpace = tail $ dsNameSpace s
 -- constructor type of the expression) and a transforming function
 -- which takes that expression and returns its desugared version.
 dsAfterBefore, dsLambdaDot, dsDot, dsLambdas, dsPrefixLine :: Desugarer Expr
-dsAfterBefore = (test, ds) where
+dsAfterBefore = ("Before/After", test, ds) where
   test (After _ _) = True
   test (Before _ _) = True
   test _ = False
@@ -135,9 +145,9 @@ dsAfterBefore = (test, ds) where
     e1' <- rec e1
     e2' <- rec e2
     return $ Block [Define var e1', e2', Var var]
-  rec = traverse (test, ds)
+  rec = traverse ("Before/After", test, ds)
 
-dsLambdaDot = (test, ds) where
+dsLambdaDot = ("LambdaDot", test, ds) where
   test (LambdaDot _) = True
   test (Apply _ _) = True
   test _ = False
@@ -154,7 +164,7 @@ dsLambdaDot = (test, ds) where
         let body = foldl Apply (Dot (Var name) expr') exprs'
         return $ Lambda (Var name) body
       expr -> foldl Apply <$> rec expr <*> pure exprs'
-  rec = traverse (test, ds)
+  rec = traverse ("LambdaDot", test, ds)
   -- | getApplies "unwinds" a series of applies into a list of
   -- expressions that are on the right side, paired with the
   -- root-level expression. So for example `foo bar baz` which
@@ -165,21 +175,21 @@ dsLambdaDot = (test, ds) where
     go exprs root = (exprs, root)
 
 
-dsDot = (test, ds) where
+dsDot = ("Dot", test, ds) where
   test (Dot _ _) = True
   test _ = False
   ds (Dot a b) = Apply <$> rec b <*> rec a
-  rec = traverse (test, ds)
+  rec = traverse ("Dot", test, ds)
 
-dsLambdas = (test, ds) where
+dsLambdas = ("Lambdas", test, ds) where
   test (Lambdas _) = True
   test _ = False
   ds (Lambdas argsBodies) = do
     name <- unusedVar "_arg"
     Lambda (Var name) <$> rec (Case (Var name) argsBodies)
-  rec = traverse (test, ds)
+  rec = traverse ("Lambdas", test, ds)
 
-dsPrefixLine = (test, ds) where
+dsPrefixLine = ("Prefix line", test, ds) where
   test (Block _) = True
   test _ = False
   ds (Block blk) = Block <$> first blk
@@ -193,7 +203,26 @@ dsPrefixLine = (test, ds) where
     go (binary op newE newE' : rest)
   go (e:rest) = doRest e rest
   doRest e rest = (:) <$> rec e <*> go rest
-  rec = traverse (test, ds)
+  rec = traverse ("Prefix line", test, ds)
+
+dsObject = ("Object", test, ds) where
+  test _ = True
+  isObj (ObjDec _) = True
+  isObj _ = False
+  ds :: Expr -> Desugar Expr
+  ds (Block blk) = do
+    let (objs, rest) = partition isObj blk
+    forM objs $ \(ObjDec od) -> addObjDec od
+    return (Block rest)
+  ds (ObjDec od) = addObjDec od >> return (Block [])
+  ds e = return e
+
+addObjDec :: ObjectDec -> Desugar ()
+addObjDec od = do
+  (NameSpace ns) <- get <!> dsNameSpace
+  let fName = render (NameSpace $ (objName od):ns)
+  objDecs <- get <!> dsObjDecs
+  modify $ \s -> s {dsObjDecs = M.insert fName od objDecs}
 
 -- | TODO: we should probably be able to retroactively change a name;
 -- for example if we introduce the name `_arg` and then a *later* scope
@@ -235,6 +264,7 @@ defaultEnv = DesugarerEnv {
     dsNameSpace = mempty
   , dsConstructors = mempty
   , dsNamesInUse = mempty
+  , dsObjDecs = mempty
   }
 
 desugarers :: [Desugarer Expr]
@@ -274,7 +304,6 @@ desugarIt input = case grab input of
   Right exprs -> runDesugar (Block exprs) >>= \case
     Block [Block exprs'] -> return $ Block exprs'
     result -> return result
-
 
 desugarIt' :: (Desugarer Expr, String) -> Either ErrorList Expr
 desugarIt' (ds, input) = case grab input of

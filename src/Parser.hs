@@ -122,7 +122,7 @@ pObjectDec = do
     , objAttrs = attrs
     }
 
-getConstrs = do
+getConstrs = fmap (\c -> ([c], mempty)) pConstructorDec <|> do
   schar '{'
   constrs <- pConstructorDec `sepBy1` schar ';'
   attrs <- option [] $ do

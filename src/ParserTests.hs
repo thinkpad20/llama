@@ -339,11 +339,21 @@ assignmentTests = TestGroup "Assignments"
 
 objectTests = TestGroup "Object declarations" [
     test1 "can declare a basic object" "object Foo = {Foo}" obj
+  , test1 "can declare a basic object without braces" "object Foo = Foo" obj
   , test1 "can declare an object with multiple constructors"
           "object Foo = {Foo; Bar}" (obj {objConstrs = [fooCr, barCr]})
   , test1 "can declare constructors with args"
           "object Foo = {Foo bar}"
           (obj {objConstrs = [fooCr {constrArgs = [bar]}]})
+  , test1 "can declare a basic object without braces with arguments"
+          "object Foo = Foo (foo: Num) (bar: Str)"
+          (obj {objConstrs = [fooCr {constrArgs = [Typed foo numT
+                                                 , Typed bar strT]}]})
+  , test1 "can declare a polymorphic object without braces with arguments"
+          "object Foo a = Foo (foo: Num) (bar: a)"
+          (obj {objConstrs = [fooCr {constrArgs = [Typed foo numT
+                                                 , Typed bar (TVar "a")]}]
+               , objVars = ["a"]})
   , test1 "can declare multiple constructors with args"
           "object Foo = {Foo bar; Bar foo}"
           (obj {objConstrs = [ fooCr {constrArgs = [bar]}
