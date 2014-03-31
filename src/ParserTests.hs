@@ -1,5 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
-module ParserTests (doTests) where
+module ParserTests (allTests, main) where
 
 import qualified Data.Map as M
 import qualified Data.Text as T
@@ -51,6 +51,7 @@ expressionTests = TestGroup "Expressions"
   , TestGroup "variables" [
       test "basic variable" "foo" foo
     , test "variable with underscores" "foo_bar" (Var "foo_bar")
+    , test "variable starting with underscores" "_foo" (Var "_foo")
     , test "variable with dashes" "foo-bar" (Var "foo-bar")
     , ShouldError "ends with a dash" "foo-"
     , test "variable with primes" "foo'bar" (Var "foo'bar")
@@ -327,6 +328,8 @@ functionTests = TestGroup "Functions"
 assignmentTests = TestGroup "Assignments"
   [
     Test "can make definitions" "foo = bar" [Define "foo" bar]
+  , Test "can make definitions with underscores"
+         "_foo = bar" [Define "_foo" bar]
   , Test "can make assignments" "foo := bar" [Assign foo bar]
   , Test "can make complex definitions" "foo = bar + baz"
          [Define "foo" $ bar `plus` baz]
@@ -336,11 +339,21 @@ assignmentTests = TestGroup "Assignments"
 
 objectTests = TestGroup "Object declarations" [
     test1 "can declare a basic object" "object Foo = {Foo}" obj
+  , test1 "can declare a basic object without braces" "object Foo = Foo" obj
   , test1 "can declare an object with multiple constructors"
           "object Foo = {Foo; Bar}" (obj {objConstrs = [fooCr, barCr]})
   , test1 "can declare constructors with args"
           "object Foo = {Foo bar}"
           (obj {objConstrs = [fooCr {constrArgs = [bar]}]})
+  , test1 "can declare a basic object without braces with arguments"
+          "object Foo = Foo (foo: Num) (bar: Str)"
+          (obj {objConstrs = [fooCr {constrArgs = [Typed foo numT
+                                                 , Typed bar strT]}]})
+  , test1 "can declare a polymorphic object without braces with arguments"
+          "object Foo a = Foo (foo: Num) (bar: a)"
+          (obj {objConstrs = [fooCr {constrArgs = [Typed foo numT
+                                                 , Typed bar (TVar "a")]}]
+               , objVars = ["a"]})
   , test1 "can declare multiple constructors with args"
           "object Foo = {Foo bar; Bar foo}"
           (obj {objConstrs = [ fooCr {constrArgs = [bar]}
@@ -588,5 +601,21 @@ doTests = runTests grab [ expressionTests
                         , rassocTests
                         , objectTests
                         ]
+
+allTests = [run grab [ expressionTests
+                     , assignmentTests
+                     , arrayTests
+                     , blockTests
+                     , whileTests
+                     , forTests
+                     , typingTests
+                     , functionTests
+                     , ifTests
+                     , caseTests
+                     , flowTests
+                     , rassocTests
+                     , objectTests
+                     ]
+            ]
 
 main = doTests

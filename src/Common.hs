@@ -4,6 +4,7 @@
 {-# LANGUAGE TypeSynonymInstances #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE LambdaCase #-}
 module Common ( (!), (<!>), (<$>), (<$), (<*), (*>), (<*>), pure
               , get, modify, put, lift, forM_, forM, when, Monoid(..)
               , (<>), StateT(..), State, ErrorT(..), indentBy, Name
@@ -11,9 +12,11 @@ module Common ( (!), (<!>), (<$>), (<$), (<*), (*>), (<*>), pure
               , trim, line, throwError, catchError, (~>), Render(..)
               , isInt, ErrorList(..), throwError1, throwErrorC, addError
               , addError', forever, isSpace, catMaybes, sortWith, each
-              , unless, mconcatMapM)
+              , unless, mconcatMapM, show, whenM, unlessM)
               where
 
+import Prelude hiding (show)
+import qualified Prelude as P
 import Control.Monad
 import Control.Monad.State
 import Control.Monad.Error
@@ -35,14 +38,14 @@ instance Error ErrorList where
 instance Render ErrorList
 
 instance Show ErrorList where
-  show (ErrorList msgs) = show msgs
+  show (ErrorList msgs) = P.show msgs
   --show (ErrorList msgs) = msgs ! concatMap ((<> "\n") . indentBy 4 . trim) ! line
 
 type Name = T.Text
 
 class Show a => Render a where
   render :: a -> T.Text
-  render = show ~> T.pack
+  render = P.show ~> T.pack
   renderIO :: a -> IO T.Text
   renderIO = return . render
 
@@ -53,7 +56,7 @@ instance (Render a, Render b) => Render (a, b) where
   render (a, b) = "(" <> render a <> "," <> render b <> ")"
 
 instance Render String where
-  render = show ~> T.pack
+  render = P.show ~> T.pack
 
 instance Render a => Render [a] where
   render as = "[" <> T.intercalate ", " (map render as) <> "]"
@@ -113,3 +116,14 @@ each = flip map
 
 mconcatMapM :: (Monad f, Functor f, Monoid t) => (a -> f t) -> [a] -> f t
 mconcatMapM f list = mconcat <$> mapM f list
+
+show s = T.pack $ P.show s
+
+whenM, unlessM :: Monad m => m Bool -> m () -> m ()
+whenM test act = test >>= \case
+  True -> act
+  False -> return ()
+
+unlessM test act = test >>= \case
+  True -> return ()
+  False -> act

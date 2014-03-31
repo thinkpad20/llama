@@ -1,5 +1,5 @@
 {-# LANGUAGE OverloadedStrings, NoMonomorphismRestriction #-}
-module TypeCheckerTests (main) where
+module TypeCheckerTests (allTests) where
 
 import qualified Data.Map as M
 import qualified Data.Text as T
@@ -27,8 +27,6 @@ functionTests = TestGroup "functions" [
     Test "lambdas" "x => x" (a ==> a)
   , Test "lambdas with type" "x: Str => x" (strT ==> strT)
   , Test "lambdas 3" "x: Str => y: Num => y" (strT ==> numT ==> numT)
-  , Test "unary op" "foo (x: Bool) = !x; foo" (boolT ==> boolT)
-  , Test "unary op 2" "foo (x: Num) = x !; foo" (numT ==> numT)
   , Test "lambda with tuple" "x: (Str, Str) => x"
          (tTuple [strT, strT] ==> tTuple [strT, strT])
   , Test "lambda with tuple 2" "(x: Str, y: Num) => (y, x)"
@@ -55,6 +53,8 @@ functionTests = TestGroup "functions" [
          (numT ==> numT)
   , Test "recursive function, non-terminating"
          "bottom x = bottom x" (a ==> b)
+  , ShouldError "mismatched rigid type variables"
+              "foo (f: a -> a) = (); bar (g: a -> b) = foo g"
   ]
 
 ifTests = TestGroup "conditionals" [
@@ -170,8 +170,6 @@ multifunctionTests = TestGroup "Multifunctions" [
                 "foo (n: Num) = n + 1; foo &= 1; foo"
   , ShouldError "ambiguous application"
       "foo (n: Num) = n + 1; foo (s: Str) &= s + \"hello\"; x => foo x"
-  , ShouldError "mismatched rigid type variables"
-                "foo (f: a->a) = (); bar (g: a->b) = foo g"
   ]
   where mf = TMultiFunc . M.fromList
 
@@ -304,8 +302,10 @@ group1 :: [Test String Type]
 group1 = [basicTests, functionTests, ifTests, binaryTests, vectorTests
          , multifunctionTests, caseTests, appTests]
 
-main = runAllTests [ run typeIt group1
-                   , run unifyIt [unifyTests1, unifyFailTests]
-                   , run testInstantiate [instantiationTests]
-                   , run generalizeE [generalizationTests]
-                   ]
+allTests = [ run typeIt group1
+           , run unifyIt [unifyTests1, unifyFailTests]
+           , run testInstantiate [instantiationTests]
+           , run generalizeE [generalizationTests]
+           ]
+
+main = runAllTests allTests

@@ -1,9 +1,13 @@
 {-# LANGUAGE LambdaCase, OverloadedStrings #-}
 module Tests (Test(..), runTests, run, runAllTests) where
 
+import Prelude (IO, Eq(..), Ord(..), Bool(..),
+                Double, String, Maybe(..), Int, Monad(..),
+                ($), (.), floor, map, Functor(..), mapM,
+                (+), (-), elem, Either(..))
 import Prelude hiding (show, putStr, putStrLn)
 import qualified Prelude as P
-import Common hiding (line, addError, Name)
+import Common hiding (line, addError, Name, show)
 import System.IO hiding (putStr, putStrLn)
 import System.Console.ANSI
 import qualified Data.Text as T
