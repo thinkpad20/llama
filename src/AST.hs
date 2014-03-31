@@ -48,6 +48,7 @@ data Expr = Var         !Name
           | Prefix      !Name !Expr
           | LambdaDot   !Expr
           | Continue
+          | WildCard
           deriving (P.Show, Eq)
 
 data Literal = ArrayLiteral ![Expr]

@@ -250,6 +250,7 @@ litTypeOf expr = case expr of
     -- signatures should be treated as constants).
     store name $ Polytype [] type_
     only type_
+  Typed WildCard type_ -> only type_
   Number _ -> only numT
   String _ -> only strT
   Tuple exprs kw -> typeOfTuple litTypeOf exprs kw
@@ -261,6 +262,7 @@ litTypeOf expr = case expr of
              | otherwise -> throwError1 "multiple types in array"
   Constructor name -> only =<< lookupAndInstantiate name
   Apply a b -> typeOfApply litTypeOf a b
+  WildCard -> only =<< unusedTypeVar
   _ -> throwErrorC [ "`", render expr, "' does not have a literal type. "
                    , "Please provide the type of the expression."]
 

@@ -83,6 +83,7 @@ traverse ds e | doTest ds e = doTransform ds e
   Modified m expr -> Modified m <$> rec expr
   LambdaDot e' -> LambdaDot <$> recNS "%l" e'
   Prefix name e' -> Prefix name <$> rec e'
+  WildCard -> return WildCard
   _ -> error $ "Expression not covered in desugarer: " <> P.show e
   where rec = traverse ds
         recNS n expr = pushNS n *> rec expr <* popNS

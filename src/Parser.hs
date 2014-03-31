@@ -77,7 +77,7 @@ pVar = do
   option var $ do
     typ <- exactSym ":" *> pType
     return $ Typed var typ
-  where getVar = choice $ map (fmap Var . try) ps
+  where getVar = choice (map (fmap Var . try) ps) <|> wildcard
         chk s = if s `elem` keySyms
           then unexpected $ "reserved symbol " <> P.show s
           else return s
@@ -92,6 +92,7 @@ pVar = do
         infix_ = do
           s <- char '_' *> (chk =<< many1 (oneOf symChars)) <* char '_'
           return $ T.pack s
+        wildcard = WildCard <$ schar '_'
         ps =  [ pIdent (lower <|> char '_')
               , infix_, prefix, postfix]
 
@@ -330,7 +331,8 @@ pTerm = lexeme $ choice [ Number <$> pDouble
                         , pConstructor
                         , pParens
                         , pLiteral
-                        , pCase ]
+                        , pCase
+                        ]
 
 pOpenBrace = schar'  '{' >> notFollowedBy (oneOf "!j")
 pCloseBrace = schar'  '}'
