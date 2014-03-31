@@ -266,8 +266,7 @@ builtIns =
                     , ("@call", p $ nnn <> sss <> vna)
                     , ("True", p boolT)
                     , ("False", p boolT)]
-  where tup a b c = tTuple [a, b] ==> c
-        tup' a b c = (tTuple [a, b], c)
+  where tup x y z = tTuple [x, y] ==> z
         nnn = tup numT numT numT
         sss = tup strT strT strT
         scs = tup strT charT strT
@@ -281,12 +280,8 @@ builtIns =
         pa = Polytype ["a"]
         pab = Polytype ["a", "b"]
         pabc = Polytype ["a", "b", "c"]
-        nnnOrSss = TMultiFunc $ M.fromList [ tup' strT strT strT
-                                           , tup' numT numT numT ]
         nnb = tup numT numT boolT
         ssb = tup strT strT boolT
-        nnbOrSsb = TMultiFunc $ M.fromList [ tup' strT strT boolT
-                                           , tup' numT numT boolT ]
         [a, b, c] = TVar <$> ["a", "b", "c"]
         (ab, bc, ac) = (a ==> b, b ==> c, a ==> c)
 
@@ -314,7 +309,7 @@ normalize t = evalState (go t) ("a", mempty) where
         Just n -> return (TVar n)
     TApply a b -> TApply <$> go a <*> go b
     TFunction a b -> TFunction <$> go a <*> go b
-    TTuple ts kw -> tTuple <$> mapM go ts
+    TTuple ts _ -> tTuple <$> mapM go ts
     TConst _ -> return type_
     TMultiFunc set -> do
       let pairs = M.toList set
@@ -326,9 +321,10 @@ normalize t = evalState (go t) ("a", mempty) where
 
 log :: T.Text -> Typing ()
 log s = if hideLogs then return () else lift2 $ putStrLn $ T.unpack s
-log' = mconcat ~> log
+  where lift2 = lift . lift
 
-lift2 = lift . lift
+log' :: [T.Text] -> Typing ()
+log' = mconcat ~> log
 
 fullName :: Name -> Typing T.Text
 fullName name = do
@@ -346,4 +342,5 @@ popNameSpace = do
   ns <- get <!> nameSpace
   modify $ \s -> s { nameSpace = nsTail ns }
 
+hideLogs :: Bool
 hideLogs = False

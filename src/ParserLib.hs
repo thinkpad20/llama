@@ -1,6 +1,6 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
-module ParserLib (indent, dedent, same, parse, Parser(..), IndentState(..),
+module ParserLib (indent, dedent, same, parse, Parser, ParserState(..),
                ignoreOn, ignoreOff, toIgnore, ignoring) where
 
 import Prelude (IO, Eq(..), Ord(..), Bool(..),
@@ -20,24 +20,19 @@ data Statement = Expr Expression
                | While Expression Block
                deriving (P.Show)
 
-data IndentState = IndentState { currentLevel :: Int
+data ParserState = ParserState { currentLevel :: Int
                                , stepAmount :: Maybe Int
                                , raNames :: [Name]
                                , ignoreLambda :: Bool }
-type Parser = ParsecT String IndentState Identity
+type Parser = ParsecT String ParserState Identity
 
-lexeme :: Parser a -> Parser a
-lexeme p = p <* many (oneOf " \t")
-
-sstring :: String -> Parser String
-sstring = lexeme . string
-
-schar :: P.Char -> Parser P.Char
-schar = lexeme . char
-
+getLevel :: Parser Int
 getLevel = currentLevel <$> getState
+setLevel :: Int -> Parser ()
 setLevel level = modifyState $ \s -> s { currentLevel = level }
+getStepAmount :: Parser (Maybe Int)
 getStepAmount = stepAmount <$> getState
+setStepAmount :: Int -> Parser ()
 setStepAmount step = modifyState $ \s -> s { stepAmount = Just step }
 
 indent, dedent, same, emptyLine :: Parser ()
@@ -78,25 +73,13 @@ same = (many emptyLine >> eof) <|> (newline >> go) where
                                     , "looked for", P.show level
                                     , "spaces, but found", P.show nspaces]
 
-block :: Parser Block
-block = indent *> statements <* dedent
-
-while :: Parser Statement
-while = While <$ sstring "while" <*> expression <*> block
-
-expression :: Parser Expression
-expression = Id <$> many1 letter
-
-statement :: Parser Statement
-statement = choice [while, Expr <$> expression]
-
-statements :: Parser [Statement]
-statements = statement `sepBy1` same
-
-defaultState = IndentState { currentLevel = 0
+defaultState :: ParserState
+defaultState = ParserState { currentLevel = 0
                            , stepAmount = Nothing
                            , raNames = ["print", "assert"]
                            , ignoreLambda = False }
+
+parse :: Parser a -> String -> Either ParseError a
 parse parser input = runIdentity $ runParserT parser defaultState "" input
 
 ignoreOn, ignoreOff :: Parser ()

@@ -101,22 +101,33 @@ line :: T.Text -> T.Text
 line s = if s `contains` '\n' then "\n" <> s else s
 
 --Returns if x is an int to n decimal places
-isIntTo :: (Integral a, RealFrac b) => b -> Int -> Bool
-isIntTo x n = round (10 ^ fromIntegral n * (x- fromIntegral (round x))) == 0
+isIntTo :: Double -> Int -> Bool
+isIntTo x n = do
+  let rounded = fromIntegral (round x :: Int)
+  (round (10 ^ n * (x - rounded)) :: Int) == 0
 
-isInt :: RealFrac b => b -> Bool
+isInt :: Double -> Bool
 isInt x = isIntTo x 10
 
+throwErrorC :: (Monad m) => [T.Text] -> ErrorT ErrorList m a
 throwErrorC = throwError1 . mconcat
+
+throwError1 :: (Monad m) => T.Text -> ErrorT ErrorList m a
 throwError1 = throwError . ErrorList . pure
+
+addError :: (Monad m) => T.Text -> ErrorList -> ErrorT ErrorList m a
 addError msg (ErrorList msgs) = throwError $ ErrorList $ msg : msgs
+
+addError' ::  (Monad m) => [T.Text] -> ErrorList -> ErrorT ErrorList m a
 addError' = addError . mconcat
 
+each :: [a] -> (a -> b) -> [b]
 each = flip map
 
 mconcatMapM :: (Monad f, Functor f, Monoid t) => (a -> f t) -> [a] -> f t
 mconcatMapM f list = mconcat <$> mapM f list
 
+show :: Show a => a -> T.Text
 show s = T.pack $ P.show s
 
 whenM, unlessM :: Monad m => m Bool -> m () -> m ()

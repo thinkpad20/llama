@@ -100,50 +100,50 @@ instance Render Expr where
     render' expr = case expr of
       Var name -> return name
       Constructor name -> return name
-      Number n | isInt n -> return $ show $ floor n
+      Number n | isInt n -> return $ show $ (floor n :: Int)
       Number n -> return $ show n
       Block blk -> block blk
       String s -> return $ show s
       Dot e1 e2 -> return $ render'' e1 <> "." <> render'' e2
       Apply (Var op) (Tuple [e1, e2] _)
         | isSymbol op -> return $ render'' e1 <> " " <> op <> " " <> render'' e2
-      Apply (Var op) e | isSymbol op -> return $ op <> " " <> render'' e
+      Apply (Var op) ex | isSymbol op -> return $ op <> " " <> render'' ex
       Apply e1 e2 -> return $ render'' e1 <> " " <> render'' e2
       Tuple es _ -> return $ "(" <> (intercalate "," . map render) es <> ")"
       Literal (ArrayLiteral exprs) -> return $ "[" <> intercalate ", " (map render exprs) <> "]"
       Literal (ArrayRange start stop) -> return $ "[" <> render start <> ".." <> render stop <> "]"
-      DeRef object index -> return $ render'' object <> "[:" <> render index <> "]"
-      Lambda arg expr -> return $ render'' arg <> " => " <> render expr
-      Case expr alts -> return $ "case " <> render expr <> " of " <> intercalate " | " rPairs
+      DeRef object idx -> return $ render'' object <> "[:" <> render idx <> "]"
+      Lambda arg ex -> return $ render'' arg <> " => " <> render ex
+      Case ex alts -> return $ "case " <> render ex <> " of " <> intercalate " | " rPairs
         where rPairs = map (\(p, r) -> render p <> " => " <> render r) alts
-      Typed expr typ -> return $ render'' expr <> ": " <> render typ
+      Typed ex typ -> return $ render'' ex <> ": " <> render typ
       If c t f -> do
-        if' <- line $ "if " <> render c
-        else' <- line "else"
+        if' <- mkLine $ "if " <> render c
+        else' <- mkLine "else"
         t' <- render' t
         f' <- render' f
         join [if', t', else', f']
       If' c t -> do
-        if' <- line $ "if " <> render c
+        if' <- mkLine $ "if " <> render c
         t' <- render' t
         join [if', t']
       While ex blk -> do
-        while <- line $ "while " <> render ex
+        while <- mkLine $ "while " <> render ex
         blk' <- render' blk
         join [while, blk']
-      For pat expr blk -> do
-        for <- line $ "for " <> render pat <> " in " <> render expr
+      For pat ex blk -> do
+        for <- mkLine $ "for " <> render pat <> " in " <> render ex
         blk' <- render' blk
         join [for, blk']
-      Define name expr -> line $ name <> " = " <> render expr
-      Extend name expr -> line $ name <> " &= " <> render expr
-      Assign e1 block -> line $ render e1 <> " := " <> render block
-      Break e -> line $ "break " <> render e
-      Throw e -> line $ "throw " <> render e
-      Return e -> line $ "return " <> render e
-      TypeDef name typ -> line $ "typedef " <> name <> " = " <> render typ
+      Define name ex -> mkLine $ name <> " = " <> render ex
+      Extend name ex -> mkLine $ name <> " &= " <> render ex
+      Assign e1 e2 -> mkLine $ render e1 <> " := " <> render e2
+      Break ex -> mkLine $ "break " <> render ex
+      Throw ex -> mkLine $ "throw " <> render ex
+      Return ex -> mkLine $ "return " <> render ex
+      TypeDef name typ -> mkLine $ "typedef " <> name <> " = " <> render typ
       _ -> return $ show expr
-    line str = get >>= \i -> return $ replicate i " " <> str
+    mkLine str = get >>= \i -> return $ replicate i " " <> str
     join = return . intercalate "\n"
     block blk = up *> fmap (intercalate "; ") (mapM render' blk) <* down
     (up, down) = (modify (+2), modify (\n -> n - 2))
