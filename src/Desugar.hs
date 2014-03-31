@@ -205,25 +205,6 @@ dsPrefixLine = ("Prefix line", test, ds) where
   doRest e rest = (:) <$> rec e <*> go rest
   rec = traverse ("Prefix line", test, ds)
 
-dsObject = ("Object", test, ds) where
-  test _ = True
-  isObj (ObjDec _) = True
-  isObj _ = False
-  ds :: Expr -> Desugar Expr
-  ds (Block blk) = do
-    let (objs, rest) = partition isObj blk
-    forM objs $ \(ObjDec od) -> addObjDec od
-    return (Block rest)
-  ds (ObjDec od) = addObjDec od >> return (Block [])
-  ds e = return e
-
-addObjDec :: ObjectDec -> Desugar ()
-addObjDec od = do
-  (NameSpace ns) <- get <!> dsNameSpace
-  let fName = render (NameSpace $ (objName od):ns)
-  objDecs <- get <!> dsObjDecs
-  modify $ \s -> s {dsObjDecs = M.insert fName od objDecs}
-
 -- | TODO: we should probably be able to retroactively change a name;
 -- for example if we introduce the name `_arg` and then a *later* scope
 -- introduces that name, we should be able to go back and remap `_arg`.

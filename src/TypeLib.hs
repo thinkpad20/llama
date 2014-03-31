@@ -346,4 +346,4 @@ popNameSpace = do
   ns <- get <!> nameSpace
   modify $ \s -> s { nameSpace = nsTail ns }
 
-hideLogs = True
+hideLogs = False

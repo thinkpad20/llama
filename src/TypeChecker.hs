@@ -30,6 +30,7 @@ import Common
 import AST
 import TypeLib
 import Parser (grab, grabT)
+import Desugar (desugarIt)
 
 addTypeAlias :: Name -> Type -> Typing ()
 addTypeAlias name typ =
@@ -185,11 +186,16 @@ typeOfWhile cond expr = do
 -- function to apply as an argument to typeOfApply
 typeOfApply :: TypeOf Expr -> Expr -> Expr -> Typing (Type, Subs)
 typeOfApply f func arg = do
+  log' ["typing ", render func, " applied to ", render arg]
   (argT, subs1) <- f arg
+  log' ["typing arg got type ", render argT, " subs ", render subs1]
   applyToEnv subs1
   (funcT, subs2) <- f func
+  log' ["typing func got type ", render funcT, " subs ", render subs2]
+  applyToEnv subs2
   retT <- unusedTypeVar
   subs3 <- unify (funcT, argT ==> retT) `catchError` uniError
+  log' ["unifying ", render funcT, " with ", render (argT ==> retT), " got subs ", render subs3]
   return (retT, mconcat [subs1, subs2, subs3])
   where uniError = addError' ["When attempting to apply `", render func
                              , " to argument ", render arg]
@@ -220,7 +226,7 @@ instance Typable Block where
         [expr] -> typeOf expr
         (Return expr):_ -> typeOf expr
         expr:block' -> do
-          log' ["starting"]
+          log' ["doing ", render expr]
           (_, subs) <- typeOf expr
           applyToEnv subs
           log' ["got these subs: ", render subs]
@@ -310,8 +316,8 @@ lookupAndError name = lookup name >>= \case
 
 unify :: (Type, Type) -> Typing Subs
 unify types = log' ["unifying ", render types] >> case types of
-  (TVar name, typ) -> bind name typ
-  (typ, TVar name) -> bind name typ
+  (TVar name, typ) -> log "case 1" >> bind name typ
+  (typ, TVar name) -> log "case 2" >> bind name typ
   (TConst n, TConst n') | n == n' -> return mempty
   (TTuple ts kw, TTuple ts' kw') -> unifyTuple (ts, kw) (ts', kw')
   (TTuple ts kw, typ) -> unifyTuple (ts, kw) ([typ], mempty)
@@ -541,7 +547,7 @@ runTypeChecker typing =
   unsafePerformIO $ runStateT (runErrorT typing) defaultTypingState
 
 typeIt :: String -> Either ErrorList Type
-typeIt input = case grab input of
+typeIt input = case desugarIt input of
   Left err -> Left $ ErrorList ["Parse error:\n" <> show err]
   Right block -> fst $ runTyping block
 
