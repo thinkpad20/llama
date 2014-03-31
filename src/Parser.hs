@@ -349,10 +349,13 @@ pBlock :: Parser Expr
 pBlock =  choice [ pOpenBrace *> pExpressionsNoWS <* pCloseBrace
                  , (keyword "do" <|> return "") >> pExpression ]
 
-pWhile, pFor :: Parser Expr
-pWhile = While <$ keyword "while" <*> pExpr <*> pBlock
-pFor = For <$ keyword "for" <*> pExpr <* keyword "in"
-           <*> pExpr <*> pBlock
+pFor, pForIn :: Parser Expr
+pFor = try go where
+  go = For <$ keyword "for" <*> pExpr <* schar ';'
+                            <*> pExpr <* schar ';'
+                            <*> pExpr <*> pBlock
+pForIn = ForIn <$ keyword "for" <*> pExpr <* keyword "in"
+               <*> pExpr <*> pBlock
 
 pExprOrBlock :: Parser Expr
 pExprOrBlock = choice [ try pBlock, pIf, pExpr ]
@@ -434,7 +437,7 @@ pExpression :: Parser Expr
 pExpression = do
   many pAnnotation
   expr <- lexeme $ choice $ [ pDefine, pExtend, pAssign
-                            , pWhile, pFor, pReturn, pExpr ]
+                            , pFor, pForIn, pReturn, pExpr ]
   option expr $ do
     kw <- keyword "after" <|> keyword "before"
     rest <- pBlock

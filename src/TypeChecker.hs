@@ -59,7 +59,7 @@ instance Typable Expr where
     Apply func arg -> typeOfApply typeOf func arg
     Dot a b -> typeOfDot typeOf a b
     If c t f -> typeOfIf c t f
-    While c e -> typeOfWhile c e
+    For init cond step expr -> typeOfFor init cond step expr
     ObjDec dec -> handleObjDec dec >> only unitT
     Literal (ArrayLiteral arr) -> do
       (ts, subs) <- typeOfList typeOf arr
@@ -173,8 +173,8 @@ typeOfIf cond true false = do
   let subs = mconcat [subs2, falseS, trueS, subs1, condS]
   return (trueT, subs)
 
-typeOfWhile :: Expr -> Expr -> Typing (Type, Subs)
-typeOfWhile cond expr = do
+typeOfFor :: Expr -> Expr -> Expr -> Expr -> Typing (Type, Subs)
+typeOfFor init cond step expr = do
   (condT, condS) <- typeOf cond
   subs <- unify (condT, boolT)
   applyToEnv (subs <> condS)

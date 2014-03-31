@@ -33,7 +33,8 @@ data Expr = Var         !Name
           | If          !Expr !Expr !Expr
           | If'         !Expr !Expr
           | While       !Expr !Expr
-          | For         !Expr !Expr !Expr
+          | For         !Expr !Expr !Expr !Expr
+          | ForIn       !Expr !Expr !Expr
           | Define      !Name !Expr
           | Extend      !Name !Expr
           | Assign      !Expr !Expr
@@ -131,7 +132,7 @@ instance Render Expr where
         while <- mkLine $ "while " <> render ex
         blk' <- render' blk
         join [while, blk']
-      For pat ex blk -> do
+      ForIn pat ex blk -> do
         for <- mkLine $ "for " <> render pat <> " in " <> render ex
         blk' <- render' blk
         join [for, blk']

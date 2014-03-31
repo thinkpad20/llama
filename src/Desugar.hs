@@ -16,13 +16,12 @@ import qualified Data.Map as M
 import qualified Data.Set as S
 import qualified Prelude as P
 import System.IO.Unsafe
-import Data.List (partition)
 
 import Common
 import AST
 import TypeLib hiding (log, log')
 import Parser
-import Data.Text hiding (tail, foldl, partition)
+import Data.Text hiding (tail, foldl, partition, init)
 
 type Desugarer a = (Name, a -> Bool, a -> Desugar a)
 
@@ -69,8 +68,9 @@ traverse ds e | doTest ds e = doTransform ds e
   Typed expr t -> rec expr >>= \e' -> return $ Typed e' t
   If c t f -> If <$> recNS "%if" c <*> recNS "%if" t <*> recNS "%if" f
   If' c t -> If' <$> recNS "%if" c <*> recNS "%if" t
-  While c b -> While <$> recNS "%w" c <*> recNS "%w" b
-  For e1 e2 e3 -> For <$> recNS "%f" e1 <*> recNS "%f" e2 <*> recNS "%f" e3
+  For i c s ex -> For <$> recNS "%f" i <*> recNS "%f" c
+                      <*> recNS "%f" s <*> recNS "%f" ex
+  ForIn e1 e2 e3 -> ForIn <$> recNS "%f" e1 <*> recNS "%f" e2 <*> recNS "%f" e3
   Define name expr -> Define name <$> recNS name expr
   Extend name expr -> Extend name <$> recNS name expr
   Assign e1 e2 -> Assign <$> rec e1 <*> rec e2
@@ -91,7 +91,7 @@ traverse ds e | doTest ds e = doTransform ds e
         recTupNS n (a, b) = pushNS n *> recTup (a, b) <* popNS
         recKw = undefined
         recMaybe Nothing = return Nothing
-        recMaybe (Just e) = Just <$> rec e
+        recMaybe (Just ex) = Just <$> rec ex
         recCr cr@(ConstructorDec { constrArgs=args, constrExtends=extends
                                  , constrLogic=logic }) = do
           args' <- mapM rec args
@@ -102,13 +102,6 @@ traverse ds e | doTest ds e = doTransform ds e
           constrs' <- mapM recCr constrs
           attrs' <- mapM rec attrs
           return $ od {objConstrs=constrs', objAttrs=attrs'}
-
-{-
-TODO: we're repeating steps unnecessarily here. We should really treat it more
-as a pipes-and-filters model, with each desugarer being applied once over the
-entire AST, rather than testing at each step. Or really, what we need to do is
-sit down and take a critical look at what's the most efficient way to do this!
--}
 
 pushNS :: Name -> Desugar ()
 pushNS name = do
@@ -123,7 +116,7 @@ popNS = modify $ \s -> s { dsNameSpace = nsTail $ dsNameSpace s
 -- which determines if it should run (essentially, matching on the
 -- constructor type of the expression) and a transforming function
 -- which takes that expression and returns its desugared version.
-dsAfterBefore, dsLambdaDot, dsDot, dsLambdas, dsPrefixLine :: Desugarer Expr
+dsAfterBefore, dsLambdaDot, dsDot, dsLambdas, dsPrefixLine, dsForIn :: Desugarer Expr
 dsAfterBefore = ("Before/After", test, ds) where
   test (After _ _) = True
   test (Before _ _) = True
@@ -186,8 +179,8 @@ dsLambdas = ("Lambdas", test, ds) where
   test (Lambdas _) = True
   test _ = False
   ds (Lambdas argsBodies) = do
-    name <- unusedVar "_arg"
-    Lambda (Var name) <$> rec (Case (Var name) argsBodies)
+    var <- Var <$> unusedVar "_arg"
+    Lambda var <$> rec (Case var argsBodies)
   rec = traverse ("Lambdas", test, ds)
 
 dsPrefixLine = ("Prefix line", test, ds) where
@@ -205,6 +198,36 @@ dsPrefixLine = ("Prefix line", test, ds) where
   go (e:rest) = doRest e rest
   doRest e rest = (:) <$> rec e <*> go rest
   rec = traverse ("Prefix line", test, ds)
+
+dsForIn = ("For in", test, ds) where
+  test (ForIn _ _ _) = True
+  test _ = False
+  ds (ForIn (Var name) cont expr) = do
+    iterName <- unusedVar "_iter"
+    let iter = Var iterName
+    -- _iter = mut cont.iter
+    let init = Define iterName $ Modified Mut (Dot cont (Var "iter"))
+    -- name = _iter.get
+    let stmt = Define name (Dot iter (Var "get"))
+    -- _iter.valid?
+    let cond = Dot iter (Var "valid?")
+    -- _iter.forward!
+    let step = Dot iter (Var "forward!")
+    -- append
+    let blk = case expr of Block b -> Block $ stmt:b
+                           _ -> Block $ [stmt, expr]
+    return $ For init cond step blk
+
+{-
+
+for foo in bar { baz; qux }
+
+for mut _iter = bar.iter; _iter.valid; _iter.forward!
+  foo = _iter.get
+  baz;
+  qux;
+
+-}
 
 -- | TODO: we should probably be able to retroactively change a name;
 -- for example if we introduce the name `_arg` and then a *later* scope
@@ -254,7 +277,8 @@ desugarers = [ dsAfterBefore
              , dsLambdaDot
              , dsPrefixLine
              , dsLambdas
-             , dsDot]
+             , dsDot
+             , dsForIn]
 
 desugar :: Expr -> Desugar Expr
 desugar expr = go desugarers expr where
