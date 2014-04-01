@@ -30,50 +30,44 @@ import Data.List (nub)
 import Common
 import AST
 import TypeLib
-import Parser (grab, grabT)
+import Parser (grabT)
 import Desugar (desugarIt)
 
-addTypeAlias :: Name -> Type -> Typing ()
-addTypeAlias name typ =
-  modify $ \s -> s { aliases = M.insert name typ (aliases s)}
+typeOf :: Expr -> Typing (Type, Subs)
+typeOf e = case e of
+  Block blk -> pushNameSpace "%b" *> typeOfBlock blk <* popNameSpace
+  Number _ -> only numT
+  String _ -> only strT
+  Constructor name -> only =<< lookupAndInstantiate name
+  Var name -> only =<< lookupAndInstantiate name
+  Case expr argsBodies -> typeOfCase expr argsBodies
+  Lambda param body -> do
+    pushNameSpace "%l"
+    (paramT, paramS) <- litTypeOf param
+    applyToEnv paramS
+    (bodyT, bodyS) <- typeOf body
+    popNameSpace
+    return (paramT ==> bodyT, paramS <> bodyS)
+  Define name expr -> typeOfDefinition name expr
+  Extend name expr -> typeOfExtension name expr
+  Apply func arg -> typeOfApply typeOf func arg
+  Dot a b -> typeOfDot typeOf a b
+  If c t f -> typeOfIf c t f
+  For init cond step expr -> typeOfFor init cond step expr
+  ObjDec dec -> handleObjDec dec >> only unitT
+  Literal (ArrayLiteral arr) -> do
+    (ts, subs) <- typeOfList typeOf arr
+    case ts of
+      [] -> do newT <- unusedTypeVar
+               return (arrayOf newT, subs)
+      t:ts -> if all (== t) ts
+              then return (arrayOf t, subs)
+              else throwError1 "Multiple types in array literal"
 
-applyToEnv :: Subs -> Typing ()
-applyToEnv subs = modify $ \s -> s {typeEnv = apply subs (typeEnv s)}
-
-instance Typable Expr where
-  typeOf e = case e of
-    Block blk -> pushNameSpace "%b" *> typeOf blk <* popNameSpace
-    Number _ -> only numT
-    String _ -> only strT
-    Constructor name -> only =<< lookupAndInstantiate name
-    Var name -> only =<< lookupAndInstantiate name
-    Case expr argsBodies -> typeOfCase expr argsBodies
-    Lambda param body -> do
-      pushNameSpace "%l"
-      (paramT, paramS) <- litTypeOf param
-      applyToEnv paramS
-      (bodyT, bodyS) <- typeOf body
-      popNameSpace
-      return (paramT ==> bodyT, paramS <> bodyS)
-    Define name expr -> typeOfDefinition name expr
-    Extend name expr -> typeOfExtension name expr
-    Apply func arg -> typeOfApply typeOf func arg
-    Dot a b -> typeOfDot typeOf a b
-    If c t f -> typeOfIf c t f
-    For init cond step expr -> typeOfFor init cond step expr
-    ObjDec dec -> handleObjDec dec >> only unitT
-    Literal (ArrayLiteral arr) -> do
-      (ts, subs) <- typeOfList typeOf arr
-      case ts of
-        [] -> do newT <- unusedTypeVar
-                 return (arrayOf newT, subs)
-        t:ts -> if all (== t) ts
-                then return (arrayOf t, subs)
-                else throwError1 "Multiple types in array literal"
-
-    Tuple exprs kw -> typeOfTuple typeOf exprs kw
-    expr -> throwErrorC ["Can't handle ", show expr, " or needs desugaring"]
-    where only t = return (t, mempty)
+  Tuple exprs kw -> typeOfTuple typeOf exprs kw
+  TypeDef name type_ -> addTypeAlias name type_ *> only unitT
+  expr -> throwErrorC ["Can't handle ", show expr, " or needs desugaring"]
+  where only t = return (t, mempty)
 
 typeOfTuple :: TypeOf Expr -> [Expr] -> Kwargs -> Typing (Type, Subs)
 typeOfTuple f exprs _ = do
@@ -101,7 +95,6 @@ typeOfDefinition name expr = lookup1 name >>= \case
     store name =<< generalize (apply subs3 nameT)
     return (nameT, subs3 <> subs2)
 
--- | TODO: DRY this up
 typeOfExtension :: Name -> Expr -> Typing (Type, Subs)
 typeOfExtension name expr = lookup1 name >>= \case
   Nothing -> throwErrorC [name, " is not defined in immediate scope"]
@@ -208,24 +201,27 @@ typeOfDot f a b = do
 getAttribute :: Type -> Name -> Typing (Maybe Type)
 getAttribute _ _ = return Nothing
 
-instance Typable Block where
-  -- Returns the type of the last statement. Operates in a new context.
-  typeOf block = do
-    log' ["typing the block `", render block, "'"]
-    go `catchError` err
-    where
-      err = addError' ["When typing the block `", render block, "'"]
-      go = case block of
-        [] -> only unitT -- shouldn't encounter this, but...
-        (Break expr):_ -> typeOf expr
-        [expr] -> typeOf expr
-        (Return expr):_ -> typeOf expr
-        expr:block' -> do
-          log' ["doing ", render expr]
-          (_, subs) <- typeOf expr
-          applyToEnv subs
-          log' ["got these subs: ", render subs]
-          typeOf block'
+addTypeAlias :: Name -> Type -> Typing ()
+addTypeAlias name typ =
+  modify $ \s -> s { aliases = M.insert name typ (aliases s)}
+
+applyToEnv :: Subs -> Typing ()
+applyToEnv subs = modify $ \s -> s {typeEnv = apply subs (typeEnv s)}
+
+-- | Returns the type of the last statement, or responds to control flow.
+typeOfBlock :: Block -> Typing (Type, Subs)
+typeOfBlock block = go `catchError` err
+  where
+    err = addError' ["When typing the block `", render block, "'"]
+    go = case block of
+      [] -> only unitT
+      [expr] -> typeOf expr
+      (Break expr):rest -> typeOf expr <* typeOfBlock rest
+      (Return expr):rest -> typeOf expr <* typeOfBlock rest
+      expr:rest -> do
+        (_, subs) <- typeOf expr
+        applyToEnv subs
+        typeOfBlock rest
 
 only :: Type -> Typing (Type, Subs)
 only t = return (t, mempty)
@@ -422,16 +418,8 @@ unifyMultiMtoF set from to = do
     rsubs :: [Subs] -> T.Text
     rsubs  = foldr (\s s' -> "`" <> render s <> "', or `" <> render s' <> "'") ""
 
--- | Takes a polytype and replaces any type variables in the type with unused
--- variables.
-instantiate :: Polytype -> Typing Type
-instantiate (Polytype names type_) = do
-  subs <- fromList <$> forM names (\name -> (,) name <$> unusedTypeVar)
-  return $ apply subs type_
-
-generalize :: Type -> Typing Polytype
-generalize typ = generalize' <$> fmap typeEnv get <*> pure typ
-
+-- | Finds all free type variables in the type, which are not found in the
+-- given environment, and creates a polytype listing those variables.
 generalize' :: TypeEnv -> Type -> Polytype
 generalize' env type_ =
   let vars = S.toList $ free type_ S.\\ free env
@@ -443,6 +431,17 @@ generalize' env type_ =
       subs = newName "a" vars
       newNames = map (snd ~> (\(TVar name) -> name)) subs
   in Polytype newNames $ apply (fromList subs) type_
+
+-- | Generalizes against the environment in the TypingState.
+generalize :: Type -> Typing Polytype
+generalize typ = generalize' <$> fmap typeEnv get <*> pure typ
+
+-- | Takes a polytype and replaces any type variables in the type with unused
+-- variables. Opposite of generalize.
+instantiate :: Polytype -> Typing Type
+instantiate (Polytype names type_) = do
+  subs <- fromList <$> forM names (\name -> (,) name <$> unusedTypeVar)
+  return $ apply subs type_
 
 -- | Follows the type aliases and returns the fully qualified type (as
 -- qualified as possible)
@@ -468,6 +467,9 @@ testInstantiate p = case fst $ runTypeChecker $ instantiate p of
   Left err -> Left $ ErrorList [render err]
   Right type_ -> Right type_
 
+-- | Takes an `object` declaration, adds the kind and attribute information for that
+-- object to the environment, as well as creating function signatures for its
+-- constructors.
 handleObjDec :: ObjectDec -> Typing ()
 handleObjDec (ObjectDec { objName=name, objVars=vars
                         , objConstrs=constrs, objAttrs=attrs}) = do

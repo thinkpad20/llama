@@ -240,7 +240,7 @@ pLiteral = Literal <$> choice [try array, list, try set, dict] where
                  (DictLiteral <$> commas rocket)
 
 pBinary :: Parser Expr
-pBinary = pBackwardApply where
+pBinary = pUserSym where
   -- | @pBinOp@ takes either @chainl1@ or @chainr1@ for left- or right-
   -- associativity. Takes the higher-precedence parser to try first.
   -- Finally, takes the operator string which if parsed will parse the
@@ -249,6 +249,7 @@ pBinary = pBackwardApply where
     getOp = op >>= \name -> return (\e1 e2 -> binary name e1 e2)
   fold first = foldl (pBinOp chainl1) first . map exactSym
   fold' first = foldl (pBinOp chainr1) first . map exactSym
+  pUserSym = pBinOp chainl1 pBackwardApply pSymbol
   pBackwardApply = pBinOp chainr1 pForwardApply (exactSym "$")
   pForwardApply = pBinOp chainl1 pLogical (exactSym "|>")
   pLogical = fold' pComp ["&&", "||"]
@@ -360,26 +361,29 @@ pForIn = ForIn <$ keyword "for" <*> pExpr <* keyword "in"
 pExprOrBlock :: Parser Expr
 pExprOrBlock = choice [ try pBlock, pIf, pExpr ]
 
+pPatternDef :: Parser Expr
+pPatternDef = try $ PatternDef <$> pExpr <* exactSym "=" <*> pExpr
+
 pDefine, pExtend, pAssign :: Parser Expr
-pDefine = choice $ map ($ ("=", Define)) [ pDefBinary, pDefFunction]
-pExtend = choice $ map ($ ("&=", Extend)) [ pDefBinary, pDefFunction]
+pDefine = pPatternDef
+pExtend = choice [ pExtendFunction, pExtendBinary]
 pAssign = try $ Assign <$> pExpr <* exactSym ":=" <*> pExprOrBlock
 
-pDefFunction :: (String, Name -> Expr -> Expr) -> Parser Expr
-pDefFunction (sym, f) = try $ do
+pExtendFunction :: Parser Expr
+pExtendFunction = try $ do
   name <- getVar <|> (schar '(' *> pSymbol <* schar ')')
   args <- many pTerm
-  body <- exactSym sym *> pBlock
-  return $ f name $ foldr Lambda body args
+  body <- exactSym "&=" *> pBlock
+  return $ Extend name $ foldr Lambda body args
   where getVar = pIdent (lower <|> char '_')
 
-pDefBinary :: (String, Name -> Expr -> Expr) -> Parser Expr
-pDefBinary (sym, f) = try $ do
+pExtendBinary :: Parser Expr
+pExtendBinary = try $ do
   arg1 <- pTerm
   op   <- pSymbol
   arg2 <- pTerm
-  body <- exactSym sym *> pBlock
-  return $ f op $ Lambda (tuple [arg1, arg2]) body
+  body <- exactSym "&=" *> pBlock
+  return $ Extend op $ Lambda (tuple [arg1, arg2]) body
 
 pModified :: Parser Expr
 pModified = Modified <$> pMod <*> pExpr

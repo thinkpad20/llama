@@ -273,7 +273,7 @@ functionTests = TestGroup "Functions"
            (eLambda foo (Lambda bar (plus foo bar)))
     , Test "should be able to be used in definitions"
            "foo = bar => bar + 1"
-           [Define "foo" (Lambda bar (plus bar one))]
+           [PatternDef foo (Lambda bar (plus bar one))]
     , Test "should be able to be used in assignments"
            "foo := bar: Baz => qux bar"
            [Assign foo (Lambda (Typed bar bazT) (Apply qux bar))]
@@ -295,29 +295,26 @@ functionTests = TestGroup "Functions"
   , TestGroup "Defined functions" [
       Test "should make a function definition"
            "foo(bar: Bar) = bar"
-           [Define "foo" $ Lambda (Typed bar barT) bar]
+           [PatternDef (Apply foo (Typed bar barT)) bar]
     , Test "should make a function definition with multiple args"
            "foo(bar: Bar) (baz: Baz) = bar + baz"
-           [Define "foo" $ Lambda (Typed bar barT)
-                         $ Lambda (Typed baz bazT)
-                         $ plus bar baz]
+           [PatternDef (Apply (Apply foo (Typed bar barT)) (Typed baz bazT))
+                       (plus bar baz)]
     , Test "should make a function definition with polymorphic args"
            "foo(bar: a) (baz: b) = bar baz"
-           [Define "foo" $ Lambda (Typed bar (TVar "a"))
-                         $ Lambda (Typed baz (TVar "b"))
-                         $ Apply bar baz]
+           [PatternDef (Apply (Apply foo (Typed bar $ TVar "a")) (Typed baz $ TVar "b"))
+                       (Apply bar baz)]
     , Test "should make a function definition with a symbol"
            "(bar: a) <*> (baz: b) = bar baz"
-           [Define "<*>" $ Lambda (tuple [ Typed bar (TVar "a")
-                                         , Typed baz (TVar "b")])
-                         $ Apply bar baz]
+           [PatternDef (binary "<*>" (Typed bar (TVar "a"))
+                                     (Typed baz (TVar "b"))) $ Apply bar baz]
     ]
   , TestGroup "LambdaDots" [
       Test "basic" ".foo" [LambdaDot foo]
     , Test "with other args" ".foo bar" [Apply (LambdaDot foo) bar]
-    , Test "in assignment" "foo = .bar" [Define "foo" $ LambdaDot bar]
+    , Test "in assignment" "foo = .bar" [PatternDef foo $ LambdaDot bar]
     , Test "in assignment with other exprs" "foo = .bar baz"
-           [Define "foo" $ Apply (LambdaDot bar) baz]
+           [PatternDef foo $ Apply (LambdaDot bar) baz]
   ]
   ]
   where tup1 = tuple [Typed foo fooT, Typed bar barT]
@@ -327,12 +324,12 @@ functionTests = TestGroup "Functions"
 
 assignmentTests = TestGroup "Assignments"
   [
-    Test "can make definitions" "foo = bar" [Define "foo" bar]
+    Test "can make definitions" "foo = bar" [PatternDef foo bar]
   , Test "can make definitions with underscores"
-         "_foo = bar" [Define "_foo" bar]
+         "_foo = bar" [PatternDef (Var "_foo") bar]
   , Test "can make assignments" "foo := bar" [Assign foo bar]
   , Test "can make complex definitions" "foo = bar + baz"
-         [Define "foo" $ bar `plus` baz]
+         [PatternDef foo $ bar `plus` baz]
   , Test "can make complex assignments" "foo bar := baz * qux foo"
          [Assign (Apply foo bar) $ baz `times` Apply qux foo]
   ]
@@ -396,8 +393,8 @@ objectTests = TestGroup "Object declarations" [
       obj = defObj { objName = "Foo", objConstrs = [fooCr]}
       fooCr = defConstr {constrName = "Foo"}
       barCr = defConstr {constrName = "Bar"}
-      expr1 = Define "baz" one
-      expr2 = Block [Define "qux" (Apply foo bar), print_ (String "hello")]
+      expr1 = PatternDef baz one
+      expr2 = Block [PatternDef qux (Apply foo bar), print_ (String "hello")]
       a = TVar "a"
 
 rassocTests = TestGroup "Right-associative functions"
@@ -495,7 +492,7 @@ ifTests = TestGroup "If statements"
   , Test "used in lambda" "n: Num => if n then 2 else 3"
     [Lambda (Typed (Var "n") numT) $ If (Var "n") two three]
   , Test "used in define" "foo (n: Num) = if n then 2 else 3"
-    [Define "foo" $ Lambda (Typed (Var "n") numT) $ If (Var "n") two three]
+    [PatternDef (Apply foo (Typed (Var "n") numT)) $ If (Var "n") two three]
   , Test "nested" "if True then 1 else if False then 2 else 3"
     [If true one (If false two three)]
   , Test "nested 2" "if True then if False then 1 else 2 else 3"
@@ -517,82 +514,54 @@ caseTests = TestGroup "Case statements"
          , Case one [(two, three)]]
   ]
 
-whileTests = TestGroup "While statements"
+forTests = TestGroup "For statements"
  [
     TestGroup "single statements" [
-      Test "while block via 'do'" "while foo do bar;"
-           [While foo bar]
-    , SkipTest "while block via 'do' with following expression"
-           "while foo do bar\nbaz"
-           [While foo bar, baz]
-    , Test "while block via 'do' with following expression, split by semicolon"
-           "while foo do bar; baz"
-           [While foo bar, baz]
-  ]
+      Test "for block via 'do'" "for foo; bar; baz do qux;"
+           [For foo bar baz qux]
+    , SkipTest "for block via 'do' with following expression"
+           "for foo; bar; baz do qux\nfoo"
+           [For foo bar baz qux, baz]
+    , Test "for block via 'do' with following expression, split by semicolon"
+           "for foo; bar; baz do qux; foo"
+           [For foo bar baz qux, foo]
+    ]
   , TestGroup "using curly braces" [
-      Test "basic" "while foo {2}"
-           [While foo two]
+      Test "basic" "for foo; bar; baz {2}"
+           [For foo bar baz two]
     , Test "multiple statements"
-           "while foo {2; 3}"
-           [While foo $ Block [two, three]]
+           "for foo; bar; baz {2; 3}"
+           [For foo bar baz $ Block [two, three]]
     , SkipTest "complex statements"
-           "while foo {bar 2; baz 3}"
-           [While foo $ Block [Apply bar two, Apply baz three]]
+           "for foo bar; baz; qux; {bar 2; baz 3}"
+           [For (Apply foo bar) baz qux $ Block [Apply bar two, Apply baz three]]
     , Test "followed by other statement, using semicolon"
-           "while foo { bar }; baz"
-           [While foo bar, baz]
-    , Test "nested while statements 1"
-           "while foo { while bar {3}}"
-           [ While foo (While bar three)]
-    , Test "nested while statements 2"
-           "while foo {2; while bar{ 3}; baz}; qux"
-           [While foo $ Block [two, While bar three, baz], qux]
-  ]
-  , SkipTestGroup "using whitespace" [
-      Test "basic" "while foo\n  2"
-           [While foo two]
-    , Test "multiple statements" "while foo\n  2\n  3"
-           [While foo $ Block [two, three]]
-    , Test "trailing newline" "while foo\n  2\n"
-           [While foo two]
-    , Test "binary condition" "while foo < 2\n  bar 3\n"
-           [While (lt foo two) $ Apply bar three]
-    , Test "followed by other statement"
-           "while foo\n  bar\nbaz"
-           [While foo bar, baz]
-    , Test "followed by two other statements"
-           "while foo\n  bar\nbaz\nqux"
-           [While foo bar, baz, qux]
-    , Test "nested while statements 1"
-           "while foo\n  while bar\n    3\n"
-           [ While foo $ While bar three]
-    , Test "nested while statements 2"
-           "while foo\n  2\n  while bar\n    3\n  baz"
-           [While foo $ Block [two, While bar three, baz]]
-    ]
-  , SkipTestGroup "using both" [
-         Test "followed by other statement"
-         "while foo { bar }\nbaz"
-         [While foo bar, baz]
-
+           "for foo; bar; baz { qux }; foo"
+           [For foo bar baz qux, foo]
+    , Test "nested for statements 1"
+           "for foo; bar; baz { for bar; baz; qux {3}}"
+           [ For foo bar baz (For bar baz qux three)]
+    , Test "nested for statements 2"
+           "for foo; bar; baz {2; for bar; baz; qux { 3}; baz}; qux"
+           [For foo bar baz $ Block [two, For bar baz qux three, baz], qux]
     ]
   ]
 
-forTests = TestGroup "For statements" tests where
+forInTests = TestGroup "For statements" tests where
   tests =
     [
-      Test "basic" "for foo in bar { baz }" [For foo bar baz]
-    , Test "basic one-line" "for foo in bar do baz" [For foo bar baz]
+      Test "basic" "for foo in bar { baz }" [ForIn foo bar baz]
+    , Test "basic one-line" "for foo in bar do baz" [ForIn foo bar baz]
     , Test "nested via one-line" "for foo in bar do for baz in qux do 1"
-      [For foo bar (For baz qux one)]
+      [ForIn foo bar (ForIn baz qux one)]
     ]
 
 doTests = runTests grab [ expressionTests
                         , assignmentTests
                         , arrayTests
                         , blockTests
-                        , whileTests
                         , forTests
+                        , forInTests
                         , typingTests
                         , functionTests
                         , ifTests
@@ -606,8 +575,8 @@ allTests = [run grab [ expressionTests
                      , assignmentTests
                      , arrayTests
                      , blockTests
-                     , whileTests
                      , forTests
+                     , forInTests
                      , typingTests
                      , functionTests
                      , ifTests

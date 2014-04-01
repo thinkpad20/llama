@@ -47,9 +47,6 @@ instance Monoid PurityType where
     (_, PTImpure) -> PTImpure
     (PTImpure, _) -> PTImpure
 
-class Typable a where
-  typeOf :: TypeOf a
-
 type Kind = Type
 
 type TypeOf a = a -> Typing (Type, Subs)

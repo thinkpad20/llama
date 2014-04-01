@@ -32,9 +32,9 @@ data Expr = Var         !Name
           | Typed       !Expr !Type
           | If          !Expr !Expr !Expr
           | If'         !Expr !Expr
-          | While       !Expr !Expr
           | For         !Expr !Expr !Expr !Expr
           | ForIn       !Expr !Expr !Expr
+          | PatternDef  !Expr !Expr -- e.g. `foo bar (baz: T) = qux`
           | Define      !Name !Expr
           | Extend      !Name !Expr
           | Assign      !Expr !Expr
@@ -48,6 +48,7 @@ data Expr = Var         !Name
           | TypeDef     !Name !Type
           | Prefix      !Name !Expr
           | LambdaDot   !Expr
+          | AssignOp    !Name !Expr !Expr
           | Continue
           | WildCard
           deriving (P.Show, Eq)
@@ -128,10 +129,11 @@ instance Render Expr where
         if' <- mkLine $ "if " <> render c
         t' <- render' t
         join [if', t']
-      While ex blk -> do
-        while <- mkLine $ "while " <> render ex
+      For start cond step blk -> do
+        for <- mkLine $ "for " <> render start <> "; "
+                       <> render cond <> "; " <> render step
         blk' <- render' blk
-        join [while, blk']
+        join [for, blk']
       ForIn pat ex blk -> do
         for <- mkLine $ "for " <> render pat <> " in " <> render ex
         blk' <- render' blk
