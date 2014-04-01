@@ -1,5 +1,6 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE PackageImports #-}
 module ParserLib (indent, dedent, same, parse, Parser, ParserState(..),
                ignoreOn, ignoreOff, toIgnore, ignoring) where
 
@@ -11,7 +12,7 @@ import Prelude (IO, Eq(..), Ord(..), Bool(..),
 import qualified Prelude as P
 import Common
 import Text.Parsec hiding (parse)
-import Control.Monad.Identity
+import "mtl" Control.Monad.Identity
 
 -- These are for testing only and not exported
 data Expression = Id String deriving (P.Show)

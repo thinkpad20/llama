@@ -5,6 +5,7 @@
 {-# LANGUAGE NoMonomorphismRestriction #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards #-}
+{-# LANGUAGE PackageImports #-}
 module TypeChecker ( Typable(..), Typing, TypeTable, TypingState(..)
                    , runTyping, runTypingWith, defaultTypingState
                    , typeIt, unifyIt, runTypeChecker, testInstantiate
@@ -19,7 +20,7 @@ import Prelude (IO, Eq(..), Ord(..), Bool(..),
                 head, length, flip, fst, span, snd,
                 undefined)
 import System.IO.Unsafe
-import Control.Monad.Error.Class
+import "mtl" Control.Monad.Error.Class
 import qualified Data.Map as M
 import qualified Data.Set as S
 import qualified Data.Text as T
@@ -186,17 +187,11 @@ typeOfFor init cond step expr = do
 -- function to apply as an argument to typeOfApply
 typeOfApply :: TypeOf Expr -> Expr -> Expr -> Typing (Type, Subs)
 typeOfApply f func arg = do
-  log' ["typing ", render func, " applied to ", render arg]
-  (argT, subs1) <- f arg
-  log' ["typing arg got type ", render argT, " subs ", render subs1]
-  applyToEnv subs1
-  (funcT, subs2) <- f func
-  log' ["typing func got type ", render funcT, " subs ", render subs2]
-  applyToEnv subs2
+  (argT, argS) <- f arg
+  (funcT, funcS) <- applyToEnv argS *> f func
   retT <- unusedTypeVar
-  subs3 <- unify (funcT, argT ==> retT) `catchError` uniError
-  log' ["unifying ", render funcT, " with ", render (argT ==> retT), " got subs ", render subs3]
-  return (retT, mconcat [subs1, subs2, subs3])
+  unifyS <- unify (apply funcS funcT, argT ==> retT) `catchError` uniError
+  return (retT, mconcat [argS, funcS, unifyS])
   where uniError = addError' ["When attempting to apply `", render func
                              , " to argument ", render arg]
 
@@ -318,8 +313,8 @@ lookupAndError name = lookup name >>= \case
 
 unify :: (Type, Type) -> Typing Subs
 unify types = log' ["unifying ", render types] >> case types of
-  (TVar name, typ) -> log "case 1" >> bind name typ
-  (typ, TVar name) -> log "case 2" >> bind name typ
+  (TVar name, typ) -> bind name typ
+  (typ, TVar name) -> bind name typ
   (TConst n, TConst n') | n == n' -> return mempty
   (TTuple ts kw, TTuple ts' kw') -> unifyTuple (ts, kw) (ts', kw')
   (TTuple ts kw, typ) -> unifyTuple (ts, kw) ([typ], mempty)
@@ -453,12 +448,13 @@ generalize' env type_ =
 -- qualified as possible)
 refine :: Type -> Typing Type
 refine typ = fst <$> runStateT (look typ) mempty where
+  look :: Type -> StateT (S.Set Name) Typing Type
   look typ' = case typ' of
     TConst _ -> return typ'
     TMod modi typ'' -> TMod modi <$> look typ''
     TVar name -> do
       seenNames <- get
-      if name `S.member` seenNames then throwError1 "Cycle in type aliases"
+      if name `S.member` seenNames then lift $ throwError1 "Cycle in type aliases"
       else do
         M.lookup name <$> (lift getAliases) >>= \case
           Nothing -> return typ

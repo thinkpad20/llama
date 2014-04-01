@@ -343,4 +343,4 @@ popNameSpace = do
   modify $ \s -> s { nameSpace = nsTail ns }
 
 hideLogs :: Bool
-hideLogs = False
+hideLogs = True
