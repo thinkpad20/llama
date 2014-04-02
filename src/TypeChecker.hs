@@ -6,9 +6,9 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE PackageImports #-}
-module TypeChecker ( Typable(..), Typing, TypeTable, TypingState(..)
+module TypeChecker ( Typing, TypeTable, TypingState(..)
                    , runTyping, runTypingWith, defaultTypingState
-                   , typeIt, unifyIt, runTypeChecker, testInstantiate
+                   , typeIt, unifyIt, runTypeChecker
                    , generalize') where
 
 import Prelude (IO, Eq(..), Ord(..), Bool(..),
@@ -462,11 +462,6 @@ refine typ = fst <$> runStateT (look typ) mempty where
     TApply a b -> TApply <$> look a <*> look b
     TTuple ts kw -> fmap (\ts' -> TTuple ts' kw) $ mapM look ts
 
-testInstantiate :: Polytype -> Either ErrorList Type
-testInstantiate p = case fst $ runTypeChecker $ instantiate p of
-  Left err -> Left $ ErrorList [render err]
-  Right type_ -> Right type_
-
 -- | Takes an `object` declaration, adds the kind and attribute information for that
 -- object to the environment, as well as creating function signatures for its
 -- constructors.
@@ -530,19 +525,19 @@ handleConstructor vars finalType dec = do
 
 -- NOTE: using unsafePerformIO for testing purposes only. This will
 -- all be pure code in the end.
-runTypingWith :: Typable a => TypingState -> a -> (Either ErrorList Type, TypingState)
+runTypingWith :: TypingState -> Expr -> (Either ErrorList Type, TypingState)
 runTypingWith state a = unsafePerformIO $ runStateT (runErrorT $ t a) state
   where t a = do (t, s) <- typeOf a
                  return $ normalize (apply s t)
 
-runTyping :: Typable a => a -> (Either ErrorList Type, TypingState)
+runTyping :: Expr -> (Either ErrorList Type, TypingState)
 runTyping = runTypingWith defaultTypingState
 
 runUnify :: Type -> Type -> (Either ErrorList Subs, TypingState)
 runUnify type1 type2 =
   unsafePerformIO $ runStateT (runErrorT $ unify (type1, type2)) defaultTypingState
 
-runTypeChecker :: Typing a => (Either ErrorList a, TypingState)
+runTypeChecker :: Typing Expr -> (Either ErrorList Expr, TypingState)
 runTypeChecker typing =
   unsafePerformIO $ runStateT (runErrorT typing) defaultTypingState
 

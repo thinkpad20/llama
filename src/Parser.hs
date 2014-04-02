@@ -362,7 +362,7 @@ pExprOrBlock :: Parser Expr
 pExprOrBlock = choice [ try pBlock, pIf, pExpr ]
 
 pPatternDef :: Parser Expr
-pPatternDef = try $ PatternDef <$> pExpr <* exactSym "=" <*> pExpr
+pPatternDef = try $ PatternDef <$> pExpr <* exactSym "=" <*> pBlock
 
 pDefine, pExtend, pAssign :: Parser Expr
 pDefine = pPatternDef

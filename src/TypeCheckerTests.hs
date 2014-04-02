@@ -74,9 +74,9 @@ ifTests = TestGroup "conditionals" [
                   "if True then 1 else if False then 2 else \"hello\""
     , ShouldError "non-bool condition" "if 1 then 2 else 3"
   ]
-  , TestGroup "while expressions" [
-    Test "basic" "while True do 1" (maybeT numT)
-  , Test "basic 2 lines" "while True {1; \"hello\"}" (maybeT strT)
+  , TestGroup "for expressions" [
+    Test "basic" "for 1; True; 3 do 1" (maybeT numT)
+  , Test "basic 2 lines" "for 1; False; 3 {1; \"hello\"}" (maybeT strT)
   ]
   ]
 
@@ -304,7 +304,7 @@ group1 = [basicTests, functionTests, ifTests, binaryTests, vectorTests
 
 allTests = [ run typeIt group1
            , run unifyIt [unifyTests1, unifyFailTests]
-           , run testInstantiate [instantiationTests]
+           --, run testInstantiate [instantiationTests]
            , run generalizeE [generalizationTests]
            ]
 

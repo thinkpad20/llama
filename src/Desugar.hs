@@ -5,6 +5,7 @@
 {-# LANGUAGE NoMonomorphismRestriction #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 module Desugar where
 
 import Prelude (IO, Show(..), Eq(..), Ord(..), Bool(..),
@@ -73,6 +74,7 @@ traverse ds e | doTest ds e = doTransform ds e
   ForIn e1 e2 e3 -> ForIn <$> recNS "%f" e1 <*> recNS "%f" e2 <*> recNS "%f" e3
   Define name expr -> Define name <$> recNS name expr
   Extend name expr -> Extend name <$> recNS name expr
+  PatternDef pat expr -> PatternDef <$> rec pat <*> rec expr
   Assign e1 e2 -> Assign <$> rec e1 <*> rec e2
   Return expr -> Return <$> rec expr
   Throw expr -> Throw <$> rec expr
@@ -116,7 +118,8 @@ popNS = modify $ \s -> s { dsNameSpace = nsTail $ dsNameSpace s
 -- which determines if it should run (essentially, matching on the
 -- constructor type of the expression) and a transforming function
 -- which takes that expression and returns its desugared version.
-dsAfterBefore, dsLambdaDot, dsDot, dsLambdas, dsPrefixLine, dsForIn :: Desugarer Expr
+dsAfterBefore, dsLambdaDot, dsDot, dsLambdas, dsPrefixLine, dsForIn,
+  dsPatternDef :: Desugarer Expr
 dsAfterBefore = ("Before/After", test, ds) where
   test (After _ _) = True
   test (Before _ _) = True
@@ -150,7 +153,7 @@ dsLambdaDot = ("LambdaDot", test, ds) where
     Lambda (Var name) . Dot (Var name) <$> rec e
   ds e@(Apply _ _) = do
     name <- unusedVar "_arg"
-    let (exprs, root) = getApplies e
+    let (exprs, root) = unApply e
     exprs' <- mapM rec exprs
     case root of
       LambdaDot expr -> do
@@ -159,15 +162,18 @@ dsLambdaDot = ("LambdaDot", test, ds) where
         return $ Lambda (Var name) body
       expr -> foldl Apply <$> rec expr <*> pure exprs'
   rec = traverse ("LambdaDot", test, ds)
-  -- | getApplies "unwinds" a series of applies into a list of
-  -- expressions that are on the right side, paired with the
-  -- root-level expression. So for example `foo bar baz` which
-  -- is `Apply (Apply foo bar) baz` would become `([baz, bar], foo)`.
-  getApplies :: Expr -> ([Expr], Expr)
-  getApplies expr = go [] expr where
-    go exprs (Apply a b) = go (b:exprs) a
-    go exprs root = (exprs, root)
 
+dsPatternDef = ("Patterned definition", test, ds) where
+  rec = traverse ("Patterned definition", test, ds)
+  test (PatternDef _ _) = True
+  test _ = False
+  ds :: Expr -> Desugar Expr
+  ds (PatternDef pat expr) = go (unApply pat) where
+    go :: ([Expr], Expr) -> Desugar Expr
+    go (exprs, Var name) = do
+      body :: Expr <- rec expr
+      return $ Define name (P.foldr Lambda body exprs)
+    go (_, _) = throwErrorC ["Invalid pattern: ", render expr]
 
 dsDot = ("Dot", test, ds) where
   test (Dot _ _) = True
@@ -229,6 +235,15 @@ for mut _iter = bar.iter; _iter.valid; _iter.forward!
 
 -}
 
+-- | @unApply@ "unwinds" a series of applies into a list of
+-- expressions that are on the right side, paired with the
+-- root-level expression. So for example `foo bar baz` which
+-- is `Apply (Apply foo bar) baz` would become `([baz, bar], foo)`.
+unApply :: Expr -> ([Expr], Expr)
+unApply expr = go [] expr where
+  go exprs (Apply a b) = go (b:exprs) a
+  go exprs root = (exprs, root)
+
 -- | TODO: we should probably be able to retroactively change a name;
 -- for example if we introduce the name `_arg` and then a *later* scope
 -- introduces that name, we should be able to go back and remap `_arg`.
@@ -278,7 +293,8 @@ desugarers = [ dsAfterBefore
              , dsPrefixLine
              , dsLambdas
              , dsDot
-             , dsForIn]
+             , dsForIn
+             , dsPatternDef]
 
 desugar :: Expr -> Desugar Expr
 desugar expr = go desugarers expr where
