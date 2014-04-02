@@ -223,6 +223,53 @@ pString' = do
     '"' -> return str
     c -> error $ "wtf is " <> [c]
 
+{-
+pInString :: Parser InString
+pInString = InString <$> do
+  first@(Plain s) <- Plain <$> (many $ noneOf "#\"")
+  choice [
+          try $ pShowExpr $ InterShow first,
+          try $ pLiteralExpr $ Interpolate first,
+          join first <$> (pure prepend <*> char '#' <*> pInString),
+          return first
+        ]
+  where
+    pShowExpr f = f <$> (sstring "#{" *> pExpr) <*> (char '}' *> pInString)
+    pLiteralExpr f = f <$> (sstring "#[" *> pExpr) <*> (char ']' *> pInString)
+    -- prepends a character onto an InString
+    prepend c (Plain s) = Plain (c : s)
+    prepend c (Interpolate s e s') = Interpolate (prepend c s) e s'
+    prepend c (InterShow s e s') = InterShow (prepend c s) e s'
+    -- joins a Plain instring onto another instring
+    join (Plain s) (Plain s') = Plain (s ++ s')
+    join is1 (InterShow s' e s'') = InterShow (join is1 s') e s''
+    join is1 (Interpolate s' e s'') = Interpolate (join is1 s') e s''
+
+pString, pString' :: Parser InString
+pString = char '"' >> pString'
+pString' = do
+  str <- fmap T.pack (anyChar `manyTill` (lookAhead $ oneOf "\\\"#"))
+  oneOf "\\\"#" >>= \case
+    '\\' -> anyChar >>= \case
+      'n'  -> escape '\n'
+      '\\' -> escape '\\'
+      't'  -> escape '\t'
+      'r'  -> escape '\r'
+      'b'  -> escape '\b'
+      '"'  -> escape '"'
+      '#'  -> escape '#'
+      c | c `elem` [' ', '\n', '\t'] -> consume
+      c -> unexpected $ "Unrecognized escape character `" <> [c] <> "'"
+      where escape c = do
+              rest <- pString'
+              return $ str <> T.singleton c <> rest
+            consume = spaces >> fmap (str <>) pString'
+    '"' -> return str
+    '#' -> anyChar >>= \case
+
+    c -> error $ "wtf is " <> [c]
+-}
+
 pLiteral :: Parser Expr
 pLiteral = Literal <$> choice [try array, list, try set, dict] where
   commas p = p `sepBy` schar ','

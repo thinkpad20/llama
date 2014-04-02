@@ -11,6 +11,7 @@ import Prelude (IO, Eq(..), Ord(..), Bool(..),
 import qualified Prelude as P
 import Data.Text hiding (map)
 import Data.Monoid
+import Data.String
 
 import Common hiding (intercalate)
 import TypeLib
@@ -19,6 +20,7 @@ type Kwargs = [(Name, Either Expr Type)]
 data Expr = Var         !Name
           | Number      !Double
           | String      !Text
+          | InString    !InString
           | Constructor !Name
           | Block       !Block
           | Dot         !Expr !Expr
@@ -95,6 +97,23 @@ defConstr = ConstructorDec {
   , constrExtends = Nothing
   , constrLogic = Nothing
   }
+
+data InString = Plain Text
+              | InterpShow InString Expr InString
+              | Interp InString Expr InString
+              deriving (P.Show, Eq)
+
+instance IsString InString where
+  fromString str = Plain $ pack str
+
+instance Monoid InString where
+  mempty = Plain mempty
+  is1 `mappend` is2 = case (is1, is2) of
+    (Plain s, Plain s') -> Plain (s <> s')
+    (s, InterpShow is e is') -> InterpShow (s <> is) e is'
+    (InterpShow is e is', s) -> InterpShow is e (is' <> s)
+    (s, Interp is e is') -> Interp (s <> is) e is'
+    (Interp is e is', s) -> Interp is e (is' <> s)
 
 instance Render Expr where
   render e = evalState (render' e) 0 where
