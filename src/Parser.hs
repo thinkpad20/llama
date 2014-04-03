@@ -204,11 +204,13 @@ pParens = schar '(' *> exprs <* schar ')'
           return (name, x)
         kwargs = kwarg `sepBy` schar ','
 
-pString, pString' :: Parser T.Text
-pString = char '"' >> pString'
-pString' = do
-  str <- fmap T.pack (anyChar `manyTill` (lookAhead $ oneOf "\\\""))
-  oneOf "\\\"" >>= \case
+pString :: Parser InString
+pString = oneOf "'\"" >>= pString'
+pString' :: Char -> Parser InString
+pString' start = do
+  str <- fmap T.pack (anyChar `manyTill` (lookAhead $ oneOf "\\\"'#"))
+  let escape c = (Plain (str <> T.singleton c) <>) <$> pString' start
+  oneOf "\\\"'#" >>= \case
     '\\' -> anyChar >>= \case
       'n'  -> escape '\n'
       '\\' -> escape '\\'
@@ -216,11 +218,16 @@ pString' = do
       'r'  -> escape '\r'
       'b'  -> escape '\b'
       '"'  -> escape '"'
-      c | c `elem` [' ', '\n', '\t'] -> consume
-      c -> unexpected $ "Unrecognized escape character `" <> [c] <> "'"
-      where escape c = pString' >>= \rest -> return $ str <> T.singleton c <> rest
-            consume = spaces >> pString' >>= \s -> return (str <> s)
-    '"' -> return str
+      '#'  -> escape '#'
+      c | c == start -> escape start
+        | c `elem` [' ', '\n', '\t'] -> consume
+        | otherwise -> unexpected $ "Unrecognized escape character `" <> [c] <> "'"
+      where consume = spaces >> (Plain str <>) <$> (pString' start)
+    '#' -> anyChar >>= \case
+      '{' -> InterpShow (Plain str) <$> pExprOrBlock <* char '}' <*> pString' start
+      '[' -> Interp (Plain str) <$> pExprOrBlock <* char ']' <*> pString' start
+    c | c == start -> return (Plain str)
+      | c `elem` "'\"" -> escape c
     c -> error $ "wtf is " <> [c]
 
 pLiteral :: Parser Expr
@@ -333,7 +340,7 @@ pCase = Case <$ keyword "case" <*> pExpr <* keyword "of" <*> alts
 
 pTerm :: Parser Expr
 pTerm = lexeme $ choice [ Number <$> pDouble
-                        , String <$> pString
+                        , InString <$> pString
                         , pLambdaDot
                         , pVar
                         , pConstructor
@@ -408,17 +415,14 @@ pIf = do
   keyword "if"
   cond <- pExpr
   true <- pThen
-  false <- pElse
-  return $ If cond true false
-
-pIfOrIf' :: Parser Expr
-pIfOrIf' = do
-  keyword "if"
-  cond <- pExpr
-  true <- pThen
   option (If' cond true) $ do
     false <- pElse
     return $ If cond true false
+
+pThen, pElse :: Parser Expr
+pThen = pBlock <|> do keyword "then" <|> return "then"
+                      pExpression
+pElse = keyword "else" *> pBlock
 
 pLambda :: Parser Expr
 pLambda = try $ do
@@ -427,12 +431,6 @@ pLambda = try $ do
     [(arg, body)] -> return $ Lambda arg body
     _ -> return $ Lambdas argsBodies
   where pArgBody = (,) <$> pTerm <* exactSym "=>" <*> pExprOrBlock
-
-
-pThen, pElse :: Parser Expr
-pThen = pBlock <|> do keyword "then" <|> return "then"
-                      pExpression
-pElse = keyword "else" *> pBlock
 
 pReturn :: Parser Expr
 pReturn = Return <$ keyword "return" <*> option unit pExpr
@@ -453,7 +451,7 @@ pExpr :: Parser Expr
 pExpr = lexeme $ choice [ pModified
                         , pLambda
                         , pRightAssociativeFunction
-                        , pIfOrIf' ]
+                        , pIf ]
 
 pTopLevel :: Parser Expr
 pTopLevel = choice [pPrefixSymbol, pExpression, pTypeDef, ObjDec <$> pObjectDec]

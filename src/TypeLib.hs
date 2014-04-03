@@ -248,21 +248,21 @@ infixr 4 ==>
 builtIns :: TypeEnv
 builtIns =
   TE $ M.fromList [ ("+", p $ mconcat [nnn, sss, css, scs, vvv, avv, vav])
-                    , ("-", p nnn), ("/", p nnn)
-                    , ("*", p $ nnn <> sns)
-                    , ("%", p nnn), (">", p nnb), ("<", p nnb), (">=", p nnb)
-                    , ("<=", p nnb), ("==", p $ nnb <> ssb), ("!=", p $ nnb <> ssb)
-                    , ("<|", pab $ tup ab a b), ("|>", pab $ tup a ab b)
-                    , ("~>", pabc $ tup ab bc ac), ("<~", pabc $ tup bc ab ac)
-                    , ("!_", p $ boolT ==> boolT), ("_!", p $ numT ==> numT)
-                    , ("print", pa $ a ==> unitT)
-                    , ("show", p $ (numT ==> strT) <> (strT ==> strT))
-                    , ("length", pa $ (strT ==> numT) <> (arrayOf a ==> numT))
-                    , ("Just", pa $ a ==> maybeT a)
-                    , ("Nothing", pa $ maybeT a)
-                    , ("@call", p $ nnn <> sss <> vna)
-                    , ("True", p boolT)
-                    , ("False", p boolT)]
+                  , ("-", p nnn), ("/", p nnn), ("<>", p sss)
+                  , ("*", p $ nnn <> sns)
+                  , ("%", p nnn), (">", p nnb), ("<", p nnb), (">=", p nnb)
+                  , ("<=", p nnb), ("==", p $ nnb <> ssb), ("!=", p $ nnb <> ssb)
+                  , ("<|", pab $ tup ab a b), ("|>", pab $ tup a ab b)
+                  , ("~>", pabc $ tup ab bc ac), ("<~", pabc $ tup bc ab ac)
+                  , ("!_", p $ boolT ==> boolT), ("_!", p $ numT ==> numT)
+                  , ("print", pa $ a ==> unitT)
+                  , ("show", p $ (numT ==> strT) <> (strT ==> strT))
+                  , ("length", pa $ (strT ==> numT) <> (arrayOf a ==> numT))
+                  , ("Just", pa $ a ==> maybeT a)
+                  , ("Nothing", pa $ maybeT a)
+                  , ("@call", p $ nnn <> sss <> vna)
+                  , ("True", p boolT)
+                  , ("False", p boolT)]
   where tup x y z = tTuple [x, y] ==> z
         nnn = tup numT numT numT
         sss = tup strT strT strT

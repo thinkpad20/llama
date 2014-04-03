@@ -108,11 +108,11 @@ expressionTests = TestGroup "Expressions"
           (Apply (Apply foo bar) baz)
   , test "no spaces still has apply" "2foo" (Apply two foo)
   , TestGroup "strings" [
-      test "basic" "\"hello\"" (String "hello")
+      test "basic" "\"hello\"" (InString "hello")
     , test "can escape quotes" "\"he said \\\"hello\\\" to me\""
-           (String "he said \"hello\" to me")
+           (InString "he said \"hello\" to me")
     , test "can escape newlines" "\"foo\\nbar\""
-           (String "foo\nbar")
+           (InString "foo\nbar")
   ]
   , TestGroup "dot" [
       test "dot" "foo.bar" (Dot foo bar)
@@ -394,7 +394,7 @@ objectTests = TestGroup "Object declarations" [
       fooCr = defConstr {constrName = "Foo"}
       barCr = defConstr {constrName = "Bar"}
       expr1 = PatternDef baz one
-      expr2 = Block [PatternDef qux (Apply foo bar), print_ (String "hello")]
+      expr2 = Block [PatternDef qux (Apply foo bar), print_ (InString "hello")]
       a = TVar "a"
 
 rassocTests = TestGroup "Right-associative functions"
