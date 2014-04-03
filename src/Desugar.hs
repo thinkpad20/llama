@@ -24,11 +24,11 @@ import TypeLib hiding (log, log')
 import Parser
 import Data.Text hiding (tail, foldl, partition, init)
 
-type Desugarer a = (Name, a -> Bool, a -> Desugar a)
+type Desugarer = (Name, Expr -> Bool, Expr -> Desugar Expr)
 
-instance Show (Desugarer a) where
+instance Show Desugarer where
   show (n, _, _) = "Desugarer '" <> unpack n <> "'"
-instance Render (Desugarer a) where
+instance Render Desugarer where
   render (n, _, _) = "Desugarer '" <> n <> "'"
 
 data DesugarerEnv = DesugarerEnv {
@@ -40,13 +40,13 @@ data DesugarerEnv = DesugarerEnv {
 
 type Desugar = ErrorT ErrorList (StateT DesugarerEnv IO)
 
-doTest :: Desugarer Expr -> Expr -> Bool
+doTest :: Desugarer -> Expr -> Bool
 doTest (_, t, _) e = t e
 
-doTransform :: Desugarer Expr -> Expr -> Desugar Expr
+doTransform :: Desugarer -> Expr -> Desugar Expr
 doTransform (_, _, t) e = t e
 
-traverse :: Desugarer Expr -> Expr -> Desugar Expr
+traverse :: Desugarer -> Expr -> Desugar Expr
 traverse ds e | doTest ds e = doTransform ds e
               | otherwise = case e of
   Var _ -> return e
@@ -123,7 +123,7 @@ popNS = modify $ \s -> s { dsNameSpace = nsTail $ dsNameSpace s
 -- constructor type of the expression) and a transforming function
 -- which takes that expression and returns its desugared version.
 dsAfterBefore, dsLambdaDot, dsDot, dsLambdas, dsPrefixLine, dsForIn,
-  dsPatternDef, dsInString :: Desugarer Expr
+  dsPatternDef, dsInString, dsForever :: Desugarer
 dsAfterBefore = ("Before/After", test, ds) where
   test (After _ _) = True
   test (Before _ _) = True
@@ -228,6 +228,12 @@ dsForIn = ("For in", test, ds) where
                            _ -> Block $ [stmt, expr]
     return $ For init cond step blk
 
+dsForever = ("Forever", test, ds) where
+  test (Forever _) = True
+  test _ = False
+  ds (Forever expr) = For unit unit unit <$> rec expr
+  rec = traverse ("Forever", test, ds)
+
 dsInString = tup where
   tup = ("Interpolated strings", test, ds)
   test (InString _) = True
@@ -293,13 +299,14 @@ defaultEnv = DesugarerEnv {
   , dsObjDecs = mempty
   }
 
-desugarers :: [Desugarer Expr]
+desugarers :: [Desugarer]
 desugarers = [ dsAfterBefore
              , dsLambdaDot
              , dsPrefixLine
              , dsLambdas
              , dsDot
              , dsForIn
+             , dsForever
              , dsPatternDef
              , dsInString ]
 
@@ -317,14 +324,14 @@ runDesugarWith :: DesugarerEnv -> Expr -> (Either ErrorList Expr, DesugarerEnv)
 runDesugarWith state e =
   unsafePerformIO $ runStateT (runErrorT (desugar e)) state
 
-runDesugarWith' :: Desugarer Expr -> DesugarerEnv -> Expr -> (Either ErrorList Expr, DesugarerEnv)
+runDesugarWith' :: Desugarer -> DesugarerEnv -> Expr -> (Either ErrorList Expr, DesugarerEnv)
 runDesugarWith' ds state e =
   unsafePerformIO $ runStateT (runErrorT (traverse ds e)) state
 
 runDesugar :: Expr -> Either ErrorList Expr
 runDesugar = fst . runDesugarWith defaultEnv
 
-runDesugar' :: Desugarer Expr -> Expr -> Either ErrorList Expr
+runDesugar' :: Desugarer -> Expr -> Either ErrorList Expr
 runDesugar' ds expr = fst $ runDesugarWith' ds defaultEnv expr
 
 desugarIt :: String -> Either ErrorList Expr
@@ -334,7 +341,7 @@ desugarIt input = case grab input of
     Block [Block exprs'] -> return $ Block exprs'
     result -> return result
 
-desugarIt' :: (Desugarer Expr, String) -> Either ErrorList Expr
+desugarIt' :: (Desugarer, String) -> Either ErrorList Expr
 desugarIt' (ds, input) = case grab input of
   Left err -> error $ P.show err
   Right exprs -> runDesugar' ds (Block exprs) >>= \case

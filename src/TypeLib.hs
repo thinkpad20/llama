@@ -11,11 +11,10 @@ import qualified Data.Map as M
 import qualified Prelude as P
 import qualified Data.Set as S
 import qualified Data.Text as T
-import Data.HashMap hiding (map, delete)
 
 import Common
 
-type TKwargs = Map Name Type
+type TKwargs = [(Name, Type)]
 data Type = TVar       !Name
           | TConst     !Name
           | TTuple     ![Type] !TKwargs
@@ -338,6 +337,9 @@ popNameSpace :: Typing ()
 popNameSpace = do
   ns <- get <!> nameSpace
   modify $ \s -> s { nameSpace = nsTail ns }
+
+plain :: Type -> Polytype
+plain = Polytype []
 
 hideLogs :: Bool
 hideLogs = True

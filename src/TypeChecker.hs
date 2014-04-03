@@ -56,8 +56,8 @@ typeOf e = case e of
   For init cond step expr -> typeOfFor init cond step expr
   ObjDec dec -> handleObjDec dec >> only unitT
   Literal (ArrayLiteral arr) -> do
-    (ts, subs) <- typeOfList typeOf arr
-    case ts of
+    (types, subs) <- typeOfList typeOf arr
+    case types of
       [] -> do newT <- unusedTypeVar
                return (arrayOf newT, subs)
       t:ts -> if all (== t) ts
@@ -67,12 +67,31 @@ typeOf e = case e of
   Tuple exprs kw -> typeOfTuple typeOf exprs kw
   TypeDef name type_ -> addTypeAlias name type_ *> only unitT
   expr -> throwErrorC ["Can't handle ", show expr, " or needs desugaring"]
-  where only t = return (t, mempty)
 
 typeOfTuple :: TypeOf Expr -> [Expr] -> Kwargs -> Typing (Type, Subs)
-typeOfTuple f exprs _ = do
+typeOfTuple f exprs kws = do
   (ts, subs) <- typeOfList f exprs
-  return (tTuple ts, subs)
+  (kwts, subs') <- typeOfKwargs f kws
+  return (TTuple ts kwts, subs' <> subs)
+
+typeOfKwargs :: TypeOf Expr ->
+                [(Name, Either Expr Type)] ->
+                Typing (TKwargs, Subs)
+typeOfKwargs f = go mempty where
+  go subs = \case
+    [] -> return ([], subs)
+    (name, Right t):rest -> do
+      -- A kwarg with just a type (which must occur on the left side
+      -- of a lambda) gets wrapped in a `Maybe` type
+      store name (Polytype [] $ maybeT $ apply subs t)
+      (rest', subs') <- go subs rest
+      return ((name, t):rest', subs' <> subs)
+    (name, Left expr):rest -> do
+      (t, subs') <- f expr
+      let newSubs = subs <> subs'
+      store name (Polytype [] (apply newSubs t))
+      (rest', newSubs') <- go newSubs rest
+      return ((name, t):rest', newSubs' <> newSubs)
 
 typeOfList :: TypeOf Expr -> [Expr] -> Typing ([Type], Subs)
 typeOfList f exprs = go ([], mempty) exprs where
@@ -111,7 +130,7 @@ typeOfExtension name expr = lookup1 name >>= \case
       popNameSpace
       case newT' of
         -- Make sure it's a function type.
-        TFunction from to ->
+        TFunction from _ ->
           clashes polytype from ! \case
             -- Make sure it doesn't overwrite anything.
             False -> do
@@ -137,7 +156,7 @@ typeOfCase expr patsBodies = do
   (exprT, exprS) <- typeOf expr
   applyToEnv exprS
   -- Give each pattern and body a number, for separate namespaces
-  results <- forM (zip [0..] patsBodies) $ \(n, (pat, body)) -> do
+  results <- forM (zip [0::Int ..] patsBodies) $ \(n, (pat, body)) -> do
     -- Grab a copy of the type env
     pushNameSpace ("%case" <> show n)
     (patT, patS) <- litTypeOf pat
@@ -151,8 +170,8 @@ typeOfCase expr patsBodies = do
   where unify' ((t, subs):rest) = go (t, subs) rest
         go (t, subs) [] = return (t, subs)
         go (t, subs) ((t', subs'):rest) = do
-          subs' <- unify (t, t') `catchError` addError "case result type mismatch"
-          go (t, subs <> subs') rest
+          subs'' <- unify (t, t') `catchError` addError "case result type mismatch"
+          go (t, subs'' <> subs' <> subs) rest
 
 typeOfIf :: Expr -> Expr -> Expr -> Typing (Type, Subs)
 typeOfIf cond true false = do
@@ -168,12 +187,16 @@ typeOfIf cond true false = do
   return (trueT, subs)
 
 typeOfFor :: Expr -> Expr -> Expr -> Expr -> Typing (Type, Subs)
-typeOfFor init cond step expr = do
+typeOfFor init cond step body = do
+  (_, initS) <- typeOf init
+  applyToEnv initS
   (condT, condS) <- typeOf cond
-  subs <- unify (condT, boolT)
-  applyToEnv (subs <> condS)
-  (exprT, exprS) <- typeOf expr
-  return (maybeT exprT, condS <> exprS <> subs)
+  unifyS <- unify (apply (initS <> condS) condT, boolT)
+  applyToEnv (unifyS <> condS)
+  (_, stepS) <- typeOf step
+  applyToEnv stepS
+  (bodyT, bodyS) <- typeOf body
+  return (maybeT bodyT, mconcat [bodyS, stepS, unifyS, condS, initS])
 
 -- | Similarly, inferring the type of an application is slightly
 -- different when looking for a literal type, so we provide which typeOf
@@ -231,16 +254,11 @@ only t = return (t, mempty)
 -- @[Number]@ regardless of context, and @True@ is always @Bool@.
 litTypeOf :: Expr -> Typing (Type, Subs)
 litTypeOf expr = case expr of
-  Var name -> do
-    newT <- unusedTypeVar
-    store name (Polytype [] newT)
-    only newT
-  Typed (Var name) type_ -> do
-    -- TODO: find a way to "rigidify" this type, so that the (a->a)/(a->b)
-    -- unification fails as it should (basically, type variables in type
-    -- signatures should be treated as constants).
-    store name $ Polytype [] type_
-    only type_
+  Var name -> unusedTypeVar >>== store name . plain >>= only
+  -- TODO: find a way to "rigidify" this type, so that the (a->a)/(a->b)
+  -- unification fails as it should (basically, type variables in type
+  -- signatures should be treated as constants).
+  Typed (Var name) type_ -> refine type_ >>== store name . Polytype [] >>= only
   Typed WildCard type_ -> only type_
   Number _ -> only numT
   String _ -> only strT
@@ -264,7 +282,7 @@ store :: Name -> Polytype -> Typing ()
 store name ptype = do
   nsName <- fullName name
   env <- get <!> typeEnv
-  let mod s = s {typeEnv = addToEnv nsName ptype (typeEnv s)}
+  let mod s = s {typeEnv = addToEnv nsName ptype env}
   modify mod
 
 unusedTypeVar :: Typing Type
@@ -276,11 +294,10 @@ unusedTypeVar = do
   -- wrap it in a type variable and return it
   return $ TVar var
   where
-    next :: Name -> Name
     next n = let name = T.unpack n
                  (c:cs) = reverse name in
       T.pack $ if c < '9' then reverse $ succ c : cs
-               else if (head name) < 'z' then (succ $ head name) : "0"
+               else if head name < 'z' then succ (head name) : "0"
                else map (\_ -> 'a') name <> "0"
 
 -- | Local lookup, searches head of table list.
@@ -314,7 +331,7 @@ unify types = log' ["unifying ", render types] >> case types of
   (TConst n, TConst n') | n == n' -> return mempty
   (TTuple ts kw, TTuple ts' kw') -> unifyTuple (ts, kw) (ts', kw')
   (TTuple ts kw, typ) -> unifyTuple (ts, kw) ([typ], mempty)
-  (typ, TTuple ts kw) -> unifyTuple (ts, kw) ([typ], mempty)
+  (typ, TTuple ts kw) -> unifyTuple ([typ], mempty) (ts, kw)
   (TFunction a b, TFunction a' b') -> do
     subs1 <- unify (a, a')
     subs2 <- unify (apply subs1 b, apply subs1 b')
@@ -335,13 +352,41 @@ bind name typ = case typ of
   where occursCheck = throwErrorC ["Occurs check"]
 
 unifyTuple :: ([Type], TKwargs) -> ([Type], TKwargs) -> Typing Subs
-unifyTuple (ts, _) (ts', _)
-  | length ts /= length ts' = throwError1 "Tuples of different lengths"
-  | otherwise = go mempty ts ts'
-  where go subs [] _ = return subs
-        go subs (t:ts) (t':ts') = do
-          subs' <- unify (apply subs t, apply subs t')
-          go (subs' <> subs) ts ts'
+unifyTuple = go mempty where
+  -- End condition: we ate everything
+  go subs ([], []) ([], []) = return subs
+  -- Error condition: not enough args given
+  go _ (_:_, _) ([], _) = notEnough
+  -- Match args left to right
+  go subs (t:ts, ks) (t':ts', ks') = do
+    subs' <- unify (apply subs t, apply subs t')
+    go (subs' <> subs) (ts, ks) (ts', ks')
+  -- If we have extra types on the right, match them with kwargs
+  go subs ([], (n, t):ks) (t':ts', ks') = do
+    subs' <- unify (apply subs t, apply subs t') `catchError` argWithKwarg n
+    go (subs' <> subs) ([], ks) (ts', ks')
+  -- If we don't have any kwargs to match with, that's an error
+  go _ ([], []) (_:_, _) = tooMany
+  -- Consume all of the kwargs on the left (provided kwargs)
+  go subs ([], ks) ([], (n, t'):ks') = case P.lookup n ks of
+    Nothing -> unknownKwarg n
+    Just t -> do
+      subs' <- unify (apply subs t, apply subs t') `catchError` kwTypeErr t t'
+      -- Remove the matching kwarg from the left (and right), and recurse
+      go (subs' <> subs) ([], P.filter ((/= n) . fst) ks) ([], ks')
+  unknownKwarg name = throwErrorC ["Unknown keyword argument '", name, "'"]
+  kwTypeErr t t' = addError' ["When matching in keyword argument: function "
+                             , "expects '", render t, "' but '", render t'
+                             , "' was given"]
+  argWithKwarg name = addError'
+    ["When attempting to match kwarg named '", name, "' with positional argument"]
+  notEnough = throwError1 "Not enough arguments"
+  tooMany = throwError1 "Too many arguments"
+
+  --go subs ([], )
+  -- | length ts /= length ts' = throwError1 "Tuples of different lengths"
+  -- | otherwise = go mempty ts ts'
+  --where go subs [] _ = return subs
 
 unifyMultiMtoF :: TypeMap -> Type -> Type -> Typing Subs
 unifyMultiMtoF set from to = do
@@ -467,13 +512,13 @@ refine typ = fst <$> runStateT (look typ) mempty where
 -- constructors.
 handleObjDec :: ObjectDec -> Typing ()
 handleObjDec (ObjectDec { objName=name, objVars=vars
-                        , objConstrs=constrs, objAttrs=attrs}) = do
+                        , objConstrs=constrs{-, objAttrs=attrs-}}) = do
   -- Make sure type's name is unique.
   whenM (objNameExists name) alreadyExists
   -- Make sure var list has no duplicates
   unless (nub vars == vars) notUnique
   let kind = foldr step (TVar "*") vars
-  attribs <- getAttribs attrs
+  --attribs <- getAttribs attrs
   let fullType = foldl TApply (TConst name) (map TVar vars)
   forM_ constrs $ handleConstructor vars fullType
   registerObject name kind
@@ -489,21 +534,21 @@ objNameExists name = do
   M.member fName . knownTypes <$> get
 
 -- TODO
-getAttribs :: [Expr] -> Typing [(Name, Either Expr Type)]
-getAttribs exprs = forM exprs $ \case
-  Define name expr -> return (name, Left expr)
-  Typed (Var name) type_ -> return (name, Right type_)
-  expr -> throwErrorC ["Illegal attribute declaration: ", render expr]
+--getAttribs :: [Expr] -> Typing [(Name, Either Expr Type)]
+--getAttribs exprs = forM exprs $ \case
+--  Define name expr -> return (name, Left expr)
+--  Typed (Var name) type_ -> return (name, Right type_)
+--  expr -> throwErrorC ["Illegal attribute declaration: ", render expr]
 
 registerObject :: Name -> Kind -> Typing ()
 registerObject name kind = do
   fName <- fullName name
   cTypes <- get <!> knownTypes
-  modify $ \s -> s {knownTypes = M.insert name kind cTypes}
+  modify $ \s -> s {knownTypes = M.insert fName kind cTypes}
 
 -- Need to fix this
 handleConstructor :: [Name] -> Type -> ConstructorDec -> Typing ()
-handleConstructor vars finalType dec = do
+handleConstructor _ finalType dec = do
   let (name, args) = (constrName dec, constrArgs dec)
   types <- getTypes args
   let type_ = foldr TFunction finalType types
@@ -513,22 +558,22 @@ handleConstructor vars finalType dec = do
           Var name -> return $ TVar name
           Constructor name -> return $ TConst name
           expr -> throwErrorC ["Illegal constructor argument: ", render expr]
-        notInArgs name = throwErrorC ["Unknown type variable '", name, "'"]
-        check type_ = case type_ of
-          TVar name | name `elem` vars -> return type_
-                    | otherwise -> notInArgs name
-          TConst _ -> return type_ -- TODO look this up
-          TFunction a b -> TFunction <$> check a <*> check b
-          TApply a b -> TApply <$> check a <*> check b
-          TTuple ts kw | kw == mempty -> tTuple <$> mapM check ts
-          _ -> error $ "Check not implemented: " <> P.show type_
+        --notInArgs name = throwErrorC ["Unknown type variable '", name, "'"]
+        --check type_ = case type_ of
+        --  TVar name | name `elem` vars -> return type_
+        --            | otherwise -> notInArgs name
+        --  TConst _ -> return type_ -- TODO look this up
+        --  TFunction a b -> TFunction <$> check a <*> check b
+        --  TApply a b -> TApply <$> check a <*> check b
+        --  TTuple ts kw | kw == mempty -> tTuple <$> mapM check ts
+        --  _ -> error $ "Check not implemented: " <> P.show type_
 
 -- NOTE: using unsafePerformIO for testing purposes only. This will
 -- all be pure code in the end.
 runTypingWith :: TypingState -> Expr -> (Either ErrorList Type, TypingState)
 runTypingWith state a = unsafePerformIO $ runStateT (runErrorT $ t a) state
-  where t a = do (t, s) <- typeOf a
-                 return $ normalize (apply s t)
+  where t expr = do (type_, subs) <- typeOf expr
+                    return $ normalize (apply subs type_)
 
 runTyping :: Expr -> (Either ErrorList Type, TypingState)
 runTyping = runTypingWith defaultTypingState

@@ -33,7 +33,7 @@ keywords, keySyms :: [String]
 keywords = [ "if", "do", "else", "case", "of", "infix", "typedef"
            , "object", "while", "for", "in", "then", "after", "before"
            , "return", "break", "continue", "mut", "ref", "pure"
-           , "local", "lazy", "extends", "with", "block"]
+           , "local", "lazy", "extends", "with", "block", "forever"]
 keySyms =  ["->", "|", "=", ";", "..", "=>", "?", ":", "#", ":=", "&="]
 
 keyword, exactStr :: Name -> Parser Name
@@ -357,13 +357,14 @@ pBlock :: Parser Expr
 pBlock =  choice [ pOpenBrace *> pExpressionsNoWS <* pCloseBrace
                  , (keyword "do" <|> return "") >> pExpression ]
 
-pFor, pForIn :: Parser Expr
-pFor = try go where
-  go = For <$ keyword "for" <*> pExpr <* schar ';'
-                            <*> pExpr <* schar ';'
-                            <*> pExpr <*> pBlock
-pForIn = ForIn <$ keyword "for" <*> pExpr <* keyword "in"
-               <*> pExpr <*> pBlock
+pFor :: Parser Expr
+pFor = try pFor' <|> try pForIn <|> pForever
+  where pFor' = For <$ keyword "for" <*> pExpr <* schar ';'
+                                     <*> pExpr <* schar ';'
+                                     <*> pExpr <*> pBlock
+        pForIn = ForIn <$ keyword "for" <*> pExpr <* keyword "in"
+                       <*> pExpr <*> pBlock
+        pForever = Forever <$ keyword "forever" <*> pBlock
 
 pExprOrBlock :: Parser Expr
 pExprOrBlock = choice [ try pBlock, pIf, pExpr ]
@@ -439,7 +440,7 @@ pExpression :: Parser Expr
 pExpression = do
   many pAnnotation
   expr <- lexeme $ choice $ [ pDefine, pExtend, pAssign
-                            , pFor, pForIn, pReturn, pExpr ]
+                            , pFor, pReturn, pExpr ]
   option expr $ do
     kw <- keyword "after" <|> keyword "before"
     rest <- pBlock

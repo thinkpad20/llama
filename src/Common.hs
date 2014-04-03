@@ -84,6 +84,7 @@ infixl 9 ~>
 
 (>>==) :: Monad m => m b -> (b -> m a) -> m b
 action1 >>== action2 = action1 >>= \r -> action2 r >> return r
+infixl 1 >>==
 
 trim :: T.Text -> T.Text
 trim = f . f

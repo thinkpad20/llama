@@ -36,6 +36,7 @@ data Expr = Var         !Name
           | If'         !Expr !Expr
           | For         !Expr !Expr !Expr !Expr
           | ForIn       !Expr !Expr !Expr
+          | Forever     !Expr
           | PatternDef  !Expr !Expr -- e.g. `foo bar (baz: T) = qux`
           | Define      !Name !Expr
           | Extend      !Name !Expr
