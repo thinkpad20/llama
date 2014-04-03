@@ -86,6 +86,7 @@ traverse ds e | doTest ds e = doTransform ds e
   LambdaDot e' -> LambdaDot <$> recNS "%l" e'
   Prefix name e' -> Prefix name <$> rec e'
   WildCard -> return WildCard
+  InString is -> InString <$> recIs is
   _ -> error $ "Expression not covered in desugarer: " <> P.show e
   where rec = traverse ds
         recNS n expr = pushNS n *> rec expr <* popNS
@@ -94,6 +95,9 @@ traverse ds e | doTest ds e = doTransform ds e
         recKw = undefined
         recMaybe Nothing = return Nothing
         recMaybe (Just ex) = Just <$> rec ex
+        recIs (Interp s ex s') = Interp <$> recIs s <*> rec ex <*> recIs s'
+        recIs (InterpShow s ex s') = InterpShow <$> recIs s <*> rec ex <*> recIs s'
+        recIs s = return s
         recCr cr@(ConstructorDec { constrArgs=args, constrExtends=extends
                                  , constrLogic=logic }) = do
           args' <- mapM rec args
@@ -119,7 +123,7 @@ popNS = modify $ \s -> s { dsNameSpace = nsTail $ dsNameSpace s
 -- constructor type of the expression) and a transforming function
 -- which takes that expression and returns its desugared version.
 dsAfterBefore, dsLambdaDot, dsDot, dsLambdas, dsPrefixLine, dsForIn,
-  dsPatternDef :: Desugarer Expr
+  dsPatternDef, dsInString :: Desugarer Expr
 dsAfterBefore = ("Before/After", test, ds) where
   test (After _ _) = True
   test (Before _ _) = True
@@ -224,16 +228,18 @@ dsForIn = ("For in", test, ds) where
                            _ -> Block $ [stmt, expr]
     return $ For init cond step blk
 
-{-
-
-for foo in bar { baz; qux }
-
-for mut _iter = bar.iter; _iter.valid; _iter.forward!
-  foo = _iter.get
-  baz;
-  qux;
-
--}
+dsInString = tup where
+  tup = ("Interpolated strings", test, ds)
+  test (InString _) = True
+  test _ = False
+  ds (InString is) = go is
+  go (Plain s) = return $ String s
+  go (Interp is e is') = bin <$> go is <*> rec e <*> go is'
+  go (InterpShow is e is') = bin <$> go is <*> e' <*> go is' where
+    e' = Apply (Var "show") <$> rec e
+  bin :: Expr -> Expr ->Expr -> Expr
+  bin left e right = binary "<>" left (binary "<>" e right)
+  rec = traverse tup
 
 -- | @unApply@ "unwinds" a series of applies into a list of
 -- expressions that are on the right side, paired with the
@@ -294,7 +300,8 @@ desugarers = [ dsAfterBefore
              , dsLambdas
              , dsDot
              , dsForIn
-             , dsPatternDef]
+             , dsPatternDef
+             , dsInString ]
 
 desugar :: Expr -> Desugar Expr
 desugar expr = go desugarers expr where

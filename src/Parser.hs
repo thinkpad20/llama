@@ -204,29 +204,6 @@ pParens = schar '(' *> exprs <* schar ')'
           return (name, x)
         kwargs = kwarg `sepBy` schar ','
 
-{-
-pInString :: Parser InString
-pInString = InString <$> do
-  first@(Plain s) <- Plain <$> (many $ noneOf "#\"")
-  choice [
-          try $ pShowExpr $ InterShow first,
-          try $ pLiteralExpr $ Interpolate first,
-          join first <$> (pure prepend <*> char '#' <*> pInString),
-          return first
-        ]
-  where
-    pShowExpr f = f <$> (sstring "#{" *> pExpr) <*> (char '}' *> pInString)
-    pLiteralExpr f = f <$> (sstring "#[" *> pExpr) <*> (char ']' *> pInString)
-    -- prepends a character onto an InString
-    prepend c (Plain s) = Plain (c : s)
-    prepend c (Interpolate s e s') = Interpolate (prepend c s) e s'
-    prepend c (InterShow s e s') = InterShow (prepend c s) e s'
-    -- joins a Plain instring onto another instring
-    join (Plain s) (Plain s') = Plain (s ++ s')
-    join is1 (InterShow s' e s'') = InterShow (join is1 s') e s''
-    join is1 (Interpolate s' e s'') = Interpolate (join is1 s') e s''
--}
-
 pString :: Parser InString
 pString = oneOf "'\"" >>= pString'
 pString' :: Char -> Parser InString
