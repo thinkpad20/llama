@@ -204,25 +204,6 @@ pParens = schar '(' *> exprs <* schar ')'
           return (name, x)
         kwargs = kwarg `sepBy` schar ','
 
-pString, pString' :: Parser T.Text
-pString = char '"' >> pString'
-pString' = do
-  str <- fmap T.pack (anyChar `manyTill` (lookAhead $ oneOf "\\\""))
-  oneOf "\\\"" >>= \case
-    '\\' -> anyChar >>= \case
-      'n'  -> escape '\n'
-      '\\' -> escape '\\'
-      't'  -> escape '\t'
-      'r'  -> escape '\r'
-      'b'  -> escape '\b'
-      '"'  -> escape '"'
-      c | c `elem` [' ', '\n', '\t'] -> consume
-      c -> unexpected $ "Unrecognized escape character `" <> [c] <> "'"
-      where escape c = pString' >>= \rest -> return $ str <> T.singleton c <> rest
-            consume = spaces >> pString' >>= \s -> return (str <> s)
-    '"' -> return str
-    c -> error $ "wtf is " <> [c]
-
 {-
 pInString :: Parser InString
 pInString = InString <$> do
@@ -244,12 +225,15 @@ pInString = InString <$> do
     join (Plain s) (Plain s') = Plain (s ++ s')
     join is1 (InterShow s' e s'') = InterShow (join is1 s') e s''
     join is1 (Interpolate s' e s'') = Interpolate (join is1 s') e s''
+-}
 
-pString, pString' :: Parser InString
-pString = char '"' >> pString'
-pString' = do
-  str <- fmap T.pack (anyChar `manyTill` (lookAhead $ oneOf "\\\"#"))
-  oneOf "\\\"#" >>= \case
+pString :: Parser InString
+pString = oneOf "'\"" >>= pString'
+pString' :: Char -> Parser InString
+pString' start = do
+  str <- fmap T.pack (anyChar `manyTill` (lookAhead $ oneOf "\\\"'#"))
+  let escape c = (Plain (str <> T.singleton c) <>) <$> pString' start
+  oneOf "\\\"'#" >>= \case
     '\\' -> anyChar >>= \case
       'n'  -> escape '\n'
       '\\' -> escape '\\'
@@ -258,17 +242,16 @@ pString' = do
       'b'  -> escape '\b'
       '"'  -> escape '"'
       '#'  -> escape '#'
-      c | c `elem` [' ', '\n', '\t'] -> consume
-      c -> unexpected $ "Unrecognized escape character `" <> [c] <> "'"
-      where escape c = do
-              rest <- pString'
-              return $ str <> T.singleton c <> rest
-            consume = spaces >> fmap (str <>) pString'
-    '"' -> return str
+      c | c == start -> escape start
+        | c `elem` [' ', '\n', '\t'] -> consume
+        | otherwise -> unexpected $ "Unrecognized escape character `" <> [c] <> "'"
+      where consume = spaces >> (Plain str <>) <$> (pString' start)
     '#' -> anyChar >>= \case
-
+      '{' -> InterpShow (Plain str) <$> pExprOrBlock <* char '}' <*> pString' start
+      '[' -> Interp (Plain str) <$> pExprOrBlock <* char ']' <*> pString' start
+    c | c == start -> return (Plain str)
+      | c `elem` "'\"" -> escape c
     c -> error $ "wtf is " <> [c]
--}
 
 pLiteral :: Parser Expr
 pLiteral = Literal <$> choice [try array, list, try set, dict] where
@@ -380,7 +363,7 @@ pCase = Case <$ keyword "case" <*> pExpr <* keyword "of" <*> alts
 
 pTerm :: Parser Expr
 pTerm = lexeme $ choice [ Number <$> pDouble
-                        , String <$> pString
+                        , InString <$> pString
                         , pLambdaDot
                         , pVar
                         , pConstructor
