@@ -12,9 +12,10 @@ import qualified Prelude as P
 import Data.Text hiding (map)
 import Data.Monoid
 import Data.String
+import qualified Data.Map as M
 
 import Common hiding (intercalate)
-import TypeLib
+
 
 type Kwargs = [(Name, Either Expr Type)]
 data Expr = Var         !Name
@@ -57,6 +58,62 @@ data Expr = Var         !Name
           | Continue
           | WildCard
           deriving (P.Show, Eq)
+
+type TKwargs = [(Name, Type)]
+data Type = TVar       !Name
+          | TConst     !Name
+          | TTuple     ![Type] !TKwargs
+          | TApply     !Type !Type
+          | TFunction  !Type !Type
+          | TMod       !Mod !Type
+          | TMultiFunc !TypeMap
+          deriving (P.Show, Eq, Ord)
+
+type Attribute = (Name, Type, Maybe Expr)
+
+data Mod = Mut | Ref | Pure | Local | Lazy deriving (P.Show, Eq, Ord)
+type TypeMap = M.Map Type Type
+
+instance Render Type where
+  render t = case t of
+    TVar name -> name
+    TConst name -> name
+    TTuple ts _ -> "(" <> intercalate ", " (map render ts) <> ")"
+    TApply (TConst "[]") typ -> "[" <> render typ <> "]"
+    TApply (TConst "[!]") typ -> "[!" <> render typ <> "]"
+    TApply a b -> render a <> " " <> render' b
+    TFunction t1 t2 -> render'' t1 <> " -> " <> render t2
+    TMod modi typ -> render modi <> " " <> render typ
+    TMultiFunc tset -> "{" <> renderSet tset <> "}"
+    where render' typ = case typ of
+            TApply _ _ -> "(" <> render typ <> ")"
+            _ -> render typ
+          render'' typ = case typ of
+            TFunction _ _ -> "(" <> render typ <> ")"
+            _ -> render typ
+          renderSet tset =
+            let pairs = M.toList tset
+                rPair (from, to) = render from <> " -> " <> render to
+            in intercalate ", " (map rPair pairs)
+
+instance Render [M.Map Name Type] where
+  render mps = line $ "[" <> (intercalate ", " $ map render mps) <> "]"
+
+instance Monoid Type where
+  mempty = TMultiFunc mempty
+  TMultiFunc s `mappend` TMultiFunc s' = TMultiFunc $ M.union s s'
+  TMultiFunc s `mappend` TFunction from to = TMultiFunc $ M.insert from to s
+  TFunction from to `mappend` TMultiFunc s = TMultiFunc $ M.insert from to s
+  TFunction f1 t1 `mappend` TFunction f2 t2 =
+    TMultiFunc $ M.fromList [(f1, t1), (f2, t2)]
+  t1 `mappend` t2 = P.error $ "Invalid <>s: " <> P.show t1 <> ", " <> P.show t2
+
+instance Render Mod where
+  render Mut = "mut"
+  render Ref = "ref"
+  render Pure = "pure"
+  render Local = "local"
+  render Lazy = "lazy"
 
 data Literal = ArrayLiteral ![Expr]
              | ArrayRange   !Expr !Expr

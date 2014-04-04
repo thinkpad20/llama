@@ -26,7 +26,6 @@ data ParserState = ParserState { currentLevel :: Int
                                , raNames :: [Name]
                                , ignoreLambda :: Bool }
 type Parser = ParsecT String ParserState Identity
-instance Render ParseError
 
 getLevel :: Parser Int
 getLevel = currentLevel <$> getState

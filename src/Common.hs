@@ -31,6 +31,7 @@ import Data.Char (isSpace)
 import Data.Maybe (catMaybes)
 import qualified Data.Map as M
 import qualified Data.Set as S
+import Text.Parsec (ParseError)
 
 newtype ErrorList = ErrorList [T.Text]
 instance Error ErrorList where
@@ -140,3 +141,5 @@ whenM test act = test >>= \case
 unlessM test act = test >>= \case
   True -> return ()
   False -> act
+
+instance Render ParseError

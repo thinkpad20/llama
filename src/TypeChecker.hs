@@ -512,16 +512,16 @@ refine typ = fst <$> runStateT (look typ) mempty where
 -- constructors.
 handleObjDec :: ObjectDec -> Typing ()
 handleObjDec (ObjectDec { objName=name, objVars=vars
-                        , objConstrs=constrs{-, objAttrs=attrs-}}) = do
+                        , objConstrs=constrs, objAttrs=attrs}) = do
   -- Make sure type's name is unique.
   whenM (objNameExists name) alreadyExists
   -- Make sure var list has no duplicates
   unless (nub vars == vars) notUnique
   let kind = foldr step (TVar "*") vars
-  --attribs <- getAttribs attrs
+  attribs <- getAttribs attrs
   let fullType = foldl TApply (TConst name) (map TVar vars)
   forM_ constrs $ handleConstructor vars fullType
-  registerObject name kind
+  registerObject name kind attribs
   where
     step _ = TFunction (TVar "*")
     notUnique = throwErrorC ["Duplicate type variable in list: ", render vars]
@@ -534,17 +534,21 @@ objNameExists name = do
   M.member fName . knownTypes <$> get
 
 -- TODO
---getAttribs :: [Expr] -> Typing [(Name, Either Expr Type)]
---getAttribs exprs = forM exprs $ \case
---  Define name expr -> return (name, Left expr)
---  Typed (Var name) type_ -> return (name, Right type_)
---  expr -> throwErrorC ["Illegal attribute declaration: ", render expr]
+getAttribs :: [Expr] -> Typing [Attribute]
+getAttribs exprs = forM exprs $ \case
+  Define name expr -> do
+    (exprT, exprS) <- typeOf expr
+    when (exprS /= mempty) $
+      throwError1 "Cannot capture variables in an attribute"
+    return (name, exprT, Just expr)
+  Typed (Var name) type_ -> return (name, type_, Nothing)
+  expr -> throwErrorC ["Illegal attribute declaration: ", render expr]
 
-registerObject :: Name -> Kind -> Typing ()
-registerObject name kind = do
+registerObject :: Name -> Kind -> [Attribute] -> Typing ()
+registerObject name kind attribs = do
   fName <- fullName name
   cTypes <- get <!> knownTypes
-  modify $ \s -> s {knownTypes = M.insert fName kind cTypes}
+  modify $ \s -> s {knownTypes = M.insert fName (kind, attribs) cTypes}
 
 -- Need to fix this
 handleConstructor :: [Name] -> Type -> ConstructorDec -> Typing ()
@@ -552,7 +556,7 @@ handleConstructor _ finalType dec = do
   let (name, args) = (constrName dec, constrArgs dec)
   types <- getTypes args
   let type_ = foldr TFunction finalType types
-  store name =<< generalize type_
+  store name (generalize' mempty type_)
   where getTypes args = forM args $ \case
           Typed (Var _) type_ -> return type_
           Var name -> return $ TVar name

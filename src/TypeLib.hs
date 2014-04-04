@@ -11,23 +11,11 @@ import qualified Data.Map as M
 import qualified Prelude as P
 import qualified Data.Set as S
 import qualified Data.Text as T
+import AST
 
 import Common
 
-type TKwargs = [(Name, Type)]
-data Type = TVar       !Name
-          | TConst     !Name
-          | TTuple     ![Type] !TKwargs
-          | TApply     !Type !Type
-          | TFunction  !Type !Type
-          | TMod       !Mod !Type
-          | TMultiFunc !TypeMap
-          deriving (Show, Eq, Ord)
-
-type TypeMap = M.Map Type Type
 type TypeTable = M.Map Name Type
-
-data Mod = Mut | Ref | Pure | Local | Lazy deriving (Show, Eq, Ord)
 
 -- | A polytype represents a type with zero or more type variables bound in
 -- its scope. For example, Polytype ["a"] (TApply (TConst "Foo") TVar "a") is
@@ -55,7 +43,7 @@ data TypingState = TypingState { aliases :: M.Map Name Type
                                , nameSpace :: NameSpace
                                , typeEnv :: TypeEnv
                                , purityEnv :: PurityEnv
-                               , knownTypes :: M.Map Name Kind
+                               , knownTypes :: M.Map Name (Kind, [Attribute])
                                , freshName :: Name } deriving (Show)
 type Typing = ErrorT ErrorList (StateT TypingState IO)
 
@@ -83,9 +71,6 @@ instance Render TypingState where
         bi = (\(TE b) -> b) builtIns
         env' = TE $ M.filterWithKey (\k _ -> M.notMember k bi) env in
     line $ mconcat ["Names: ", render env']
-
-instance Render [M.Map Name Type] where
-  render mps = line $ "[" <> (T.intercalate ", " $ map render mps) <> "]"
 
 instance Render NameSpace where
   render (NameSpace ns) = T.intercalate "/" $ reverse ns
@@ -178,44 +163,6 @@ addToEnv n p (TE env) = TE (M.insert n p env)
 instance Monoid TypeEnv where
   mempty = TE mempty
   (TE a) `mappend` (TE b) = TE (a <> b)
-
-instance Render Type where
-  render t = case t of
-    TVar name -> name
-    TConst name -> name
-    TTuple ts _ -> "(" <> T.intercalate ", " (map render ts) <> ")"
-    TApply (TConst "[]") typ -> "[" <> render typ <> "]"
-    TApply (TConst "[!]") typ -> "[!" <> render typ <> "]"
-    TApply a b -> render a <> " " <> render' b
-    TFunction t1 t2 -> render'' t1 <> " -> " <> render t2
-    TMod modi typ -> render modi <> " " <> render typ
-    TMultiFunc tset -> "{" <> renderSet tset <> "}"
-    where render' typ = case typ of
-            TApply _ _ -> "(" <> render typ <> ")"
-            _ -> render typ
-          render'' typ = case typ of
-            TFunction _ _ -> "(" <> render typ <> ")"
-            _ -> render typ
-          renderSet tset =
-            let pairs = M.toList tset
-                rPair (from, to) = render from <> " -> " <> render to
-            in T.intercalate ", " (map rPair pairs)
-
-instance Render Mod where
-  render Mut = "mut"
-  render Ref = "ref"
-  render Pure = "pure"
-  render Local = "local"
-  render Lazy = "lazy"
-
-instance Monoid Type where
-  mempty = TMultiFunc mempty
-  TMultiFunc s `mappend` TMultiFunc s' = TMultiFunc $ M.union s s'
-  TMultiFunc s `mappend` TFunction from to = TMultiFunc $ M.insert from to s
-  TFunction from to `mappend` TMultiFunc s = TMultiFunc $ M.insert from to s
-  TFunction f1 t1 `mappend` TFunction f2 t2 =
-    TMultiFunc $ M.fromList [(f1, t1), (f2, t2)]
-  t1 `mappend` t2 = error $ "Invalid <>s: " <> P.show t1 <> ", " <> P.show t2
 
 instance Monoid Polytype where
   mempty = Polytype [] mempty
