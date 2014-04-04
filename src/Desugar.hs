@@ -61,6 +61,8 @@ traverse ds e | doTest ds e = doTransform ds e
   Lambda arg body -> Lambda <$> recNS "%l" arg <*> recNS "%l" body
   Lambdas argsBodies -> Lambdas <$> mapM (recTupNS "%l") argsBodies
   Case expr patsBodies -> Case <$> recNS "%c" expr <*> mapM (recTupNS "%c") patsBodies
+  MultiCase expr patsBodies ->
+    MultiCase <$> recNS "%c" expr <*> mapM (recTupNS' "%c") patsBodies
   Tuple exprs kws -> Tuple <$> mapM rec exprs <*> mapM recKw kws
   Literal (ArrayLiteral exprs) -> Literal . ArrayLiteral <$> mapM rec exprs
   Literal (ListLiteral exprs) -> Literal . ListLiteral <$> mapM rec exprs
@@ -87,11 +89,18 @@ traverse ds e | doTest ds e = doTransform ds e
   Prefix name e' -> Prefix name <$> rec e'
   WildCard -> return WildCard
   InString is -> InString <$> recIs is
+  Attribute expr name -> (\ex -> Attribute ex name) <$> rec expr
   _ -> error $ "Expression not covered in desugarer: " <> P.show e
   where rec = traverse ds
         recNS n expr = pushNS n *> rec expr <* popNS
         recTup (a,b) = (,) <$> rec a <*> rec b
         recTupNS n (a, b) = pushNS n *> recTup (a, b) <* popNS
+        recTupNS' n (exprs, body) = do
+          pushNS n
+          exprs' <- mapM rec exprs
+          body' <- rec body
+          popNS
+          return (exprs', body')
         recKw = undefined
         recMaybe Nothing = return Nothing
         recMaybe (Just ex) = Just <$> rec ex
@@ -123,7 +132,7 @@ popNS = modify $ \s -> s { dsNameSpace = nsTail $ dsNameSpace s
 -- constructor type of the expression) and a transforming function
 -- which takes that expression and returns its desugared version.
 dsAfterBefore, dsLambdaDot, dsDot, dsLambdas, dsPrefixLine, dsForIn,
-  dsPatternDef, dsInString, dsForever :: Desugarer
+  dsPatternDef, dsInString, dsForever, dsMultiCase :: Desugarer
 dsAfterBefore = ("Before/After", test, ds) where
   test (After _ _) = True
   test (Before _ _) = True
@@ -247,6 +256,19 @@ dsInString = tup where
   bin left e right = binary "<>" left (binary "<>" e right)
   rec = traverse tup
 
+dsMultiCase = tup where
+  tup = ("Multicase", test, ds)
+  test (MultiCase _ _) = True
+  test _ = False
+  ds (MultiCase expr patsArgs) = Case <$> rec expr <*> go [] patsArgs
+  go alts [] = return $ P.reverse alts
+  go alts (([], _):rest) = go alts rest
+  go alts ((e:exprs, res):rest) = do
+    e' <- rec e
+    res' <- rec res
+    go ((e', res'):alts) ((exprs, res'):rest)
+  rec = traverse tup
+
 -- | @unApply@ "unwinds" a series of applies into a list of
 -- expressions that are on the right side, paired with the
 -- root-level expression. So for example `foo bar baz` which
@@ -308,7 +330,8 @@ desugarers = [ dsAfterBefore
              , dsForIn
              , dsForever
              , dsPatternDef
-             , dsInString ]
+             , dsInString
+             , dsMultiCase]
 
 desugar :: Expr -> Desugar Expr
 desugar expr = go desugarers expr where
@@ -337,13 +360,9 @@ runDesugar' ds expr = fst $ runDesugarWith' ds defaultEnv expr
 desugarIt :: String -> Either ErrorList Expr
 desugarIt input = case grab input of
   Left err -> error $ P.show err
-  Right exprs -> runDesugar (Block exprs) >>= \case
-    Block [Block exprs'] -> return $ Block exprs'
-    result -> return result
+  Right expr -> runDesugar expr
 
 desugarIt' :: (Desugarer, String) -> Either ErrorList Expr
 desugarIt' (ds, input) = case grab input of
   Left err -> error $ P.show err
-  Right exprs -> runDesugar' ds (Block exprs) >>= \case
-    Block [Block exprs'] -> return $ Block exprs'
-    result -> return result
+  Right expr -> runDesugar' ds expr

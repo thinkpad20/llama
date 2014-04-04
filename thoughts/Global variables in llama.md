@@ -8,6 +8,7 @@ Some ideas for global variables in llama
 @exec_str : Str -> Str // run shell command, return stdout
 @name : Str            // the name of the module
 @module : Module       // the current module
+@test                  // boolean, set by command line arg
 ```
 
 Note that none of these can be mutated by the user, even though several are mutable.
@@ -16,6 +17,7 @@ A crappy script that uses them
 
 ```
 #!/usr/bin/llama
+module RmFoos
 list_files dir = "ls #[dir]".@exec_str.split_lines
 
 rm_foos () =
@@ -26,5 +28,5 @@ rm_foos () =
       @exec "rm #[file_path]"
 
 if @name == '@main' do rm_foos()
-if @status != Just 0 println "Failed! :("
+if @status != Just 0 then println "Failed! :("
 ```

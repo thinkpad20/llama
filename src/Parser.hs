@@ -84,24 +84,9 @@ pVar = do
   option var $ do
     typ <- exactSym ":" *> pType
     return $ Typed var typ
-  where getVar = choice (map (fmap Var . try) ps) <|> wildcard
-        chk s = if s `elem` keySyms
-          then unexpected $ "reserved symbol " <> P.show s
-          else return s
-        prefix = do
-          s <- chk =<< many1 (oneOf symChars)
-          c <- char '_'
-          return $ T.pack $ s <> [c]
-        postfix = do
-          c <- char '_'
-          s <- chk =<< many1 (oneOf symChars)
-          return $ T.pack $ c : s
-        infix_ = do
-          s <- char '_' *> (chk =<< many1 (oneOf symChars)) <* char '_'
-          return $ T.pack s
+  where getVar = choice [ fmap Var $ try $ pIdent (lower <|> char '_')
+                        , wildcard]
         wildcard = WildCard <$ schar '_'
-        ps =  [ pIdent (lower <|> char '_')
-              , infix_, prefix, postfix]
 
 pConstructor :: Parser Expr
 pConstructor = Constructor <$> pIdent upper
@@ -278,7 +263,7 @@ pRightAssociativeFunction = do
   names <- getRANames >>= (many . choice . map exactStr)
   expr <- optionMaybe pBinary
   case (names, expr) of
-    ([], Nothing) -> unexpected "empty input, not an expression"
+    ([], Nothing) -> unexpected "empty input or invalid expression"
     (_, Nothing) -> return $ foldr1 Apply (Var <$> names)
     (_, Just expr') -> return $ foldr (Apply . Var) expr' names
 
@@ -330,24 +315,30 @@ pLambdaDot :: Parser Expr
 pLambdaDot = LambdaDot <$ exactSym "." <*> pTerm
 
 pCase :: Parser Expr
-pCase = Case <$ keyword "case" <*> pExpr <* keyword "of" <*> alts
+pCase = MultiCase <$ keyword "case" <*> pExpr <* keyword "of" <*> alts
   where alts = alt `sepBy1` exactSym "|"
         alt = do
-          pat <- ignoreOn *> pRightAssociativeFunction <* ignoreOff
+          pats <- getPat `sepBy1` schar ','
           exactSym "=>"
           body <- pExprOrBlock
-          return (pat, body)
+          return (pats, body)
+        getPat = ignoreOn *> pRightAssociativeFunction <* ignoreOff
 
 pTerm :: Parser Expr
-pTerm = lexeme $ choice [ Number <$> pDouble
-                        , InString <$> pString
-                        , pLambdaDot
-                        , pVar
-                        , pConstructor
-                        , pParens
-                        , pLiteral
-                        , pCase
-                        ]
+pTerm = do
+    term <- go
+    option term $ do
+      attrs <- many (schar '\\' *> pIdent (upper <|> lower <|> char '_'))
+      return (foldl Attribute term attrs)
+  where go = lexeme $ choice [ Number <$> pDouble
+                             , InString <$> pString
+                             , pLambdaDot
+                             , pVar
+                             , pConstructor
+                             , pParens
+                             , pLiteral
+                             , pCase
+                             ]
 
 pOpenBrace, pCloseBrace :: Parser ()
 pOpenBrace = schar'  '{' >> notFollowedBy (oneOf "!j")
@@ -457,8 +448,11 @@ pExpr = lexeme $ choice [ pModified
 pTopLevel :: Parser Expr
 pTopLevel = choice [pPrefixSymbol, pExpression, pTypeDef, ObjDec <$> pObjectDec]
 
-grab :: String -> Either ParseError [Expr]
-grab = parse pEntryPoint
+grab :: String -> Either ParseError Expr
+grab input = parse pEntryPoint input >>= \case
+    [] -> return unit
+    [expr] -> return expr
+    exprs  -> return $ Block exprs
   where pEntryPoint = pTopLevel `sepEndBy1` (same <|> schar'  ';') <* eof
 
 grabT :: String -> Either ErrorList Type
@@ -469,4 +463,4 @@ grabT input = case parse pType input of
 grabOrError :: String -> Expr
 grabOrError input = case grab input of
   Left err -> error $ P.show err
-  Right exprs -> Block exprs
+  Right expr -> expr

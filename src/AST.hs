@@ -25,9 +25,11 @@ data Expr = Var         !Name
           | Block       !Block
           | Dot         !Expr !Expr
           | Apply       !Expr !Expr
+          | Attribute   !Expr !Name
           | Lambda      !Expr !Expr
           | Lambdas     ![(Expr, Expr)]
           | Case        !Expr ![(Expr, Expr)]
+          | MultiCase   !Expr ![([Expr], Expr)]
           | Tuple       ![Expr] Kwargs
           | Literal     !Literal
           | DeRef       !Expr !Expr

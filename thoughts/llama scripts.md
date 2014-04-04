@@ -125,7 +125,7 @@ Anyway, it looks like we have these keywords:
 * `runimport`: imports an impure module and its contents, possible side effects
 * `import`: imports a pure module, has no side effects
 
-We might want to instead go with `script` -> `module`, `module` -> `pure module`, `runimport` -> `import`, `import` -> `pure import`. That way the only new keywords we have are `import` and `module`.
+We might want to instead go with `script` -> `module`, `module` -> `pure module`, `runimport` -> `import!`, `import` -> `import`. That way the only new keywords we have are `import!` `import` and `module`.
 
 What if we could be a little smarter, for example, a script which can be run as either a script or a module?
 
@@ -149,14 +149,14 @@ Then the above could be loaded as a module, *or* ran as a script. As long as eve
 
 ```
 module Bar
-pure import Foo # OK, side-effects don't occur
+import Foo # OK, side-effects don't occur
 bar n = n.Foo\foo.show
 ```
 
 ```
 module Baz
-import Foo # OK, has a side-effect
-baz n = n.Foo\foo.show
+import! Foo # OK, has a side-effect
+baz n = (Foo\foo n).show
 ```
 
 This seems good.
@@ -167,3 +167,24 @@ By the way, there's an issue of top-level mutable variables in scripts. This mea
 * Module `b` imports `a`.
 * Then later, `a\foo` changes to `1`.
 * At some point later, module `c` imports `a\foo`. Does it get the original value, `0`, or the new value, `1`?
+
+Other things to consider:
+
+* Versioned imports
+* Imports that hide things, such as variables or instances
+* Open imports
+* Lazy imports (don't perform the inport until/unless used)
+  - What about type checking?
+    + 'Trusted imports', where we say some of what a module will have, without actually having that implementation work. For example:
+      ```
+      trust import Foo
+        foo : Num -> Str
+        bar : (Str, Str) -> [Num]
+        impl SomeClass SomeType
+
+      blorp x = Foo\bar (x, x) ! reverse
+      ```
+    + Then `Foo` wouldn't be actually imported until/unless `blorp` actually got called. At that point, `blorp` would be type checked and a runtime exception would be thrown if any of the things didn't exist, or weren't the types claimed.
+  - What about imports that have side-effects? I guess that's OK, if not advisable?
+* Imports as expressions, scoped imports
+* What happens when imports conflict?

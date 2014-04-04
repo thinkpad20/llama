@@ -11,7 +11,9 @@ import AST
 import TypeLib
 import Parser (grab)
 
-expr e = [e]
+expr e = Block [e]
+testB desc i exprs = Test desc i (Block exprs)
+skipTestB desc i exprs = SkipTest desc i (Block exprs)
 (foo, bar, baz, qux) = (Var "foo", Var "bar", Var "baz", Var "qux")
 [fooC, barC, bazC, quxC] = map Constructor ["Foo", "Bar", "Baz", "Qux"]
 (fooT, barT, bazT, quxT) = ( tConst "Foo", tConst "Bar"
@@ -42,6 +44,7 @@ binOpsTests = [test (T.unpack op) | op <- ops] where
                  ("1 " <> op <> " 2")
                  (expr $ binary (T.pack op) one two)
 
+expressionTests :: Test String Expr
 expressionTests = TestGroup "Expressions"
   [
     test "integer" "1" one
@@ -87,16 +90,14 @@ expressionTests = TestGroup "Expressions"
     , test "observes associativity rules 4"
             "foo && bar && baz"
             (_and foo (_and bar baz))
-    , test "infix on its own" "_+_" (Var "+")
-    , test "alternate infix syntax"
-           "_+_ (foo, bar)" (plus foo bar)
-    , test "prefix on its own" "+_" (Var "+_")
-    , test "postfix on its own" "_+" (Var "_+")
+    --, test "infix on its own" "(+)" (Var "+")
+    --, test "alternate infix syntax"
+    --       "(+) (foo, bar)" (plus foo bar)
   ] ++ binOpsTests)
   , SkipTestGroup "prefixes" [
       test "prefix operator" "-1" (Prefix "-" one)
     , test "prefix operator 2" "++foo" (Prefix "++" foo)
-    , Test "prefix after a statement" "1; +2" [one, Prefix "+" two]
+    , Test "prefix after a statement" "1; +2" $ Block [one, Prefix "+" two]
     , ShouldError "prefix operator in argument" "foo (++bar)"
     , ShouldError "mixing prefix and infix operators" "++foo + bar"
     , ShouldError "high precedence prefix" "++_ foo"
@@ -157,6 +158,7 @@ expressionTests = TestGroup "Expressions"
   ]
   where test i r e = Test i r (expr e)
 
+arrayTests :: Test String Expr
 arrayTests = TestGroup "Literals"
   [
     TestGroup "array literals" [
@@ -168,7 +170,7 @@ arrayTests = TestGroup "Literals"
                    , Apply baz (Apply qux (Dot foo bar))])
     , Test "nested" "[foo, [bar, baz]]" (arrayS [foo, arrayE [bar, baz]])
     , Test "use as arguments" "foo [1, bar, baz]"
-           [Apply foo $ arrayE [one, bar, baz]]
+           (Block [Apply foo $ arrayE [one, bar, baz]])
     ]
   , TestGroup "array ranges" [
       Test "make array ranges" "[foo..bar]" (rangeS foo bar)
@@ -184,23 +186,24 @@ arrayTests = TestGroup "Literals"
       Test "basics" "{d foo => bar, baz => qux}" (dictS [(foo, bar), (baz, qux)])
   ]
   , TestGroup "array dereference" [
-      Test "make array reference" "foo[: bar]" [DeRef foo bar]
+      Test "make array reference" "foo[: bar]" (DeRef foo bar)
     , Test "can contain arbitrary expressions"
            "foo [: bar + baz qux]"
-           [DeRef foo (plus bar (Apply baz qux))]
+           (DeRef foo (plus bar (Apply baz qux)))
     , Test "should have higher precedence than application"
-           "foo bar[:baz]" [Apply foo $ DeRef bar baz]
+           "foo bar[:baz]" (Apply foo $ DeRef bar baz)
     , Test "should have higher precedence than application 2"
-           "(foo bar)[:baz]" [DeRef (Apply foo bar) baz]
+           "(foo bar)[:baz]" (DeRef (Apply foo bar) baz)
     , Test "should have lower precedence than dots"
-           "foo.bar[:baz]" [DeRef (Dot foo bar) baz]
+           "foo.bar[:baz]" (DeRef (Dot foo bar) baz)
     , Test "should have lower precedence than dots 2"
-           "foo.(bar[:baz])" [Dot foo (DeRef bar baz)]
+           "foo.(bar[:baz])" (Dot foo (DeRef bar baz))
     , Test "should associate to the left"
-           "foo[:bar][:baz]" [DeRef (DeRef foo bar) baz]
+           "foo[:bar][:baz]" (DeRef (DeRef foo bar) baz)
     ]
   ]
 
+typingTests :: Test String Expr
 typingTests = TestGroup "Typed expressions"
   [
     test "typing an identifier" "foo: Foo" fooT
@@ -210,7 +213,7 @@ typingTests = TestGroup "Typed expressions"
          "foo: Maybe a" (maybeT a)
   , test "typing with type tuple" "foo: (Foo, Bar)" (tTuple [fooT, barT])
   , Test "a typed tuple" "(foo: Foo, bar: Bar)"
-         [tuple [Typed foo fooT, Typed bar barT]]
+         (tuple [Typed foo fooT, Typed bar barT])
   , test "a function" "foo: a -> b" (a ==> b)
   , test "a function 2" "foo: Num -> b" (numT ==> b)
   , test "a function with a tuple" "foo: (Num, Str) -> b"
@@ -238,7 +241,7 @@ typingTests = TestGroup "Typed expressions"
   where multi = TMultiFunc . M.fromList
         multi1 a b = multi [(a, b)]
         [a, b, c] = map TVar ["a", "b", "c"]
-        test name input typ = Test name input [Typed foo typ]
+        test name input typ = Test name input (Typed foo typ)
         collection name open close f = TestGroup name tests where
           encl s = "foo: " ++ open ++ s ++ close
           tests = [ test "of variable" (encl "a") (f a)
@@ -250,6 +253,7 @@ typingTests = TestGroup "Typed expressions"
                   , test "of vectors" (encl "[Num]") (f (arrayOf numT))
                   , test "of maps" (encl "{a=>b}") (f (mapOf (a, b)))]
 
+functionTests :: Test String Expr
 functionTests = TestGroup "Functions"
   [
     TestGroup "Lambdas" [
@@ -273,10 +277,10 @@ functionTests = TestGroup "Functions"
            (eLambda foo (Lambda bar (plus foo bar)))
     , Test "should be able to be used in definitions"
            "foo = bar => bar + 1"
-           [PatternDef foo (Lambda bar (plus bar one))]
+           (PatternDef foo (Lambda bar (plus bar one)))
     , Test "should be able to be used in assignments"
            "foo := bar: Baz => qux bar"
-           [Assign foo (Lambda (Typed bar bazT) (Apply qux bar))]
+           (Assign foo (Lambda (Typed bar bazT) (Apply qux bar)))
     , Test "should be able to be used in a binary operator"
            "foo $ bar: Bar => bar + 2"
            (expr $ Apply (Var "$")
@@ -290,31 +294,31 @@ functionTests = TestGroup "Functions"
            (eLambdas [(one, two), (two, three)])
     , Test "should be able to handle complex lambdas"
            "(1 => 2 | 2 => 3 | foo => bar baz) 3"
-           [Apply (lambdas [(one, two), (two, three), (foo, Apply bar baz)]) three]
+           (Apply (lambdas [(one, two), (two, three), (foo, Apply bar baz)]) three)
     ]
   , TestGroup "Defined functions" [
       Test "should make a function definition"
            "foo(bar: Bar) = bar"
-           [PatternDef (Apply foo (Typed bar barT)) bar]
+           (PatternDef (Apply foo (Typed bar barT)) bar)
     , Test "should make a function definition with multiple args"
            "foo(bar: Bar) (baz: Baz) = bar + baz"
-           [PatternDef (Apply (Apply foo (Typed bar barT)) (Typed baz bazT))
-                       (plus bar baz)]
+           (PatternDef (Apply (Apply foo (Typed bar barT)) (Typed baz bazT))
+                        (plus bar baz))
     , Test "should make a function definition with polymorphic args"
            "foo(bar: a) (baz: b) = bar baz"
-           [PatternDef (Apply (Apply foo (Typed bar $ TVar "a")) (Typed baz $ TVar "b"))
-                       (Apply bar baz)]
+           (PatternDef (Apply (Apply foo (Typed bar $ TVar "a")) (Typed baz $ TVar "b"))
+                       (Apply bar baz))
     , Test "should make a function definition with a symbol"
            "(bar: a) <*> (baz: b) = bar baz"
-           [PatternDef (binary "<*>" (Typed bar (TVar "a"))
-                                     (Typed baz (TVar "b"))) $ Apply bar baz]
+           (PatternDef (binary "<*>" (Typed bar (TVar "a"))
+                                     (Typed baz (TVar "b"))) $ Apply bar baz)
     ]
   , TestGroup "LambdaDots" [
-      Test "basic" ".foo" [LambdaDot foo]
-    , Test "with other args" ".foo bar" [Apply (LambdaDot foo) bar]
-    , Test "in assignment" "foo = .bar" [PatternDef foo $ LambdaDot bar]
+      Test "basic" ".foo" (LambdaDot foo)
+    , Test "with other args" ".foo bar" (Apply (LambdaDot foo) bar)
+    , Test "in assignment" "foo = .bar" (PatternDef foo $ LambdaDot bar)
     , Test "in assignment with other exprs" "foo = .bar baz"
-           [PatternDef foo $ Apply (LambdaDot bar) baz]
+           (PatternDef foo $ Apply (LambdaDot bar) baz)
   ]
   ]
   where tup1 = tuple [Typed foo fooT, Typed bar barT]
@@ -322,18 +326,20 @@ functionTests = TestGroup "Functions"
         lambdas abds = Lambdas abds
         eLambdas = expr . lambdas
 
+assignmentTests :: Test String Expr
 assignmentTests = TestGroup "Assignments"
   [
-    Test "can make definitions" "foo = bar" [PatternDef foo bar]
+    Test "can make definitions" "foo = bar" (PatternDef foo bar)
   , Test "can make definitions with underscores"
-         "_foo = bar" [PatternDef (Var "_foo") bar]
-  , Test "can make assignments" "foo := bar" [Assign foo bar]
+         "_foo = bar" (PatternDef (Var "_foo") bar)
+  , Test "can make assignments" "foo := bar" (Assign foo bar)
   , Test "can make complex definitions" "foo = bar + baz"
-         [PatternDef foo $ bar `plus` baz]
+         (PatternDef foo $ bar `plus` baz)
   , Test "can make complex assignments" "foo bar := baz * qux foo"
-         [Assign (Apply foo bar) $ baz `times` Apply qux foo]
+         (Assign (Apply foo bar) $ baz `times` Apply qux foo)
   ]
 
+objectTests :: Test String Expr
 objectTests = TestGroup "Object declarations" [
     test1 "can declare a basic object" "object Foo = {Foo}" obj
   , test1 "can declare a basic object without braces" "object Foo = Foo" obj
@@ -397,162 +403,175 @@ objectTests = TestGroup "Object declarations" [
       expr2 = Block [PatternDef qux (Apply foo bar), print_ (InString "hello")]
       a = TVar "a"
 
+rassocTests :: Test String Expr
 rassocTests = TestGroup "Right-associative functions"
   [
     Test "rassoc doesn't matter when single expr"
          "rassoc foo; foo"
-         [foo]
+         foo
   , Test "rassoc doesn't matter when one arg"
          "rassoc foo; foo bar"
-         [Apply foo bar]
+         (Apply foo bar)
   , Test "rassoc doesn't matter when it is the arg"
          "rassoc bar; foo bar"
-         [Apply foo bar]
+         (Apply foo bar)
   , Test "rassoc doesn't matter when it is the arg 2"
          "rassoc bar; foo bar baz"
-         [Apply (Apply foo bar) baz]
+         (Apply (Apply foo bar) baz)
   , Test "rassoc matters when 2 args"
          "rassoc foo; foo bar baz"
-         [Apply foo (Apply bar baz)]
+         (Apply foo (Apply bar baz))
   , Test "rassoc works with binary functions"
          "rassoc foo; foo bar + baz"
-         [Apply foo (plus bar baz)]
+         (Apply foo (plus bar baz))
   , Test "rassoc works with binary functions 2"
          "rassoc foo; foo bar baz + qux"
-         [Apply foo (plus (Apply bar baz) qux)]
+         (Apply foo (plus (Apply bar baz) qux))
   , Test "rassoc works in parentheses"
          "rassoc bar; foo (bar baz qux)"
-         [Apply foo (Apply bar (Apply baz qux))]
+         (Apply foo (Apply bar (Apply baz qux)))
   , Test "nested rassoc works"
          "rassoc foo, bar; foo bar baz"
-         [Apply foo (Apply bar baz)]
+         (Apply foo (Apply bar baz))
   , Test "nested rassoc works 2"
          "rassoc foo, bar; foo bar baz qux"
-         [Apply foo (Apply bar (Apply baz qux))]
+         (Apply foo (Apply bar (Apply baz qux)))
   , Test "nested rassoc works 3"
          "rassoc foo, bar; foo bar baz + qux"
-         [Apply foo (Apply bar (plus baz qux))]
+         (Apply foo (Apply bar (plus baz qux)))
   , Test "print is rassoc by default"
          "print 1 + 2; print foo bar"
-         [print_ (plus one two), print_ (Apply foo bar)]
+         (Block [print_ (plus one two), print_ (Apply foo bar)])
   , Test "assert is rassoc by default"
          "assert 1 != 2; assert foo bar > 3"
-         [assert (neq one two), assert (gt (Apply foo bar) three)]
+         (Block [assert (neq one two), assert (gt (Apply foo bar) three)])
   , Test "assert is rassoc by default"
          "rassoc foo; assert (foo bar baz) > 3"
-         [assert (gt (Apply foo (Apply bar baz)) three)]
+         (assert (gt (Apply foo (Apply bar baz)) three))
   , Test "we can still pass print and assert as args"
          "map print foo; map assert bar"
-         [ Apply (Apply (Var "map") (Var "print")) foo
-         , Apply (Apply (Var "map") (Var "assert")) bar]
+         (Block [ Apply (Apply (Var "map") (Var "print")) foo
+                , Apply (Apply (Var "map") (Var "assert")) bar])
   -- Should test that we can unrassoc something, and that this
   -- happens automatically when shadowing a definition
   ]
 
+blockTests :: Test String Expr
 blockTests = TestGroup "Blocks"
   [
-    SkipTest "separate expressions into blocks by newline"
+    skipTest "separate expressions into blocks by newline"
           "foo\nbar\nbaz qux"
           [foo, bar, Apply baz qux]
-  , Test "separate expressions into blocks by semicolon"
+  , test "separate expressions into blocks by semicolon"
          "foo;bar;baz qux"
          [foo, bar, Apply baz qux]
-  , Test "after" "foo after bar" [foo `After` bar]
-  , Test "after with block" "foo after {bar; baz}"
+  , test "after" "foo after bar" [foo `After` bar]
+  , test "after with block" "foo after {bar; baz}"
          [foo `After` Block [bar, baz]]
-  , Test "before" "foo before bar" [foo `Before` bar]
-  , Test "before with block" "foo before {bar; baz}"
+  , test "before" "foo before bar" [foo `Before` bar]
+  , test "before with block" "foo before {bar; baz}"
          [foo `Before` Block [bar, baz]]
-  , SkipTest "after with block 2" "{foo; bar} after {bar; baz}"
+  , skipTest "after with block 2" "{foo; bar} after {bar; baz}"
          [Block [foo, bar] `After` Block [bar, baz]]
-  , SkipTest "before with block 2" "{foo; bar} before {bar; baz}"
+  , skipTest "before with block 2" "{foo; bar} before {bar; baz}"
          [Block [foo, bar] `Before` Block [bar, baz]]
   ]
+  where test descr i es = Test descr i (Block es)
+        skipTest descr i es = SkipTest descr i (Block es)
 
+flowTests :: Test String Expr
 flowTests = TestGroup "Program flow"
   [
-    Test "return" "return" [Return unit]
-  , Test "return with expr" "return 3" [Return three]
-  , Test "return in a series of statements"
+    testB "return" "return" [Return unit]
+  , testB "return with expr" "return 3" [Return three]
+  , testB "return in a series of statements"
          "foo bar; return 3; baz qux"
          [Apply foo bar, Return three, Apply baz qux]
   ]
 
+ifTests :: Test String Expr
 ifTests = TestGroup "If statements"
   [
-    Test "basic one-line" "if 1 then 2 else 3" [If one two three]
-  , Test "basic block" "if 1 { 2 } else { 3 }" [If one two three]
-  , Test "basic block" "if 1 { 2 } else { 3 }" [If one two three]
-  , Test "basic mixed 1" "if 1 then 2 else { 3 }" [If one two three]
-  , Test "basic mixed 2" "if 1 { 2 } else 3" [If one two three]
-  , Test "without else" "if 1 { 2 }; if 2 then 3"
+    testB "basic one-line" "if 1 then 2 else 3" [If one two three]
+  , testB "basic block" "if 1 { 2 } else { 3 }" [If one two three]
+  , testB "basic block" "if 1 { 2 } else { 3 }" [If one two three]
+  , testB "basic mixed 1" "if 1 then 2 else { 3 }" [If one two three]
+  , testB "basic mixed 2" "if 1 { 2 } else 3" [If one two three]
+  , testB "without else" "if 1 { 2 }; if 2 then 3"
     [If' one two, If' two three]
-  , Test "without else then with" "if 1 { 2 }; if 2 then 3 else 1"
+  , testB "without else then with" "if 1 { 2 }; if 2 then 3 else 1"
     [If' one two, If two three one]
-  , Test "used in lambda" "n: Num => if n then 2 else 3"
+  , testB "used in lambda" "n: Num => if n then 2 else 3"
     [Lambda (Typed (Var "n") numT) $ If (Var "n") two three]
-  , Test "used in define" "foo (n: Num) = if n then 2 else 3"
+  , testB "used in define" "foo (n: Num) = if n then 2 else 3"
     [PatternDef (Apply foo (Typed (Var "n") numT)) $ If (Var "n") two three]
-  , Test "nested" "if True then 1 else if False then 2 else 3"
+  , testB "nested" "if True then 1 else if False then 2 else 3"
     [If true one (If false two three)]
-  , Test "nested 2" "if True then if False then 1 else 2 else 3"
+  , testB "nested 2" "if True then if False then 1 else 2 else 3"
     [If true (If false one two) three]
-  , Test "nested 3" "if if True then False else True then 1 else 2"
+  , testB "nested 3" "if if True then False else True then 1 else 2"
     [If (If true false true) one two]
   ]
 
+caseTests :: Test String Expr
 caseTests = TestGroup "Case statements"
   [
-    Test "basic" "case 1 of 2 => 3" [Case one [(two, three)]]
-  , Test "multiple" "case 1 of 2 => 3 | 3 => 1"
-         [Case one [(two, three), (three, one)]]
-  , Test "with variable" "case foo of 2 => bar 3 | baz 3 => 1"
-         [Case foo [(two, Apply bar three), (Apply baz three, one)]]
-  , Test "separated by semicolon"
+    testB "basic" "case 1 of 2 => 3" [MultiCase one [([two], three)]]
+  , testB "multiple options" "case 1 of 2 => 3 | 3 => 1"
+         [MultiCase one [([two], three), ([three], one)]]
+  , testB "multiple patterns" "case 1 of 1, 2 => 3 | 3 => 1"
+         [MultiCase one [([one, two], three), ([three], one)]]
+  , testB "multiple patterns 2" "case 1 of 1, 2 => 3 | 3, 1, foo bar => 1"
+         [MultiCase one [([one, two], three), ([three, one, Apply foo bar], one)]]
+  , testB "with variable" "case foo of 2 => bar 3 | baz 3 => 1"
+         [MultiCase foo [([two], Apply bar three), ([Apply baz three], one)]]
+  , testB "separated by semicolon"
          "case foo of 2 => bar 3 | baz 3 => 1; case 1 of 2 => 3"
-         [Case foo [(two, Apply bar three), (Apply baz three, one)]
-         , Case one [(two, three)]]
+         [MultiCase foo [([two], Apply bar three), ([Apply baz three], one)]
+         , MultiCase one [([two], three)]]
   ]
 
+forTests :: Test String Expr
 forTests = TestGroup "For statements"
  [
     TestGroup "single statements" [
-      Test "for block via 'do'" "for foo; bar; baz do qux;"
+      testB "for block via 'do'" "for foo; bar; baz do qux;"
            [For foo bar baz qux]
-    , SkipTest "for block via 'do' with following expression"
+    , skipTestB "for block via 'do' with following expression"
            "for foo; bar; baz do qux\nfoo"
            [For foo bar baz qux, baz]
-    , Test "for block via 'do' with following expression, split by semicolon"
+    , testB "for block via 'do' with following expression, split by semicolon"
            "for foo; bar; baz do qux; foo"
            [For foo bar baz qux, foo]
     ]
   , TestGroup "using curly braces" [
-      Test "basic" "for foo; bar; baz {2}"
+      testB "basic" "for foo; bar; baz {2}"
            [For foo bar baz two]
-    , Test "multiple statements"
+    , testB "multiple statements"
            "for foo; bar; baz {2; 3}"
            [For foo bar baz $ Block [two, three]]
-    , SkipTest "complex statements"
+    , skipTestB "complex statements"
            "for foo bar; baz; qux; {bar 2; baz 3}"
            [For (Apply foo bar) baz qux $ Block [Apply bar two, Apply baz three]]
-    , Test "followed by other statement, using semicolon"
+    , testB "followed by other statement, using semicolon"
            "for foo; bar; baz { qux }; foo"
            [For foo bar baz qux, foo]
-    , Test "nested for statements 1"
+    , testB "nested for statements 1"
            "for foo; bar; baz { for bar; baz; qux {3}}"
            [ For foo bar baz (For bar baz qux three)]
-    , Test "nested for statements 2"
+    , testB "nested for statements 2"
            "for foo; bar; baz {2; for bar; baz; qux { 3}; baz}; qux"
            [For foo bar baz $ Block [two, For bar baz qux three, baz], qux]
     ]
   ]
 
+forInTests :: Test String Expr
 forInTests = TestGroup "For statements" tests where
   tests =
     [
-      Test "basic" "for foo in bar { baz }" [ForIn foo bar baz]
-    , Test "basic one-line" "for foo in bar do baz" [ForIn foo bar baz]
-    , Test "nested via one-line" "for foo in bar do for baz in qux do 1"
+      testB "basic" "for foo in bar { baz }" [ForIn foo bar baz]
+    , testB "basic one-line" "for foo in bar do baz" [ForIn foo bar baz]
+    , testB "nested via one-line" "for foo in bar do for baz in qux do 1"
       [ForIn foo bar (ForIn baz qux one)]
     ]
 
