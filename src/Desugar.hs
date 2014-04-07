@@ -132,7 +132,7 @@ popNS = modify $ \s -> s { dsNameSpace = nsTail $ dsNameSpace s
 -- constructor type of the expression) and a transforming function
 -- which takes that expression and returns its desugared version.
 dsAfterBefore, dsLambdaDot, dsDot, dsLambdas, dsPrefixLine, dsForIn,
-  dsPatternDef, dsInString, dsForever, dsMultiCase :: Desugarer
+  dsPatternDef, dsInString, dsForever, dsMultiCase, dsIf' :: Desugarer
 dsAfterBefore = ("Before/After", test, ds) where
   test (After _ _) = True
   test (Before _ _) = True
@@ -273,6 +273,13 @@ dsMultiCase = tup where
     go ((e', res'):alts) ((exprs, res'):rest)
   rec = traverse tup
 
+dsIf' = tup where
+  tup = ("If without else", test, ds)
+  test (If' _ _) = True
+  test _ = False
+  ds (If' cond result) = If <$> rec cond <*> (just <$> rec result) <*> pure nothing
+  rec = traverse tup
+
 -- | @unApply@ "unwinds" a series of applies into a list of
 -- expressions that are on the right side, paired with the
 -- root-level expression. So for example `foo bar baz` which
@@ -335,7 +342,8 @@ desugarers = [ dsAfterBefore
              , dsForever
              , dsPatternDef
              , dsInString
-             , dsMultiCase]
+             , dsMultiCase
+             , dsIf']
 
 desugar :: Expr -> Desugar Expr
 desugar expr = go desugarers expr where

@@ -23,6 +23,7 @@ import Common hiding (intercalate)
 import AST
 import Desugar
 import TypeChecker
+import TypeLib hiding (log, log', builtIns, hideLogs, vals)
 
 type Array a = A.IOArray a
 
@@ -34,6 +35,7 @@ type PSet = Set Value
 type MSet = HashTable Value Bool
 
 data Value = VNumber !Double
+           | VBool   !Bool
            | VString !Text
            | VVector !(V.Vector Value)
            | VTuple  !(V.Vector Value)
@@ -65,9 +67,13 @@ instance Render LocalRef
 
 data Obj = Obj {
     outerType :: !Type
-  , attribs   :: !Env
+  , innerType :: Text
+  , attribs   :: !(Maybe Env)
   }
   deriving (Show)
+
+_obj :: Obj
+_obj = Obj {outerType=unitT, innerType="", attribs=Nothing}
 
 newtype EvalState = ES [Frame]
 data Frame = Frame {
@@ -76,6 +82,23 @@ data Frame = Frame {
   }
 
 type Eval = ErrorT ErrorList (StateT EvalState IO)
+
+nothingV :: Value
+nothingV =
+  VObj $ _obj {
+    outerType = TConst "Maybe"
+  , innerType = "Nothing"
+  }
+
+justV :: Value -> Eval Value
+justV val = do
+  attrs <- new
+  hInsert attrs "0" val
+  return $ VObj $ _obj {
+    outerType = TConst "Maybe"
+  , innerType = "Just"
+  , attribs = Just attrs
+  }
 
 new :: Eval Env
 new = lift2 H.new
@@ -119,9 +142,16 @@ eval :: Expr -> Eval Value
 eval = \case
   Number n -> return (VNumber n)
   String s -> return (VString s)
+  Constructor "True" -> return (VBool True)
+  Constructor "False" -> return (VBool False)
   Constructor n -> lookupOrError n
   Var n -> lookupOrError n
   Block exprs -> evalBlock exprs
+  Tuple exprs kws | kws == mempty -> do
+    vals <- forM exprs eval
+    return $ VTuple $ V.fromList vals
+  Tuple _ _ -> throwError1 "tuples with kwargs aren't implemented in evaluator"
+  Literal lit -> evalLit lit
   Apply func arg -> do
     log' ["apply, func is ", render func, ", arg is ", render arg]
     funcV <- eval func
@@ -136,13 +166,24 @@ eval = \case
   Attribute expr name -> eval expr >>= getAttribute name
   Lambda param body -> evalLamda param body
   Define name expr -> store name =<< eval expr
-  expr -> throwErrorC ["Can't handle ", render expr]
+  If c t f -> eval c >>= \case
+    VBool True -> eval t
+    VBool False -> eval f
+    val -> throwErrorC ["Value `", render val, "' is not of type Bool."]
+  If' c t -> eval c >>= \case
+    VBool True -> justV =<< eval t
+    VBool False -> return nothingV
+    val -> throwErrorC ["Value `", render val, "' is not of type Bool."]
+  expr -> throwErrorC ["Evaluator can't handle ", render expr]
 
 store :: Name -> Value -> Eval Value
 store name val = do
   ES (f:_) <- get
   hInsert (eEnv f) name val
   pure val
+
+evalLit :: Literal -> Eval Value
+evalLit (ArrayLiteral exprs) = VVector . V.fromList <$> forM exprs eval
 
 evalBlock :: [Expr] -> Eval Value
 evalBlock = \case
@@ -190,6 +231,8 @@ getClosure (Var argName) expr = do
       Number _ -> return ()
       String _ -> return ()
       Block es -> mapM_ (go env) es
+      Tuple es kws | kws == mempty -> mapM_ (go env) es
+                   | otherwise -> lift $ throwErrorC ["Kwarg closures aren't implemented"]
       Constructor name -> lift (lookupOrError name) >>= lift . hInsert env name
       Var name | name == argName -> lift $ hInsert env name (VLocal Arg)
                | otherwise -> findName name >>= \case
@@ -198,6 +241,8 @@ getClosure (Var argName) expr = do
       Apply a b -> go env a >> go env b
       Lambda param body -> push >> getNames param >> go env body <* pop
       Define var ex -> addName var >> go env ex
+      If c t f -> go env c >> go env t >> go env f
+      Literal (ArrayLiteral exprs) -> mapM_ (go env) exprs
       e -> lift $ throwErrorC ["Can't get closure of ", render e]
     getNames :: Expr -> StateT [Set Name] Eval ()
     getNames = \case
@@ -219,10 +264,10 @@ getClosure (Var argName) expr = do
     push = modify $ \s -> mempty:s
     pop = modify $ \(_:ss) -> ss
     findName :: Name -> StateT [Set Name] Eval Bool
-    findName name = get >>= go where
-      go = \case
+    findName name = get >>= look where
+      look = \case
         [] -> return False
-        (s:ss) -> if S.member name s then return True else go ss
+        (s:ss) -> if S.member name s then return True else look ss
 
 builtIns :: IO Env
 builtIns = H.fromList
@@ -232,6 +277,8 @@ builtIns = H.fromList
   , ("-", Builtin bi_minus)
   , ("*", Builtin bi_times)
   , ("/", Builtin bi_divide)
+  , ("<", Builtin bi_lt), (">", Builtin bi_gt), ("<=", Builtin bi_leq)
+  , (">=", Builtin bi_geq), ("==", Builtin bi_eq), ("!=", Builtin bi_neq)
   , ("negate", Builtin bi_negate)
   ]
 
@@ -247,11 +294,18 @@ bi_negate = ("negate", neg) where
   neg (VNumber n) = pure $ VNumber $ P.negate n
   neg val = numTypeError val
 
-bi_plus, bi_minus, bi_divide, bi_times :: Builtin
+bi_plus, bi_minus, bi_divide, bi_times, bi_eq,
+  bi_lt, bi_gt, bi_neq, bi_leq, bi_geq :: Builtin
 bi_plus = bi_binary "+" (+)
 bi_minus = bi_binary "-" (-)
 bi_times = bi_binary "*" (*)
 bi_divide = bi_binary "/" (/)
+bi_eq = bi_binaryBool "==" (==)
+bi_lt = bi_binaryBool "<" (<)
+bi_gt = bi_binaryBool ">" (>)
+bi_leq = bi_binaryBool "<=" (<=)
+bi_geq = bi_binaryBool ">=" (>=)
+bi_neq = bi_binaryBool "!=" (/=)
 
 bi_binary :: Name -> (Double -> Double -> Double) -> Builtin
 bi_binary name op = (name, f) where
@@ -261,6 +315,17 @@ bi_binary name op = (name, f) where
     val -> numTypeError val
   f val = numTypeError val
   fN n (VNumber n') = pure $ VNumber (op n n')
+  fN n (VLocal ref) = fN n =<< deref ref
+  fN _ val = numTypeError val
+
+bi_binaryBool :: Name -> (Double -> Double -> Bool) -> Builtin
+bi_binaryBool name op = (name, f) where
+  f (VNumber n) = pure $ Builtin (render n <> name, fN n)
+  f (VLocal ref) = deref ref >>= \case
+    VNumber n -> pure $ Builtin (render n <> name, fN n)
+    val -> numTypeError val
+  f val = numTypeError val
+  fN n (VNumber n') = pure $ VBool (op n n')
   fN n (VLocal ref) = fN n =<< deref ref
   fN _ val = numTypeError val
 

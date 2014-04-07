@@ -252,3 +252,9 @@ tuple :: [Expr] -> Expr
 tuple exprs = Tuple exprs mempty
 unit :: Expr
 unit = tuple []
+
+just :: Expr -> Expr
+just = Apply (Constructor "Just")
+
+nothing :: Expr
+nothing = Constructor "Nothing"
