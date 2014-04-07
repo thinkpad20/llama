@@ -264,7 +264,6 @@ normalize t = evalState (go t) ("a", mempty) where
 
 log :: T.Text -> Typing ()
 log s = if hideLogs then return () else lift2 $ putStrLn $ T.unpack s
-  where lift2 = lift . lift
 
 log' :: [T.Text] -> Typing ()
 log' = mconcat ~> log

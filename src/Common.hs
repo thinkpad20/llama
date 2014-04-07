@@ -13,7 +13,7 @@ module Common ( (!), (<!>), (<$>), (<$), (<*), (*>), (<*>), pure
               , trim, line, throwError, catchError, (~>), Render(..)
               , isInt, ErrorList(..), throwError1, throwErrorC, addError
               , addError', forever, isSpace, catMaybes, sortWith, each
-              , unless, mconcatMapM, show, whenM, unlessM)
+              , unless, mconcatMapM, show, whenM, unlessM, lift2)
               where
 
 import Prelude hiding (show)
@@ -51,6 +51,7 @@ class Show a => Render a where
   renderIO :: a -> IO T.Text
   renderIO = return . render
 
+instance Render Double
 instance Render T.Text
 instance Render Int
 instance Render Char
@@ -143,3 +144,7 @@ unlessM test act = test >>= \case
   False -> act
 
 instance Render ParseError
+
+lift2 :: (Monad (t1 m), Monad m, MonadTrans t, MonadTrans t1) =>
+         m a -> t (t1 m) a
+lift2 = lift . lift

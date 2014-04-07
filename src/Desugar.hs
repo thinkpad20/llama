@@ -6,7 +6,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE ScopedTypeVariables #-}
-module Desugar where
+module Desugar (desugarIt, desugarIt') where
 
 import Prelude (IO, Show(..), Eq(..), Ord(..), Bool(..),
                 Double, String, Maybe(..), Int, Monad(..),
@@ -253,7 +253,11 @@ dsInString = tup where
   go (InterpShow is e is') = bin <$> go is <*> e' <*> go is' where
     e' = Apply (Var "show") <$> rec e
   bin :: Expr -> Expr ->Expr -> Expr
-  bin left e right = binary "<>" left (binary "<>" e right)
+  bin left e right = P.foldr addIfNotEmpty right [left, e]
+  --bin left e right = binary "<>" left (binary "<>" e right)
+  addIfNotEmpty (String "") e = e
+  addIfNotEmpty e (String "") = e
+  addIfNotEmpty e1 e2 = binary "<>" e1 e2
   rec = traverse tup
 
 dsMultiCase = tup where
@@ -340,6 +344,7 @@ desugar expr = go desugarers expr where
 
 log :: Text -> Desugar ()
 log = lift . lift . putStrLn . unpack
+
 log' :: [Text] -> Desugar ()
 log' = log . mconcat
 

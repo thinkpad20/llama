@@ -77,7 +77,7 @@ same = (many emptyLine >> eof) <|> (newline >> go) where
 defaultState :: ParserState
 defaultState = ParserState { currentLevel = 0
                            , stepAmount = Nothing
-                           , raNames = ["print", "assert"]
+                           , raNames = ["print", "println", "assert"]
                            , ignoreLambda = False }
 
 parse :: Parser a -> String -> Either ParseError a

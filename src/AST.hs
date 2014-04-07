@@ -246,7 +246,7 @@ isSymbol :: Text -> Bool
 isSymbol = all (`elem` symChars)
 
 binary :: Name -> Expr -> Expr -> Expr
-binary name e1 e2 = Apply (Var name) $ Tuple [e1, e2] mempty
+binary name e1 e2 = Apply (Apply (Var name) e1) e2
 
 tuple :: [Expr] -> Expr
 tuple exprs = Tuple exprs mempty
