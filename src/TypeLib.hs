@@ -193,38 +193,27 @@ infixr 4 ==>
 
 builtIns :: TypeEnv
 builtIns =
-  TE $ M.fromList [ ("+", p $ mconcat [nnn, sss, css, scs, vvv, avv, vav])
-                  , ("-", p nnn), ("/", p nnn), ("<>", p sss)
-                  , ("*", p $ nnn <> sns)
-                  , ("%", p nnn), (">", p nnb), ("<", p nnb), (">=", p nnb)
-                  , ("<=", p nnb), ("==", p $ nnb <> ssb), ("!=", p $ nnb <> ssb)
+  TE $ M.fromList [ ("+", p nnn), ("-", p nnn), ("/", p nnn), ("<>", p sss)
+                  , ("*", p nnn), ("%", p nnn), (">", p nnb), ("<", p nnb)
+                  , (">=", p nnb), ("<=", p nnb), ("==", p nnb), ("!=", p nnb)
                   , ("<|", pab $ tup ab a b), ("|>", pab $ tup a ab b)
                   , ("~>", pabc $ tup ab bc ac), ("<~", pabc $ tup bc ab ac)
-                  , ("!_", p $ boolT ==> boolT), ("_!", p $ numT ==> numT)
-                  , ("print", pa $ a ==> unitT)
+                  , ("println", pa $ a ==> unitT)
                   , ("show", p $ (numT ==> strT) <> (strT ==> strT))
                   , ("length", pa $ (strT ==> numT) <> (arrayOf a ==> numT))
                   , ("Just", pa $ a ==> maybeT a)
                   , ("Nothing", pa $ maybeT a)
                   , ("@call", p $ nnn <> sss <> vna)
-                  , ("True", p boolT)
-                  , ("False", p boolT)]
-  where tup x y z = tTuple [x, y] ==> z
+                  , ("True", p boolT), ("False", p boolT)]
+  where tup x y z = x ==> y ==> z
         nnn = tup numT numT numT
         sss = tup strT strT strT
-        scs = tup strT charT strT
-        css = tup charT strT strT
-        sns = tup strT numT strT
         vna = tup (arrayOf a) numT a
-        vvv = tup (arrayOf a) (arrayOf a) (arrayOf a)
-        vav = tup (arrayOf a) a (arrayOf a)
-        avv = tup a (arrayOf a) (arrayOf a)
         p = Polytype []
         pa = Polytype ["a"]
         pab = Polytype ["a", "b"]
         pabc = Polytype ["a", "b", "c"]
         nnb = tup numT numT boolT
-        ssb = tup strT strT boolT
         [a, b, c] = TVar <$> ["a", "b", "c"]
         (ab, bc, ac) = (a ==> b, b ==> c, a ==> c)
 
@@ -240,7 +229,7 @@ builtInPurities = M.fromList [ ("+", PTPure), ("-", PTPure), ("/", PTPure), ("*"
              ]
 
 -- | Like generalizing, but creates a normal type. Basically it's just to
--- make all the type variables start from "a".
+-- replace all the type variables with alphabet letters starting from "a".
 normalize :: Type -> Type
 normalize t = evalState (go t) ("a", mempty) where
   go type_ = case type_ of
@@ -272,7 +261,6 @@ fullName :: Name -> Typing T.Text
 fullName name = do
   (NameSpace ns) <- get <!> nameSpace
   return $ render (NameSpace $ name:ns)
-
 
 pushNameSpace :: Name -> Typing ()
 pushNameSpace name = do

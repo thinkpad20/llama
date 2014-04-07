@@ -8,8 +8,7 @@
 {-# LANGUAGE PackageImports #-}
 module TypeChecker ( Typing, TypeTable, TypingState(..)
                    , runTyping, runTypingWith, defaultTypingState
-                   , typeIt, unifyIt, runTypeChecker
-                   , generalize') where
+                   , typeIt, unifyIt, generalize') where
 
 import Prelude (IO, Eq(..), Ord(..), Bool(..),
                 Double, String, Maybe(..), Int, Monad(..),
@@ -574,29 +573,40 @@ handleConstructor _ finalType dec = do
 
 -- NOTE: using unsafePerformIO for testing purposes only. This will
 -- all be pure code in the end.
-runTypingWith :: TypingState -> Expr -> (Either ErrorList Type, TypingState)
-runTypingWith state a = unsafePerformIO $ runStateT (runErrorT $ t a) state
+runTypingWith :: TypingState -> Expr -> IO (Either ErrorList Type, TypingState)
+runTypingWith state a = runStateT (runErrorT $ t a) state
   where t expr = do (type_, subs) <- typeOf expr
                     return $ normalize (apply subs type_)
 
-runTyping :: Expr -> (Either ErrorList Type, TypingState)
+runTyping :: Expr -> IO (Either ErrorList Type, TypingState)
 runTyping = runTypingWith defaultTypingState
 
-runUnify :: Type -> Type -> (Either ErrorList Subs, TypingState)
-runUnify type1 type2 =
+--runTypeChecker :: Typing Expr -> IO (Either ErrorList Type, TypingState)
+--runTypeChecker typing = runStateT (runErrorT typing) defaultTypingState
+
+unsafeRunTypingWith :: TypingState -> Expr -> (Either ErrorList Type, TypingState)
+unsafeRunTypingWith state a = unsafePerformIO $ runStateT (runErrorT $ t a) state
+  where t expr = do (type_, subs) <- typeOf expr
+                    return $ normalize (apply subs type_)
+
+unsafeRunTyping :: Expr -> (Either ErrorList Type, TypingState)
+unsafeRunTyping = unsafeRunTypingWith defaultTypingState
+
+unsafeRunUnify :: Type -> Type -> (Either ErrorList Subs, TypingState)
+unsafeRunUnify type1 type2 =
   unsafePerformIO $ runStateT (runErrorT $ unify (type1, type2)) defaultTypingState
 
-runTypeChecker :: Typing Expr -> (Either ErrorList Expr, TypingState)
-runTypeChecker typing =
-  unsafePerformIO $ runStateT (runErrorT typing) defaultTypingState
+--unsafeRunTypeChecker :: Typing Expr -> (Either ErrorList Expr, TypingState)
+--unsafeRunTypeChecker typing =
+--  unsafePerformIO $ runStateT (runErrorT typing) defaultTypingState
 
 typeIt :: String -> Either ErrorList Type
 typeIt input = case desugarIt input of
   Left err -> Left $ ErrorList ["Parse error:\n" <> show err]
-  Right block -> fst $ runTyping block
+  Right block -> fst $ unsafeRunTyping block
 
 unifyIt :: (String, String) -> Either ErrorList Subs
 unifyIt (input1, input2) = do
   e1 <- grabT input1
   e2 <- grabT input2
-  fst (runUnify e1 e2)
+  fst (unsafeRunUnify e1 e2)

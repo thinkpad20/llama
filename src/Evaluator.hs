@@ -22,6 +22,7 @@ import qualified Data.Array.IO as A
 import Common hiding (intercalate)
 import AST
 import Desugar
+import TypeChecker
 
 type Array a = A.IOArray a
 
@@ -181,37 +182,47 @@ getAttribute = undefined
 getClosure :: Expr -> Expr -> Eval Env
 getClosure (Var argName) expr = do
   newEnv <- new
-  runStateT (go newEnv expr) (S.singleton argName)
+  runStateT (go newEnv expr) [S.singleton argName]
   return newEnv
   where
-    go :: Env -> Expr -> StateT (Set Name) Eval ()
+    go :: Env -> Expr -> StateT [Set Name] Eval ()
     go env = \case
       Number _ -> return ()
       String _ -> return ()
       Block es -> mapM_ (go env) es
       Constructor name -> lift (lookupOrError name) >>= lift . hInsert env name
       Var name | name == argName -> lift $ hInsert env name (VLocal Arg)
-               | otherwise -> S.member name <$> get >>= \case
+               | otherwise -> findName name >>= \case
                  True -> return ()
                  False -> lift . hInsert env name =<< lift (lookupOrError name)
       Apply a b -> go env a >> go env b
-      Lambda param body -> getNames param >> go env body
-      Define var ex -> modify (S.insert var) >> go env ex
+      Lambda param body -> push >> getNames param >> go env body <* pop
+      Define var ex -> addName var >> go env ex
       e -> lift $ throwErrorC ["Can't get closure of ", render e]
-    getNames :: Expr -> StateT (Set Name) Eval ()
+    getNames :: Expr -> StateT [Set Name] Eval ()
     getNames = \case
-      Var name -> modify $ S.insert name
+      Var name -> addName name
       Apply a b -> getNames a >> getNames b
       Tuple es kws -> do
         mapM_ getNames es
-        let kwNames = S.fromList (P.map fst kws)
-        modify $ S.union kwNames
+        forM_ (P.map fst kws) addName
       Number _ -> return ()
       String _ -> return ()
       -- For constructors, we should probably look in surrounding env
       -- first...?
       Constructor _ -> return ()
       param -> lift $ throwErrorC ["Invalid function parameter: ", render param]
+    addName :: Name -> StateT [Set Name] Eval ()
+    addName name = do
+      s:ss <- get
+      put $ (S.insert name s):ss
+    push = modify $ \s -> mempty:s
+    pop = modify $ \(_:ss) -> ss
+    findName :: Name -> StateT [Set Name] Eval Bool
+    findName name = get >>= go where
+      go = \case
+        [] -> return False
+        (s:ss) -> if S.member name s then return True else go ss
 
 builtIns :: IO Env
 builtIns = H.fromList
@@ -280,7 +291,9 @@ runEval expr = do
 evalIt :: String -> IO (Either ErrorList Value)
 evalIt input = case desugarIt input of
   Left err -> return (Left $ ErrorList [render err])
-  Right expr -> fst <$> runEval expr
+  Right expr -> runTyping expr >>= \case
+    (Left err, _) -> return (Left err)
+    _ -> fst <$> runEval expr
 
 log :: Text -> Eval ()
 log s = if hideLogs then return () else lift2 $ P.putStrLn $ unpack s
@@ -289,4 +302,4 @@ log' :: [Text] -> Eval ()
 log' = mconcat ~> log
 
 hideLogs :: Bool
-hideLogs = False
+hideLogs = True
