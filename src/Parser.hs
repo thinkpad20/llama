@@ -361,7 +361,12 @@ pExprOrBlock :: Parser Expr
 pExprOrBlock = choice [ try pBlock, pIf, pExpr ]
 
 pPatternDef :: Parser Expr
-pPatternDef = try $ PatternDef <$> pExpr <* exactSym "=" <*> pBlock
+pPatternDef = try $ do
+  patterns <- pExpr `sepBy1` schar ','
+  block <- exactSym "=" *> pBlock
+  return $ case patterns of
+    [p] -> PatternDef p block
+    ps -> PatternDef (tuple ps) block
 
 pDefine, pExtend, pAssign :: Parser Expr
 pDefine = pPatternDef

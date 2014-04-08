@@ -12,7 +12,6 @@ import TypeLib
 import Parser (grab)
 
 expr e = Block [e]
-testB desc i exprs = Test desc i (Block exprs)
 skipTestB desc i exprs = SkipTest desc i (Block exprs)
 (foo, bar, baz, qux) = (Var "foo", Var "bar", Var "baz", Var "qux")
 [fooC, barC, bazC, quxC] = map Constructor ["Foo", "Bar", "Baz", "Qux"]
@@ -21,9 +20,9 @@ skipTestB desc i exprs = SkipTest desc i (Block exprs)
 print_ = Apply (Var "print")
 assert = Apply (Var "assert")
 arrayS exprs = expr $ Literal $ ArrayLiteral exprs
-listS exprs = expr $ Literal $ ListLiteral exprs
-setS exprs = expr $ Literal $ SetLiteral exprs
-dictS exprs = expr $ Literal $ DictLiteral exprs
+listE exprs = Literal $ ListLiteral exprs
+setE exprs = Literal $ SetLiteral exprs
+dictE exprs = Literal $ DictLiteral exprs
 arrayE exprs = Literal $ ArrayLiteral exprs
 rangeS start stop = rangeE start stop ! expr
 rangeE start stop = ArrayRange start stop ! Literal
@@ -42,7 +41,7 @@ opsFuncs = M.fromList [("+", plus), ("*", times), ("-", minus)
 binOpsTests = [test (T.unpack op) | op <- ops] where
   test op = Test ("can parse `" <> T.pack op <> "'")
                  ("1 " <> op <> " 2")
-                 (expr $ binary (T.pack op) one two)
+                 (binary (T.pack op) one two)
 
 expressionTests :: Test String Expr
 expressionTests = TestGroup "Expressions"
@@ -156,34 +155,34 @@ expressionTests = TestGroup "Expressions"
     , ShouldError "kwargs not at the end" "(@foo=bar, baz)"
     ]
   ]
-  where test i r e = Test i r (expr e)
+  where test i r e = Test i r e
 
 arrayTests :: Test String Expr
 arrayTests = TestGroup "Literals"
   [
     TestGroup "array literals" [
       Test "make array literals" "[foo, bar, baz]"
-           (arrayS [foo, bar, baz])
-    , Test "empty array" "[]" (arrayS [])
+           (arrayE [foo, bar, baz])
+    , Test "empty array" "[]" (arrayE [])
     , Test "with complex expressions" "[foo * 1 + bar, baz (qux foo.bar)]"
-           (arrayS [ plus (times foo one) bar
+           (arrayE [ plus (times foo one) bar
                    , Apply baz (Apply qux (Dot foo bar))])
-    , Test "nested" "[foo, [bar, baz]]" (arrayS [foo, arrayE [bar, baz]])
+    , Test "nested" "[foo, [bar, baz]]" (arrayE [foo, arrayE [bar, baz]])
     , Test "use as arguments" "foo [1, bar, baz]"
-           (Block [Apply foo $ arrayE [one, bar, baz]])
+           (Apply foo $ arrayE [one, bar, baz])
     ]
   , TestGroup "array ranges" [
-      Test "make array ranges" "[foo..bar]" (rangeS foo bar)
+      Test "make array ranges" "[foo..bar]" (rangeE foo bar)
     , Test "nested with array literals" "[foo..[bar, baz]]"
-           (rangeS foo (arrayE [bar, baz]))
+           (rangeE foo (arrayE [bar, baz]))
     ]
   , TestGroup "lists" [
-      Test "basics" "[l foo, bar]" (listS [foo, bar])
+      Test "basics" "[l foo, bar]" (listE [foo, bar])
   ]
   , TestGroup "lists" [
-      Test "basics" "{s foo, bar}" (setS [foo, bar])
+      Test "basics" "{s foo, bar}" (setE [foo, bar])
   ], TestGroup "dicts" [
-      Test "basics" "{d foo => bar, baz => qux}" (dictS [(foo, bar), (baz, qux)])
+      Test "basics" "{d foo => bar, baz => qux}" (dictE [(foo, bar), (baz, qux)])
   ]
   , TestGroup "array dereference" [
       Test "make array reference" "foo[: bar]" (DeRef foo bar)
@@ -283,22 +282,20 @@ functionTests = TestGroup "Functions"
            (Assign foo (Lambda (Typed bar bazT) (Apply qux bar)))
     , Test "should be able to be used in a binary operator"
            "foo $ bar: Bar => bar + 2"
-           (expr $ Apply (Var "$")
-                 $ tuple [foo, (Lambda (Typed bar barT)
-                               (plus bar two))])
+           (Apply (Apply (Var "$") foo) $ (Lambda (Typed bar barT) (plus bar two)))
     , Test "should grab as much as we can"
            "bar: Bar => bar + 2 $ foo"
            (eLambda (Typed bar barT) (bAp (plus bar two) foo))
     , Test "should be able to string alternatives"
            "1 => 2 | 2 => 3"
-           (eLambdas [(one, two), (two, three)])
+           (lambdas [(one, two), (two, three)])
     , Test "should be able to handle complex lambdas"
            "(1 => 2 | 2 => 3 | foo => bar baz) 3"
            (Apply (lambdas [(one, two), (two, three), (foo, Apply bar baz)]) three)
     ]
-  , TestGroup "Defined functions" [
+  , TestGroup "Patterns & defined functions" [
       Test "should make a function definition"
-           "foo(bar: Bar) = bar"
+           "foo (bar: Bar) = bar"
            (PatternDef (Apply foo (Typed bar barT)) bar)
     , Test "should make a function definition with multiple args"
            "foo(bar: Bar) (baz: Baz) = bar + baz"
@@ -312,6 +309,8 @@ functionTests = TestGroup "Functions"
            "(bar: a) <*> (baz: b) = bar baz"
            (PatternDef (binary "<*>" (Typed bar (TVar "a"))
                                      (Typed baz (TVar "b"))) $ Apply bar baz)
+    , Test "should sugar tuple assignment" "foo, bar = (1, 2)"
+           (PatternDef (tuple [foo, bar]) (tuple [one, two]))
     ]
   , TestGroup "LambdaDots" [
       Test "basic" ".foo" (LambdaDot foo)
@@ -322,9 +321,8 @@ functionTests = TestGroup "Functions"
   ]
   ]
   where tup1 = tuple [Typed foo fooT, Typed bar barT]
-        eLambda arg body = expr $ Lambda arg body
+        eLambda arg body = Lambda arg body
         lambdas abds = Lambdas abds
-        eLambdas = expr . lambdas
 
 assignmentTests :: Test String Expr
 assignmentTests = TestGroup "Assignments"
@@ -395,7 +393,7 @@ objectTests = TestGroup "Object declarations" [
                , objConstrs = [barCr, fooCr {constrArgs = [Typed bar a]}]
                , objAttrs = [Typed foo numT, Typed bar strT]})
   ] where
-      test1 desc input ex = Test desc input (expr $ ObjDec ex)
+      test1 desc input ex = Test desc input (ObjDec ex)
       obj = defObj { objName = "Foo", objConstrs = [fooCr]}
       fooCr = defConstr {constrName = "Foo"}
       barCr = defConstr {constrName = "Bar"}
@@ -461,107 +459,107 @@ blockTests = TestGroup "Blocks"
   [
     skipTest "separate expressions into blocks by newline"
           "foo\nbar\nbaz qux"
-          [foo, bar, Apply baz qux]
+          (Block [foo, bar, Apply baz qux])
   , test "separate expressions into blocks by semicolon"
          "foo;bar;baz qux"
-         [foo, bar, Apply baz qux]
-  , test "after" "foo after bar" [foo `After` bar]
+         (Block [foo, bar, Apply baz qux])
+  , test "after" "foo after bar" (foo `After` bar)
   , test "after with block" "foo after {bar; baz}"
-         [foo `After` Block [bar, baz]]
-  , test "before" "foo before bar" [foo `Before` bar]
+         (foo `After` Block [bar, baz])
+  , test "before" "foo before bar" (foo `Before` bar)
   , test "before with block" "foo before {bar; baz}"
-         [foo `Before` Block [bar, baz]]
+         (foo `Before` Block [bar, baz])
   , skipTest "after with block 2" "{foo; bar} after {bar; baz}"
-         [Block [foo, bar] `After` Block [bar, baz]]
+         (Block [foo, bar] `After` Block [bar, baz])
   , skipTest "before with block 2" "{foo; bar} before {bar; baz}"
-         [Block [foo, bar] `Before` Block [bar, baz]]
+         (Block [foo, bar] `Before` Block [bar, baz])
   ]
-  where test descr i es = Test descr i (Block es)
-        skipTest descr i es = SkipTest descr i (Block es)
+  where test descr i es = Test descr i es
+        skipTest descr i es = SkipTest descr i es
 
 flowTests :: Test String Expr
 flowTests = TestGroup "Program flow"
   [
-    testB "return" "return" [Return unit]
-  , testB "return with expr" "return 3" [Return three]
-  , testB "return in a series of statements"
+    Test "return" "return" (Return unit)
+  , Test "return with expr" "return 3" (Return three)
+  , Test "return in a series of statements"
          "foo bar; return 3; baz qux"
-         [Apply foo bar, Return three, Apply baz qux]
+         (Block [Apply foo bar, Return three, Apply baz qux])
   ]
 
 ifTests :: Test String Expr
 ifTests = TestGroup "If statements"
   [
-    testB "basic one-line" "if 1 then 2 else 3" [If one two three]
-  , testB "basic block" "if 1 { 2 } else { 3 }" [If one two three]
-  , testB "basic block" "if 1 { 2 } else { 3 }" [If one two three]
-  , testB "basic mixed 1" "if 1 then 2 else { 3 }" [If one two three]
-  , testB "basic mixed 2" "if 1 { 2 } else 3" [If one two three]
-  , testB "without else" "if 1 { 2 }; if 2 then 3"
-    [If' one two, If' two three]
-  , testB "without else then with" "if 1 { 2 }; if 2 then 3 else 1"
-    [If' one two, If two three one]
-  , testB "used in lambda" "n: Num => if n then 2 else 3"
-    [Lambda (Typed (Var "n") numT) $ If (Var "n") two three]
-  , testB "used in define" "foo (n: Num) = if n then 2 else 3"
-    [PatternDef (Apply foo (Typed (Var "n") numT)) $ If (Var "n") two three]
-  , testB "nested" "if True then 1 else if False then 2 else 3"
-    [If true one (If false two three)]
-  , testB "nested 2" "if True then if False then 1 else 2 else 3"
-    [If true (If false one two) three]
-  , testB "nested 3" "if if True then False else True then 1 else 2"
-    [If (If true false true) one two]
+    Test "basic one-line" "if 1 then 2 else 3" (If one two three)
+  , Test "basic block" "if 1 { 2 } else { 3 }" (If one two three)
+  , Test "basic block" "if 1 { 2 } else { 3 }" (If one two three)
+  , Test "basic mixed 1" "if 1 then 2 else { 3 }" (If one two three)
+  , Test "basic mixed 2" "if 1 { 2 } else 3" (If one two three)
+  , Test "without else" "if 1 { 2 }; if 2 then 3"
+    (Block [If' one two, If' two three])
+  , Test "without else then with" "if 1 { 2 }; if 2 then 3 else 1"
+    (Block [If' one two, If two three one])
+  , Test "used in lambda" "n: Num => if n then 2 else 3"
+    (Lambda (Typed (Var "n") numT) $ If (Var "n") two three)
+  , Test "used in define" "foo (n: Num) = if n then 2 else 3"
+    (PatternDef (Apply foo (Typed (Var "n") numT)) $ If (Var "n") two three)
+  , Test "nested" "if True then 1 else if False then 2 else 3"
+    (If true one (If false two three))
+  , Test "nested 2" "if True then if False then 1 else 2 else 3"
+    (If true (If false one two) three)
+  , Test "nested 3" "if if True then False else True then 1 else 2"
+    (If (If true false true) one two)
   ]
 
 caseTests :: Test String Expr
 caseTests = TestGroup "Case statements"
   [
-    testB "basic" "case 1 of 2 => 3" [MultiCase one [([two], three)]]
-  , testB "multiple options" "case 1 of 2 => 3 | 3 => 1"
-         [MultiCase one [([two], three), ([three], one)]]
-  , testB "multiple patterns" "case 1 of 1, 2 => 3 | 3 => 1"
-         [MultiCase one [([one, two], three), ([three], one)]]
-  , testB "multiple patterns 2" "case 1 of 1, 2 => 3 | 3, 1, foo bar => 1"
-         [MultiCase one [([one, two], three), ([three, one, Apply foo bar], one)]]
-  , testB "with variable" "case foo of 2 => bar 3 | baz 3 => 1"
-         [MultiCase foo [([two], Apply bar three), ([Apply baz three], one)]]
-  , testB "separated by semicolon"
+    Test "basic" "case 1 of 2 => 3" (MultiCase one [([two], three)])
+  , Test "multiple options" "case 1 of 2 => 3 | 3 => 1"
+         (MultiCase one [([two], three), ([three], one)])
+  , Test "multiple patterns" "case 1 of 1, 2 => 3 | 3 => 1"
+         (MultiCase one [([one, two], three), ([three], one)])
+  , Test "multiple patterns 2" "case 1 of 1, 2 => 3 | 3, 1, foo bar => 1"
+         (MultiCase one [([one, two], three), ([three, one, Apply foo bar], one)])
+  , Test "with variable" "case foo of 2 => bar 3 | baz 3 => 1"
+         (MultiCase foo [([two], Apply bar three), ([Apply baz three], one)])
+  , Test "separated by semicolon"
          "case foo of 2 => bar 3 | baz 3 => 1; case 1 of 2 => 3"
-         [MultiCase foo [([two], Apply bar three), ([Apply baz three], one)]
-         , MultiCase one [([two], three)]]
+         (Block [MultiCase foo [([two], Apply bar three), ([Apply baz three], one)]
+         , MultiCase one [([two], three)]])
   ]
 
 forTests :: Test String Expr
 forTests = TestGroup "For statements"
  [
     TestGroup "single statements" [
-      testB "for block via 'do'" "for foo; bar; baz do qux;"
-           [For foo bar baz qux]
+      Test "for block via 'do'" "for foo; bar; baz do qux;"
+           (For foo bar baz qux)
     , skipTestB "for block via 'do' with following expression"
            "for foo; bar; baz do qux\nfoo"
            [For foo bar baz qux, baz]
-    , testB "for block via 'do' with following expression, split by semicolon"
+    , Test "for block via 'do' with following expression, split by semicolon"
            "for foo; bar; baz do qux; foo"
-           [For foo bar baz qux, foo]
+           (Block [For foo bar baz qux, foo])
     ]
   , TestGroup "using curly braces" [
-      testB "basic" "for foo; bar; baz {2}"
-           [For foo bar baz two]
-    , testB "multiple statements"
+      Test "basic" "for foo; bar; baz {2}"
+           (For foo bar baz two)
+    , Test "multiple statements"
            "for foo; bar; baz {2; 3}"
-           [For foo bar baz $ Block [two, three]]
+           (For foo bar baz $ Block [two, three])
     , skipTestB "complex statements"
            "for foo bar; baz; qux; {bar 2; baz 3}"
            [For (Apply foo bar) baz qux $ Block [Apply bar two, Apply baz three]]
-    , testB "followed by other statement, using semicolon"
+    , Test "followed by other statement, using semicolon"
            "for foo; bar; baz { qux }; foo"
-           [For foo bar baz qux, foo]
-    , testB "nested for statements 1"
+           (Block [For foo bar baz qux, foo])
+    , Test "nested for statements 1"
            "for foo; bar; baz { for bar; baz; qux {3}}"
-           [ For foo bar baz (For bar baz qux three)]
-    , testB "nested for statements 2"
+           (For foo bar baz (For bar baz qux three))
+    , Test "nested for statements 2"
            "for foo; bar; baz {2; for bar; baz; qux { 3}; baz}; qux"
-           [For foo bar baz $ Block [two, For bar baz qux three, baz], qux]
+           (Block [For foo bar baz $ Block [two, For bar baz qux three, baz], qux])
     ]
   ]
 
@@ -569,10 +567,10 @@ forInTests :: Test String Expr
 forInTests = TestGroup "For statements" tests where
   tests =
     [
-      testB "basic" "for foo in bar { baz }" [ForIn foo bar baz]
-    , testB "basic one-line" "for foo in bar do baz" [ForIn foo bar baz]
-    , testB "nested via one-line" "for foo in bar do for baz in qux do 1"
-      [ForIn foo bar (ForIn baz qux one)]
+      Test "basic" "for foo in bar { baz }" (ForIn foo bar baz)
+    , Test "basic one-line" "for foo in bar do baz" (ForIn foo bar baz)
+    , Test "nested via one-line" "for foo in bar do for baz in qux do 1"
+      (ForIn foo bar (ForIn baz qux one))
     ]
 
 doTests = runTests grab [ expressionTests
