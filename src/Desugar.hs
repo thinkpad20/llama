@@ -6,7 +6,9 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE ScopedTypeVariables #-}
-module Desugar (desugarIt, desugarIt') where
+module Desugar (desugarIt, desugarIt',dsLambdas, dsLambdaDot,
+                dsConstructors, dsDot, dsForever, dsForIn, dsIf',
+                dsAfterBefore, dsPrefixLine) where
 
 import Prelude (IO, Show(..), Eq(..), Ord(..), Bool(..),
                 Double, String, Maybe(..), Int, Monad(..),
@@ -240,7 +242,7 @@ dsForIn = ("For in", test, ds) where
 dsForever = ("Forever", test, ds) where
   test (Forever _) = True
   test _ = False
-  ds (Forever expr) = For unit unit unit <$> rec expr
+  ds (Forever expr) = For unit true unit <$> rec expr
   rec = traverse ("Forever", test, ds)
 
 dsInString = tup where
@@ -349,12 +351,6 @@ desugar :: Expr -> Desugar Expr
 desugar expr = go desugarers expr where
   go [] e = return e
   go (d:ds) e = traverse d e >>= go ds
-
-log :: Text -> Desugar ()
-log = lift . lift . putStrLn . unpack
-
-log' :: [Text] -> Desugar ()
-log' = log . mconcat
 
 runDesugarWith :: DesugarerEnv -> Expr -> (Either ErrorList Expr, DesugarerEnv)
 runDesugarWith state e =

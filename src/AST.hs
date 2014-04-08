@@ -258,3 +258,7 @@ just = Apply (Constructor "Just")
 
 nothing :: Expr
 nothing = Constructor "Nothing"
+
+true, false :: Expr
+true = Constructor "True"
+false = Constructor "False"

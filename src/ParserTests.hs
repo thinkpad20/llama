@@ -36,7 +36,6 @@ opsFuncs = M.fromList [("+", plus), ("*", times), ("-", minus)
                       , ("==", eq), ("!=", neq), ("|>", fAp), ("$", bAp)
                       , ("~>", fComp), ("<~", bComp)]
 (one, two, three) = (Number 1, Number 2, Number 3)
-(true, false) = (Constructor "True", Constructor "False")
 
 binOpsTests = [test (T.unpack op) | op <- ops] where
   test op = Test ("can parse `" <> T.pack op <> "'")

@@ -13,24 +13,26 @@ module Common ( (!), (<!>), (<$>), (<$), (<*), (*>), (<*>), pure
               , trim, line, throwError, catchError, (~>), Render(..)
               , isInt, ErrorList(..), throwError1, throwErrorC, addError
               , addError', forever, isSpace, catMaybes, sortWith, each
-              , unless, mconcatMapM, show, whenM, unlessM, lift2)
+              , unless, mconcatMapM, show, whenM, unlessM, lift2, toList
+              , mapM_)
               where
 
-import Prelude hiding (show)
+import Prelude hiding (show, mapM_)
 import qualified Prelude as P
-import Control.Monad
-import "mtl" Control.Monad.State
-import "mtl" Control.Monad.Error
+import Control.Monad hiding (forM_, mapM_)
+import "mtl" Control.Monad.State hiding (forM_, mapM_)
+import "mtl" Control.Monad.Error hiding (forM_, mapM_)
 import Data.Monoid
 import GHC.Exts (sortWith)
 import qualified Data.Text as T
 import Control.Applicative hiding (many, (<|>))
 import Data.List (intercalate)
-import "mtl" Control.Monad.Identity
+import "mtl" Control.Monad.Identity hiding (forM_, mapM_)
 import Data.Char (isSpace)
 import Data.Maybe (catMaybes)
 import qualified Data.Map as M
 import qualified Data.Set as S
+import Data.Foldable
 import Text.Parsec (ParseError)
 
 newtype ErrorList = ErrorList [T.Text]

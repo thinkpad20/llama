@@ -65,6 +65,9 @@ typeOf e = case e of
 
   Tuple exprs kw -> typeOfTuple typeOf exprs kw
   TypeDef name type_ -> addTypeAlias name type_ *> only unitT
+  Modified mod expr -> do
+    (t, s) <- typeOf expr
+    return (TMod mod t, s)
   expr -> throwErrorC ["Can't handle ", show expr, " or needs desugaring"]
 
 typeOfTuple :: TypeOf Expr -> [Expr] -> Kwargs -> Typing (Type, Subs)

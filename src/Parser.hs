@@ -350,7 +350,7 @@ pBlock =  choice [ pOpenBrace *> pExpressionsNoWS <* pCloseBrace
 
 pFor :: Parser Expr
 pFor = try pFor' <|> try pForIn <|> pForever
-  where pFor' = For <$ keyword "for" <*> pExpr <* schar ';'
+  where pFor' = For <$ keyword "for" <*> pExpression <* schar ';'
                                      <*> pExpr <* schar ';'
                                      <*> pExpr <*> pBlock
         pForIn = ForIn <$ keyword "for" <*> pExpr <* keyword "in"
@@ -411,10 +411,10 @@ pIf :: Parser Expr
 pIf = do
   keyword "if"
   cond <- pExpr
-  true <- pThen
-  option (If' cond true) $ do
-    false <- pElse
-    return $ If cond true false
+  trueBranch <- pThen
+  option (If' cond trueBranch) $ do
+    falseBranch <- pElse
+    return $ If cond trueBranch falseBranch
 
 pThen, pElse :: Parser Expr
 pThen = pBlock <|> do keyword "then" <|> return "then"
