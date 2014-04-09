@@ -8,14 +8,14 @@ module EvaluatorLib where
 
 import Prelude (IO, Eq(..), Ord(..), Bool(..)
                , Double, Maybe(..), undefined, Monad(..)
-               , ($), Int, (.), (*), Either(..), String
-               , fst, (+), (-), (/), (=<<), otherwise, fmap)
+               , ($), Int, (.), (+), Either(..), String
+               , fst, (=<<), otherwise, fmap)
 import qualified Prelude as P
 import qualified Data.HashTable.IO as H
 import Data.HashMap hiding (lookup, (!), toList)
 import "hashmap" Data.HashSet hiding (toList)
 import qualified "hashmap" Data.HashSet as S
-import Data.Text
+import Data.Text hiding (length)
 import Data.Sequence
 import qualified Data.Array.IO as A
 import Data.IORef
@@ -38,6 +38,10 @@ data Value = VNumber !Double
            | VString !Text
            | VVector !(Seq Value)
            | VTuple  !(Seq Value)
+           | VReturn !Value
+           | VBreak  !Value
+           | VContinue
+           | VThrow  !Value
            | PMap !PMap
            | MMap !MMap
            | PSet !PSet
@@ -62,6 +66,12 @@ instance Render Value where
     VVector vals -> "[" <> intercalate "," (toList $ fmap render vals) <> "]"
     VTuple  vals -> "(" <> intercalate "," (toList $ fmap render vals) <> ")"
     VLocal _ -> "(some reference)"
+    VReturn (VTuple tup) | length tup == 0 -> "return"
+    VReturn val -> "return " <> render val
+    VBreak (VTuple tup) | length tup == 0 -> "break"
+    VBreak val -> "break " <> render val
+    VThrow val -> "throw " <> render val
+    VContinue -> "continue"
     VObj obj -> show obj
     Closure (Just name) _ _ -> "Function `" <> name <> "'"
     Closure Nothing expr _ -> "Anonymous Function {" <> render expr <> "}"
@@ -91,7 +101,10 @@ data Obj = Obj {
 _obj :: Obj
 _obj = Obj {outerType=unitT, innerType="", attribs=Nothing}
 
-newtype EvalState = ES [Frame]
+data EvalState = ES {
+    esStack :: [Frame]
+  , esInstrCount :: IORef Int
+  }
 data Frame = Frame {
     eEnv :: !Env
   , eTrace :: !StackTraceEntry
@@ -106,6 +119,11 @@ data StackTraceEntry = STE {
 
 defSTE :: StackTraceEntry
 defSTE = STE {steLine=0, steColumn=0, steFuncName=""}
+
+addCount :: Eval ()
+addCount = do
+ ES {esInstrCount=c} <- get
+ lift2 $ modifyIORef c (+1)
 
 type Eval = ErrorT ErrorList (StateT EvalState IO)
 
@@ -138,13 +156,13 @@ new = lift2 H.new
 pushFrame :: Name -> Value -> Env -> Eval ()
 pushFrame name arg env = do
   let frame = Frame {eArg=arg, eEnv=env, eTrace=trace}
-  modify $ \(ES frames) -> ES (frame:frames)
+  modify $ \es@(ES {esStack=frames}) -> es {esStack=frame:frames}
   where trace = defSTE {steFuncName=name}
 
 popFrame :: Eval ()
 popFrame = get >>= \case
-  ES [] -> throwError1 "Tried to pop an empty stack"
-  ES (_:frames) -> put $ ES frames
+  ES {esStack=[]} -> throwError1 "Tried to pop an empty stack"
+  es@(ES {esStack=(_:frames)}) -> put es {esStack=frames}
 
 hInsert :: Env -> Name -> Value -> Eval ()
 hInsert env key val = lift2 $ H.insert env key val
@@ -157,7 +175,7 @@ renderNS names = P.reverse names ! intercalate "/"
 
 lookup :: Name -> Eval (Maybe Value)
 lookup name = do
-  ES stack <- get
+  ES {esStack=stack} <- get
   lift2 $ loop stack
   where loop :: [Frame] -> IO (Maybe Value)
         loop [] = return Nothing
@@ -182,7 +200,7 @@ lookupOrError name = lookup name >>= \case
 
 store :: Name -> Value -> Eval Value
 store name val = do
-  ES (f:_) <- get
+  ES {esStack=(f:_)} <- get
   hInsert (eEnv f) name val
   pure val
 
@@ -251,7 +269,7 @@ getClosure (Var argName) expr = do
 deref :: LocalRef -> Eval Value
 deref Arg = do
   log' ["Dereferencing arg"]
-  ES (f:_) <- get
+  ES {esStack=(f:_)} <- get
   pure (eArg f)
 deref ref = error $ "Can't handle reference type " <> render ref
 

@@ -1,9 +1,10 @@
-import Common
 import Evaluator
-import EvaluatorLib
-import TypeChecker
-import qualified Data.Text as T
 
-input = "i = mut 0; r = mut 0; while i < 100000 {r := r + i; i := i + 1}; r"
+input :: String
+input = "result = ref 0; for i = ref 1; i <= 100000; i := i + 1 do result := result + i; println result"
 
-main = evalIt defaultState defaultTypingState input >> return ()
+main :: IO ()
+main = do
+  putStrLn "Here we go!"
+  evalIt input >>= print
+  putStrLn "Done!"

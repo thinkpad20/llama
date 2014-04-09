@@ -55,31 +55,30 @@ bi_read = ("read", read) where
   read val = typeError "Reference" val
 
 bi_plus, bi_minus, bi_divide, bi_times, bi_eq,
-  bi_lt, bi_gt, bi_neq, bi_leq, bi_geq, bi_incr :: Builtin
-bi_plus = bi_binary "+" (+)
-bi_minus = bi_binary "-" (-)
-bi_times = bi_binary "*" (*)
-bi_divide = bi_binary "/" (/)
-bi_eq = bi_binaryBool "==" (==)
-bi_lt = bi_binaryBool "<" (<)
-bi_gt = bi_binaryBool ">" (>)
-bi_leq = bi_binaryBool "<=" (<=)
-bi_geq = bi_binaryBool ">=" (>=)
-bi_neq = bi_binaryBool "!=" (/=)
+  bi_lt, bi_gt, bi_neq, bi_leq, bi_geq, bi_incr,
+  bi_vectorAppend, bi_vectorPrepend,
+  bi_vectorRefAppend, bi_vectorRefPrepend :: Builtin
+bi_plus = bi_binaryDDD "+" (+)
+bi_minus = bi_binaryDDD "-" (-)
+bi_times = bi_binaryDDD "*" (*)
+bi_divide = bi_binaryDDD "/" (/)
+bi_eq = bi_binaryDDB "==" (==)
+bi_lt = bi_binaryDDB "<" (<)
+bi_gt = bi_binaryDDB ">" (>)
+bi_leq = bi_binaryDDB "<=" (<=)
+bi_geq = bi_binaryDDB ">=" (>=)
+bi_neq = bi_binaryDDB "!=" (/=)
 
-bi_vectorAppend :: Builtin
 bi_vectorAppend = ("Vector append", unboxTo f) where
   f (VVector vec) = pure $ Builtin ("Vector append " <> render vec, f' vec)
   f val = typeError "Vector" val
   f' vec val = pure $ VVector $ vec |> val
 
-bi_vectorPrepend :: Builtin
 bi_vectorPrepend = ("Vector prepend", unboxTo f) where
   f (VVector vec) = pure $ Builtin ("Vector prepend " <> render vec, f' vec)
   f val = typeError "Vector" val
   f' vec val = pure $ VVector $ val <| vec
 
-bi_vectorRefAppend :: Builtin
 bi_vectorRefAppend = ("Vector append!", f) where
   f (VRef ref) = pure $ Builtin ("Vector append! with arg", f' ref)
   f val = typeError "Reference" val
@@ -87,7 +86,6 @@ bi_vectorRefAppend = ("Vector append!", f) where
     VVector vec -> writeRef ref $ VVector $ vec |> val
     val' -> typeError "Vector" val'
 
-bi_vectorRefPrepend :: Builtin
 bi_vectorRefPrepend = ("Vector prepend!", f) where
   f (VRef ref) = pure $ Builtin ("Vector prepend! with arg", f' ref)
   f val = typeError "Reference" val
@@ -95,8 +93,19 @@ bi_vectorRefPrepend = ("Vector prepend!", f) where
     VVector vec -> writeRef ref $ VVector $ val <| vec
     val' -> typeError "Vector" val'
 
-bi_binary :: Name -> (Double -> Double -> Double) -> Builtin
-bi_binary name op = (name, unboxTo f) where
+bi_incr = ("incr!", f) where
+  f :: Value -> Eval Value
+  f (VRef ref) = incr ref
+  f val = typeError "reference" val
+  incr ref = lift2 (readIORef ref) >>= \case
+    VNumber n -> do
+      let val = VNumber (n + 1)
+      lift2 $ writeIORef ref val
+      return val
+    val -> throwErrorC ["Expecting a number, not `", render val, "'"]
+
+bi_binaryDDD :: Name -> (Double -> Double -> Double) -> Builtin
+bi_binaryDDD name op = (name, unboxTo f) where
   f (VNumber n) = pure $ Builtin (render n <> name, unboxTo (fN n))
   f (VLocal ref) = deref ref >>= \case
     VNumber n -> pure $ Builtin (render n <> name, unboxTo (fN n))
@@ -106,8 +115,8 @@ bi_binary name op = (name, unboxTo f) where
   fN n (VLocal ref) = fN n =<< deref ref
   fN _ val = numTypeError val
 
-bi_binaryBool :: Name -> (Double -> Double -> Bool) -> Builtin
-bi_binaryBool name op = (name, unboxTo f) where
+bi_binaryDDB :: Name -> (Double -> Double -> Bool) -> Builtin
+bi_binaryDDB name op = (name, unboxTo f) where
   f (VNumber n) = pure $ Builtin (render n <> name, unboxTo (fN n))
   f (VLocal ref) = deref ref >>= \case
     VNumber n -> pure $ Builtin (render n <> name, unboxTo (fN n))
@@ -116,14 +125,3 @@ bi_binaryBool name op = (name, unboxTo f) where
   fN n (VNumber n') = pure $ VBool (op n n')
   fN n (VLocal ref) = fN n =<< deref ref
   fN _ val = numTypeError val
-
-bi_incr = ("incr!", f) where
-  f :: Value -> Eval Value
-  f (VRef ref) = incr ref
-  f _ = throwErrorC ["Expecting a reference to incr."]
-  incr ref = lift2 (readIORef ref) >>= \case
-    VNumber n -> do
-      let val = VNumber (n + 1)
-      lift2 $ writeIORef ref val
-      return val
-    val -> throwErrorC ["Expecting a number, not `", render val, "'"]

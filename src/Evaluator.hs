@@ -4,14 +4,16 @@
 {-# LANGUAGE TypeSynonymInstances #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE OverlappingInstances #-}
-module Evaluator where
+module Evaluator (EvalState, initState, evalIt, evalIt', evalItWith) where
 
 import Prelude (IO, Eq(..), Ord(..), Bool(..)
                , Double, Maybe(..), undefined, Monad(..)
                , ($), Int, (.), (*), Either(..), String
-               , fst, (+), (-), (/), (=<<), otherwise, fmap)
+               , fst, snd, (+), (-), (/), (=<<), otherwise, fmap)
 import qualified Prelude as P
-import Control.Monad.Loops
+import Data.Sequence (length)
+import Data.IORef
+import Data.Text hiding (length)
 
 import Common hiding (intercalate)
 import AST
@@ -19,11 +21,10 @@ import Desugar
 import TypeChecker
 import EvaluatorLib
 import EvaluatorBuiltins
-import Data.Sequence (length)
 
 
 eval :: Expr -> Eval Value
-eval = \case
+eval expression = addCount >> case expression of
   Number n -> return (VNumber n)
   String s -> return (VString s)
   Constructor "True" -> return (VBool True)
@@ -56,9 +57,16 @@ eval = \case
   Assign (Var name) expr -> lookupOrError name >>= \case
     VRef ref -> writeRef ref =<< eval expr
     val -> typeError "Reference" val
-  For start cond step expr -> return unitV <* do
+  For start cond step body -> do
     eval start
-    whileM_ (checkBool =<< eval cond) $ (eval expr >> eval step)
+    loop where
+    loop = do
+      eval cond >>= checkBool >>= \case
+        False -> return unitV
+        True -> eval body >>= \case
+          VReturn val -> return (VReturn val)
+          VBreak _ -> return unitV
+          _ -> eval step >> loop
   If c t f -> eval c >>= \case
     VBool True -> eval t
     VBool False -> eval f
@@ -88,31 +96,48 @@ evalFunc func arg = case func of
   Closure n expr env -> do
     let name = case n of {Just nm -> nm; Nothing -> "anonymous function"}
     pushFrame name arg env *> eval expr <* popFrame
-  Builtin (name, bi) -> do
-    log' ["Evaluating ", name, " on arg ", render arg]
-    result <- bi arg
-    log' ["Result is ", render result]
-    return result
+  Builtin (_, bi) -> bi arg
 
 evalLamda :: Expr -> Expr -> Eval Value
 evalLamda param body = Closure Nothing body <$> getClosure param body
 
-runEval :: Expr -> IO (Either ErrorList Value, EvalState)
-runEval expr = do
+initState :: IO EvalState
+initState = do
   env <- builtIns
+  ref <- newIORef 0
   let frame = Frame {eEnv=env, eArg=unitV, eTrace=defSTE}
-      initState = ES [frame]
-  runStateT (runErrorT (eval expr)) initState
+  return ES {esStack=[frame], esInstrCount=ref}
 
-evalIt :: String -> IO (Either ErrorList Value)
-evalIt input = case desugarIt input of
-  Left err -> return (Left $ ErrorList [render err])
-  Right expr -> do
-    when doTypeChecking (runTyping expr >> return ())
-    fst <$> runEval expr >>= \case
-      Left err -> return $ Left err
-      Right val@(VTuple tup) | length tup == 0 -> return (Right val)
-      Right val -> print val >> return (Right val)
+runEval :: Expr -> IO (Either ErrorList Value, EvalState)
+runEval expr = initState >>= \s -> runEvalWith s expr
+
+runEvalWith :: EvalState -> Expr -> IO (Either ErrorList Value, EvalState)
+runEvalWith state expr = runStateT (runErrorT (eval expr)) state
+
+evalIt :: String -> IO (Either ErrorList Value, EvalState)
+evalIt input = do
+  state <- initState
+  evalItWith state input
 
 evalIt' :: String -> IO ()
 evalIt' input = evalIt input >> return ()
+
+evalItWith :: EvalState -> String -> IO (Either ErrorList Value, EvalState)
+evalItWith state input = case desugarIt input of
+  Left err -> return (Left $ ErrorList [render err], state)
+  Right expr -> do
+    when doTypeChecking (runTyping expr >> return ())
+    runEvalWith state expr >>= \case
+      r@(Left err, _) -> do
+        putStrLn "Error:"
+        print err
+        return r
+      (res, state') -> case res of
+        Right val@(VTuple tup) | length tup == 0 -> finish val
+        Right val -> print val >> finish val
+        where
+          finish val = do
+            let ref = esInstrCount state'
+            count <- readIORef ref
+            putStrLn $ "Evaluated " <> show count <> " expressions"
+            return (Right val, state')
