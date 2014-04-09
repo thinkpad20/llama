@@ -44,7 +44,7 @@ data Value = VNumber !Double
            | MSet !MSet
            | VRef !(IORef Value)
            | VLocal !LocalRef
-           | Closure !Expr !Env
+           | Closure !(Maybe Name) !Expr !Env
            | VObj !Obj
            | Builtin !Builtin
            deriving (P.Show)
@@ -63,7 +63,8 @@ instance Render Value where
     VTuple  vals -> "(" <> intercalate "," (toList $ fmap render vals) <> ")"
     VLocal _ -> "(some reference)"
     VObj obj -> show obj
-    Closure expr _ -> "Closure(" <> render expr <> ")"
+    Closure (Just name) _ _ -> "Function `" <> name <> "'"
+    Closure Nothing expr _ -> "Anonymous Function {" <> render expr <> "}"
     Builtin (name, _) -> "Builtin: " <> name
     val -> show val
   renderIO (VRef ref) = render <$> readIORef ref
@@ -92,9 +93,19 @@ _obj = Obj {outerType=unitT, innerType="", attribs=Nothing}
 
 newtype EvalState = ES [Frame]
 data Frame = Frame {
-    eEnv :: Env
-  , eArg :: Value
+    eEnv :: !Env
+  , eTrace :: !StackTraceEntry
+  , eArg :: !Value
   }
+
+data StackTraceEntry = STE {
+    steLine :: !Int
+  , steColumn :: !Int
+  , steFuncName :: !Text
+  }
+
+defSTE :: StackTraceEntry
+defSTE = STE {steLine=0, steColumn=0, steFuncName=""}
 
 type Eval = ErrorT ErrorList (StateT EvalState IO)
 
@@ -124,10 +135,11 @@ justV val = do
 new :: Eval Env
 new = lift2 H.new
 
-pushFrame :: Value -> Env -> Eval ()
-pushFrame arg env = do
-  let frame = Frame {eArg=arg, eEnv=env}
+pushFrame :: Name -> Value -> Env -> Eval ()
+pushFrame name arg env = do
+  let frame = Frame {eArg=arg, eEnv=env, eTrace=trace}
   modify $ \(ES frames) -> ES (frame:frames)
+  where trace = defSTE {steFuncName=name}
 
 popFrame :: Eval ()
 popFrame = get >>= \case

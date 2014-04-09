@@ -49,7 +49,9 @@ eval = \case
     evalFunc funcV argV
   Attribute expr name -> getAttribute name =<< eval expr
   Lambda param body -> evalLamda param body
-  Define name expr -> store name =<< eval expr
+  Define name expr -> eval expr >>= \case
+    Closure Nothing body env -> store name (Closure (Just name) body env)
+    val -> store name val
   Modified Ref expr -> newRef =<< eval expr
   Assign (Var name) expr -> lookupOrError name >>= \case
     VRef ref -> writeRef ref =<< eval expr
@@ -83,15 +85,9 @@ evalBlock = \case
 
 evalFunc :: Value -> Value -> Eval Value
 evalFunc func arg = case func of
-  Closure expr env -> do
-    log' ["evaluating a closure: ", render expr]
-    e <- renderEnv env
-    log' ["env is ", e]
-    pushFrame arg env
-    result <- eval expr
-    popFrame
-    log' ["result is ", render result]
-    return result
+  Closure n expr env -> do
+    let name = case n of {Just nm -> nm; Nothing -> "anonymous function"}
+    pushFrame name arg env *> eval expr <* popFrame
   Builtin (name, bi) -> do
     log' ["Evaluating ", name, " on arg ", render arg]
     result <- bi arg
@@ -99,12 +95,12 @@ evalFunc func arg = case func of
     return result
 
 evalLamda :: Expr -> Expr -> Eval Value
-evalLamda param body = Closure body <$> getClosure param body
+evalLamda param body = Closure Nothing body <$> getClosure param body
 
 runEval :: Expr -> IO (Either ErrorList Value, EvalState)
 runEval expr = do
   env <- builtIns
-  let frame = Frame {eEnv=env, eArg=unitV}
+  let frame = Frame {eEnv=env, eArg=unitV, eTrace=defSTE}
       initState = ES [frame]
   runStateT (runErrorT (eval expr)) initState
 
@@ -115,7 +111,7 @@ evalIt input = case desugarIt input of
     when doTypeChecking (runTyping expr >> return ())
     fst <$> runEval expr >>= \case
       Left err -> return $ Left err
-      Right val@(VTuple vec) | length vec == 0 -> return (Right val)
+      Right val@(VTuple tup) | length tup == 0 -> return (Right val)
       Right val -> print val >> return (Right val)
 
 evalIt' :: String -> IO ()
