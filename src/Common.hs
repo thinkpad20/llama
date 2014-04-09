@@ -14,7 +14,7 @@ module Common ( (!), (<!>), (<$>), (<$), (<*), (*>), (<*>), pure
               , isInt, ErrorList(..), throwError1, throwErrorC, addError
               , addError', forever, isSpace, catMaybes, sortWith, each
               , unless, mconcatMapM, show, whenM, unlessM, lift2, toList
-              , mapM_)
+              , mapM_, fromList)
               where
 
 import Prelude hiding (show, mapM_)
@@ -32,8 +32,12 @@ import Data.Char (isSpace)
 import Data.Maybe (catMaybes)
 import qualified Data.Map as M
 import qualified Data.Set as S
+import Data.Sequence
 import Data.Foldable
 import Text.Parsec (ParseError)
+
+instance Render a => Render (Seq a) where
+  render vec = "[" <> T.intercalate "," (toList $ fmap render vec) <> "]"
 
 newtype ErrorList = ErrorList [T.Text]
 instance Error ErrorList where

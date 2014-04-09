@@ -352,7 +352,7 @@ pFor :: Parser Expr
 pFor = try pFor' <|> try pForIn <|> pForever
   where pFor' = For <$ keyword "for" <*> pExpression <* schar ';'
                                      <*> pExpr <* schar ';'
-                                     <*> pExpr <*> pBlock
+                                     <*> pExpression <*> pBlock
         pForIn = ForIn <$ keyword "for" <*> pExpr <* keyword "in"
                        <*> pExpr <*> pBlock
         pForever = Forever <$ keyword "forever" <*> pBlock

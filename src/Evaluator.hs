@@ -11,7 +11,6 @@ import Prelude (IO, Eq(..), Ord(..), Bool(..)
                , ($), Int, (.), (*), Either(..), String
                , fst, (+), (-), (/), (=<<), otherwise, fmap)
 import qualified Prelude as P
-import qualified Data.Vector.Persistent as V
 import Control.Monad.Loops
 
 import Common hiding (intercalate)
@@ -19,6 +18,8 @@ import AST
 import Desugar
 import TypeChecker
 import EvaluatorLib
+import EvaluatorBuiltins
+import Data.Sequence (length)
 
 
 eval :: Expr -> Eval Value
@@ -32,7 +33,7 @@ eval = \case
   Block exprs -> evalBlock exprs
   Tuple exprs kws | kws == mempty -> do
     vals <- forM exprs eval
-    return $ VTuple $ V.fromList vals
+    return $ VTuple $ fromList vals
   Tuple _ _ -> throwError1 "tuples with kwargs aren't implemented in evaluator"
   Literal lit -> evalLit lit
   Apply func arg -> do
@@ -50,6 +51,9 @@ eval = \case
   Lambda param body -> evalLamda param body
   Define name expr -> store name =<< eval expr
   Modified Ref expr -> newRef =<< eval expr
+  Assign (Var name) expr -> lookupOrError name >>= \case
+    VRef ref -> writeRef ref =<< eval expr
+    val -> typeError "Reference" val
   For start cond step expr -> return unitV <* do
     eval start
     whileM_ (checkBool =<< eval cond) $ (eval expr >> eval step)
@@ -69,7 +73,7 @@ checkBool val = unbox val >>= \case
   val' -> throwErrorC ["Value `", render val', "' is not a Bool"]
 
 evalLit :: Literal -> Eval Value
-evalLit (ArrayLiteral exprs) = VVector . V.fromList <$> forM exprs eval
+evalLit (ArrayLiteral exprs) = VVector . fromList <$> forM exprs eval
 
 evalBlock :: [Expr] -> Eval Value
 evalBlock = \case
@@ -111,4 +115,8 @@ evalIt input = case desugarIt input of
     when doTypeChecking (runTyping expr >> return ())
     fst <$> runEval expr >>= \case
       Left err -> return $ Left err
+      Right val@(VTuple vec) | length vec == 0 -> return (Right val)
       Right val -> print val >> return (Right val)
+
+evalIt' :: String -> IO ()
+evalIt' input = evalIt input >> return ()

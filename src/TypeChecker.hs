@@ -26,7 +26,7 @@ import qualified Data.Text as T
 import qualified Prelude as P
 import Data.List (nub)
 
-import Common
+import Common hiding (fromList)
 import AST
 import TypeLib
 import Parser (grabT)
@@ -176,13 +176,13 @@ typeOfCase expr patsBodies = do
           go (t, subs'' <> subs' <> subs) rest
 
 typeOfIf :: Expr -> Expr -> Expr -> Typing (Type, Subs)
-typeOfIf cond true false = do
+typeOfIf cond trueBranch falseBranch = do
   (condT, condS) <- typeOf cond
   subs1 <- unify (condT, boolT)
   applyToEnv (subs1 <> condS)
-  (trueT, trueS) <- typeOf true
+  (trueT, trueS) <- typeOf trueBranch
   applyToEnv trueS
-  (falseT, falseS) <- typeOf false
+  (falseT, falseS) <- typeOf falseBranch
   applyToEnv falseS
   subs2 <- unify (trueT, falseT)
   let subs = mconcat [subs2, falseS, trueS, subs1, condS]

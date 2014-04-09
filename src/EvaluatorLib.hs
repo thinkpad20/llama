@@ -16,13 +16,13 @@ import Data.HashMap hiding (lookup, (!), toList)
 import "hashmap" Data.HashSet hiding (toList)
 import qualified "hashmap" Data.HashSet as S
 import Data.Text
-import qualified Data.Vector.Persistent as V
+import Data.Sequence
 import qualified Data.Array.IO as A
 import Data.IORef
 
 import Common hiding (intercalate)
 import AST
-import TypeLib hiding (log, log', builtIns, hideLogs, vals, toList)
+import TypeLib hiding (log, log', vals, toList)
 
 type Array a = A.IOArray a
 
@@ -36,8 +36,8 @@ type MSet = HashTable Value Bool
 data Value = VNumber !Double
            | VBool   !Bool
            | VString !Text
-           | VVector !(V.Vector Value)
-           | VTuple  !(V.Vector Value)
+           | VVector !(Seq Value)
+           | VTuple  !(Seq Value)
            | PMap !PMap
            | MMap !MMap
            | PSet !PSet
@@ -98,6 +98,12 @@ data Frame = Frame {
 
 type Eval = ErrorT ErrorList (StateT EvalState IO)
 
+writeRef :: IORef Value -> Value -> Eval Value
+writeRef ref val = lift2 (writeIORef ref val) >> pure val
+
+readRef :: IORef Value -> Eval Value
+readRef ref = lift2 (readIORef ref)
+
 nothingV :: Value
 nothingV =
   VObj $ _obj {
@@ -154,6 +160,9 @@ unbox :: Value -> Eval Value
 unbox (VRef ref) = lift2 $ readIORef ref
 unbox val = return val
 
+unboxTo :: (Value -> Eval Value) -> Value -> Eval Value
+unboxTo func val = unbox val >>= func
+
 lookupOrError :: Name -> Eval Value
 lookupOrError name = lookup name >>= \case
   Just val -> return val
@@ -173,6 +182,10 @@ renderEnv env = lift2 $ do
 
 getAttribute :: Name -> Value -> Eval Value
 getAttribute = undefined
+
+typeError :: Name -> Value -> Eval a
+typeError expect val = throwErrorC ["Expected a value of type `", expect
+                                   , "', but got a `", render val, "'"]
 
 getClosure :: Expr -> Expr -> Eval Env
 getClosure (Var argName) expr = do
@@ -222,78 +235,6 @@ getClosure (Var argName) expr = do
       look = \case
         [] -> return False
         (s:ss) -> if S.member name s then return True else look ss
-
-builtIns :: IO Env
-builtIns = H.fromList
-  [
-    ("println", Builtin bi_println)
-  , ("+", Builtin bi_plus)
-  , ("-", Builtin bi_minus)
-  , ("*", Builtin bi_times)
-  , ("/", Builtin bi_divide)
-  , ("<", Builtin bi_lt), (">", Builtin bi_gt), ("<=", Builtin bi_leq)
-  , (">=", Builtin bi_geq), ("==", Builtin bi_eq), ("!=", Builtin bi_neq)
-  , ("negate", Builtin bi_negate), ("incr!", Builtin bi_incr)
-  ]
-
-bi_println :: Builtin
-bi_println = ("println", println) where
-  println val = unbox val >>= (lift2 . p) >> pure unitV
-  p (VNumber n) | isInt n = P.print (P.floor n :: Int)
-                | otherwise = P.print n
-  p (VString s) = P.putStrLn $ unpack s
-  p val = P.print val
-
-bi_negate :: Builtin
-bi_negate = ("negate", neg) where
-  neg (VNumber n) = pure $ VNumber $ P.negate n
-  neg val = numTypeError val
-
-bi_plus, bi_minus, bi_divide, bi_times, bi_eq,
-  bi_lt, bi_gt, bi_neq, bi_leq, bi_geq, bi_incr :: Builtin
-bi_plus = bi_binary "+" (+)
-bi_minus = bi_binary "-" (-)
-bi_times = bi_binary "*" (*)
-bi_divide = bi_binary "/" (/)
-bi_eq = bi_binaryBool "==" (==)
-bi_lt = bi_binaryBool "<" (<)
-bi_gt = bi_binaryBool ">" (>)
-bi_leq = bi_binaryBool "<=" (<=)
-bi_geq = bi_binaryBool ">=" (>=)
-bi_neq = bi_binaryBool "!=" (/=)
-
-bi_binary :: Name -> (Double -> Double -> Double) -> Builtin
-bi_binary name op = (name, \v -> unbox v >>= f) where
-  f (VNumber n) = pure $ Builtin (render n <> name, fN n)
-  f (VLocal ref) = deref ref >>= \case
-    VNumber n -> pure $ Builtin (render n <> name, fN n)
-    val -> numTypeError val
-  f val = numTypeError val
-  fN n (VNumber n') = pure $ VNumber (op n n')
-  fN n (VLocal ref) = fN n =<< deref ref
-  fN _ val = numTypeError val
-
-bi_binaryBool :: Name -> (Double -> Double -> Bool) -> Builtin
-bi_binaryBool name op = (name, \v -> unbox v >>= f) where
-  f (VNumber n) = pure $ Builtin (render n <> name, fN n)
-  f (VLocal ref) = deref ref >>= \case
-    VNumber n -> pure $ Builtin (render n <> name, fN n)
-    val -> numTypeError val
-  f val = numTypeError val
-  fN n (VNumber n') = pure $ VBool (op n n')
-  fN n (VLocal ref) = fN n =<< deref ref
-  fN _ val = numTypeError val
-
-bi_incr = ("incr!", f) where
-  f :: Value -> Eval Value
-  f (VRef ref) = incr ref
-  f _ = throwErrorC ["Expecting a reference to incr."]
-  incr ref = lift2 (readIORef ref) >>= \case
-    VNumber n -> do
-      let val = VNumber (n + 1)
-      lift2 $ writeIORef ref val
-      return val
-    val -> throwErrorC ["Expecting a number, not `", render val, "'"]
 
 deref :: LocalRef -> Eval Value
 deref Arg = do

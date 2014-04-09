@@ -4,7 +4,13 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE NoMonomorphismRestriction #-}
 {-# LANGUAGE OverloadedStrings #-}
-module TypeLib where
+module TypeLib (Polytype(..), tTuple, TypeTable, TypeOf, TypeRecord,
+                TypingState(..), Typing, Subs(..), NameSpace(..), Types(..),
+                TypeEnv(..), Kind, pushNameSpace, popNameSpace, arrayOf, listOf,
+                setOf, mapOf, numT, strT, unitT, maybeT, boolT, plain,
+                fullName, (==>), (+:), nsTail, addToEnv, log, log',
+                defaultTypingState, normalize, size, fromList, toList,
+                vals, single, remove, charT, tConst) where
 
 import Prelude hiding (log, show)
 import qualified Data.Map as M
@@ -13,7 +19,7 @@ import qualified Data.Set as S
 import qualified Data.Text as T
 import AST
 
-import Common
+import Common hiding (fromList, toList)
 
 type TypeTable = M.Map Name Type
 
