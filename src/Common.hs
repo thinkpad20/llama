@@ -6,6 +6,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE PackageImports #-}
+{-# LANGUAGE BangPatterns #-}
 module Common ( (!), (<!>), (<$>), (<$), (<*), (*>), (<*>), pure
               , get, modify, put, lift, forM_, forM, when, Monoid(..)
               , (<>), StateT(..), State, ErrorT(..), indentBy, Name
@@ -20,7 +21,7 @@ module Common ( (!), (<!>), (<$>), (<$), (<*), (*>), (<*>), pure
 import Prelude hiding (show, mapM_)
 import qualified Prelude as P
 import Control.Monad hiding (forM_, mapM_)
-import "mtl" Control.Monad.State hiding (forM_, mapM_)
+import "mtl" Control.Monad.State.Strict hiding (forM_, mapM_)
 import "mtl" Control.Monad.Error hiding (forM_, mapM_)
 import Data.Monoid
 import GHC.Exts (sortWith)

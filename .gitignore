@@ -3,3 +3,4 @@ src/*.hi
 src/*.prof
 src/\#*
 src/Profile
+src/llama

@@ -4,6 +4,7 @@
 {-# LANGUAGE TypeSynonymInstances #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE OverlappingInstances #-}
+{-# LANGUAGE BangPatterns #-}
 module EvaluatorLib where
 
 import Prelude (IO, Eq(..), Ord(..), Bool(..)
@@ -122,16 +123,16 @@ defSTE = STE {steLine=0, steColumn=0, steFuncName=""}
 
 addCount :: Eval ()
 addCount = do
- ES {esInstrCount=c} <- get
+ !ES {esInstrCount=c} <- get
  lift2 $ modifyIORef c (+1)
 
 type Eval = ErrorT ErrorList (StateT EvalState IO)
 
 writeRef :: IORef Value -> Value -> Eval Value
-writeRef ref val = lift2 (writeIORef ref val) >> pure val
+writeRef !ref !val = lift2 (writeIORef ref val) >> pure val
 
 readRef :: IORef Value -> Eval Value
-readRef ref = lift2 (readIORef ref)
+readRef !ref = lift2 (readIORef ref)
 
 nothingV :: Value
 nothingV =
@@ -154,7 +155,7 @@ new :: Eval Env
 new = lift2 H.new
 
 pushFrame :: Name -> Value -> Env -> Eval ()
-pushFrame name arg env = do
+pushFrame !name !arg !env = do
   let frame = Frame {eArg=arg, eEnv=env, eTrace=trace}
   modify $ \es@(ES {esStack=frames}) -> es {esStack=frame:frames}
   where trace = defSTE {steFuncName=name}
@@ -165,47 +166,47 @@ popFrame = get >>= \case
   es@(ES {esStack=(_:frames)}) -> put es {esStack=frames}
 
 hInsert :: Env -> Name -> Value -> Eval ()
-hInsert env key val = lift2 $ H.insert env key val
+hInsert !env !key !val = lift2 $ H.insert env key val
 
 hLookup :: Env -> Name -> Eval (Maybe Value)
-hLookup env key = lift2 $ H.lookup env key
+hLookup !env !key = lift2 $ H.lookup env key
 
 renderNS :: [Name] -> Name
-renderNS names = P.reverse names ! intercalate "/"
+renderNS !names = P.reverse names ! intercalate "/"
 
 lookup :: Name -> Eval (Maybe Value)
-lookup name = do
-  ES {esStack=stack} <- get
+lookup !name = do
+  !ES {esStack=stack} <- get
   lift2 $ loop stack
   where loop :: [Frame] -> IO (Maybe Value)
-        loop [] = return Nothing
-        loop (env:rest) = H.lookup (eEnv env) name >>= \case
+        loop ![] = return Nothing
+        loop !(env:rest) = H.lookup (eEnv env) name >>= \case
           Nothing -> loop rest
           val -> return val
 
 newRef :: Value -> Eval Value
-newRef val = lift2 $ VRef <$> newIORef val
+newRef !val = lift2 $ VRef <$> newIORef val
 
 unbox :: Value -> Eval Value
-unbox (VRef ref) = lift2 $ readIORef ref
-unbox val = return val
+unbox !(VRef ref) = lift2 $ readIORef ref
+unbox !val = return val
 
 unboxTo :: (Value -> Eval Value) -> Value -> Eval Value
-unboxTo func val = unbox val >>= func
+unboxTo !func !val = unbox val >>= func
 
 lookupOrError :: Name -> Eval Value
-lookupOrError name = lookup name >>= \case
+lookupOrError !name = lookup name >>= \case
   Just val -> return val
   Nothing -> throwErrorC ["Name '", name, "' is not defined"]
 
 store :: Name -> Value -> Eval Value
-store name val = do
+store !name !val = do
   ES {esStack=(f:_)} <- get
   hInsert (eEnv f) name val
   pure val
 
 renderEnv :: Env -> Eval Text
-renderEnv env = lift2 $ do
+renderEnv !env = lift2 $ do
   pairs <- H.toList env
   let pairs' = P.map (\(k, v) -> k <> ": " <> render v) pairs
   return $ intercalate ", " pairs'
@@ -214,17 +215,17 @@ getAttribute :: Name -> Value -> Eval Value
 getAttribute = undefined
 
 typeError :: Name -> Value -> Eval a
-typeError expect val = throwErrorC ["Expected a value of type `", expect
+typeError !expect !val = throwErrorC ["Expected a value of type `", expect
                                    , "', but got a `", render val, "'"]
 
 getClosure :: Expr -> Expr -> Eval Env
-getClosure (Var argName) expr = do
+getClosure !(Var argName) !expr = do
   newEnv <- new
   runStateT (go newEnv expr) [S.singleton argName]
   return newEnv
   where
     go :: Env -> Expr -> StateT [Set Name] Eval ()
-    go env = \case
+    go !env = \case
       Number _ -> return ()
       String _ -> return ()
       Block es -> mapM_ (go env) es
@@ -242,7 +243,7 @@ getClosure (Var argName) expr = do
       Literal (ArrayLiteral exprs) -> mapM_ (go env) exprs
       e -> lift $ throwErrorC ["Can't get closure of ", render e]
     getNames :: Expr -> StateT [Set Name] Eval ()
-    getNames = \case
+    getNames !ex = case ex of
       Var name -> addName name
       Apply a b -> getNames a >> getNames b
       Tuple es kws -> do
@@ -267,30 +268,30 @@ getClosure (Var argName) expr = do
         (s:ss) -> if S.member name s then return True else look ss
 
 deref :: LocalRef -> Eval Value
-deref Arg = do
+deref !Arg = do
   log' ["Dereferencing arg"]
   ES {esStack=(f:_)} <- get
   pure (eArg f)
-deref ref = error $ "Can't handle reference type " <> render ref
+deref !ref = error $ "Can't handle reference type " <> render ref
 
 unitV :: Value
 unitV = VTuple mempty
 
 numTypeError :: Value -> Eval a
-numTypeError val =
+numTypeError !val =
   throwErrorC ["Value `", render val, "' is not of type Num"]
 
 error :: Text -> a
-error msg = P.error $ unpack msg
+error !msg = P.error $ unpack msg
 
 print :: Render a => a -> IO ()
-print x = renderIO x >>= putStrLn
+print !x = renderIO x >>= putStrLn
 
 putStrLn :: Text -> IO ()
-putStrLn t = P.putStrLn $ unpack t
+putStrLn !t = P.putStrLn $ unpack t
 
 log :: Text -> Eval ()
-log s = if hideLogs then return () else lift2 $ P.putStrLn $ unpack s
+log !s = if hideLogs then return () else lift2 $ P.putStrLn $ unpack s
 
 log' :: [Text] -> Eval ()
 log' = mconcat ~> log

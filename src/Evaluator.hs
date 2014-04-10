@@ -4,6 +4,7 @@
 {-# LANGUAGE TypeSynonymInstances #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE OverlappingInstances #-}
+{-# LANGUAGE BangPatterns #-}
 module Evaluator (EvalState, initState, evalIt, evalIt', evalItWith) where
 
 import Prelude (IO, Eq(..), Ord(..), Bool(..)
@@ -24,7 +25,7 @@ import EvaluatorBuiltins
 
 
 eval :: Expr -> Eval Value
-eval expression = addCount >> case expression of
+eval !expression = case expression of
   Number n -> return (VNumber n)
   String s -> return (VString s)
   Constructor "True" -> return (VBool True)
@@ -78,33 +79,33 @@ eval expression = addCount >> case expression of
   expr -> throwErrorC ["Evaluator can't handle ", render expr]
 
 checkBool :: Value -> Eval Bool
-checkBool val = unbox val >>= \case
+checkBool !val = unbox val >>= \case
   VBool b -> return b
   val' -> throwErrorC ["Value `", render val', "' is not a Bool"]
 
 evalLit :: Literal -> Eval Value
-evalLit (ArrayLiteral exprs) = VVector . fromList <$> forM exprs eval
+evalLit !(ArrayLiteral exprs) = VVector . fromList <$> forM exprs eval
 
 evalBlock :: [Expr] -> Eval Value
-evalBlock = \case
+evalBlock !exprs = case exprs of
   [] -> return unitV
   [e] -> eval e
   (e:es) -> eval e >> evalBlock es
 
 evalFunc :: Value -> Value -> Eval Value
-evalFunc func arg = case func of
+evalFunc !func !arg = case func of
   Closure n expr env -> do
     let name = case n of {Just nm -> nm; Nothing -> "anonymous function"}
     pushFrame name arg env *> eval expr <* popFrame
   Builtin (_, bi) -> bi arg
 
 evalLamda :: Expr -> Expr -> Eval Value
-evalLamda param body = Closure Nothing body <$> getClosure param body
+evalLamda !param !body = Closure Nothing body <$> getClosure param body
 
 initState :: IO EvalState
 initState = do
-  env <- builtIns
-  ref <- newIORef 0
+  !env <- builtIns
+  !ref <- newIORef 0
   let frame = Frame {eEnv=env, eArg=unitV, eTrace=defSTE}
   return ES {esStack=[frame], esInstrCount=ref}
 
@@ -115,15 +116,15 @@ runEvalWith :: EvalState -> Expr -> IO (Either ErrorList Value, EvalState)
 runEvalWith state expr = runStateT (runErrorT (eval expr)) state
 
 evalIt :: String -> IO (Either ErrorList Value, EvalState)
-evalIt input = do
+evalIt !input = do
   state <- initState
   evalItWith state input
 
 evalIt' :: String -> IO ()
-evalIt' input = evalIt input >> return ()
+evalIt' !input = evalIt input >> return ()
 
 evalItWith :: EvalState -> String -> IO (Either ErrorList Value, EvalState)
-evalItWith state input = case desugarIt input of
+evalItWith !state !input = case desugarIt input of
   Left err -> return (Left $ ErrorList [render err], state)
   Right expr -> do
     when doTypeChecking (runTyping expr >> return ())

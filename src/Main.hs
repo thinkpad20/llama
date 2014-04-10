@@ -20,7 +20,9 @@ repl = do
     loop :: EvalState -> InputT IO ()
     loop eState = forever $ do
       getInputLine "llama> " >>= \case
-        Nothing -> return ()
+        Nothing -> do
+          lift $ putStrLn "Goodbye"
+          lift $ exitSuccess
         Just "" -> return ()
         Just "clear" -> do
           lift $ putStrLn "Cleared variables"
