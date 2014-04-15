@@ -338,62 +338,70 @@ assignmentTests = TestGroup "Assignments"
 
 objectTests :: Test String Expr
 objectTests = TestGroup "Object declarations" [
-    test1 "can declare a basic object" "object Foo = {Foo}" obj
-  , test1 "can declare a basic object without braces" "object Foo = Foo" obj
+    test1 "can declare an object without any definition" "object Foo" obj'
+  , test1 "can declare a basic object" "object Foo = Foo" obj
   , test1 "can declare an object with multiple constructors"
-          "object Foo = {Foo; Bar}" (obj {objConstrs = [fooCr, barCr]})
+          "object Foo = Foo | Bar" (obj {objConstrs = [fooCr, barCr]})
   , test1 "can declare constructors with args"
-          "object Foo = {Foo bar}"
+          "object Foo = Foo bar"
           (obj {objConstrs = [fooCr {constrArgs = [bar]}]})
-  , test1 "can declare a basic object without braces with arguments"
+  , test1 "can declare a basic object with named & typed arguments"
           "object Foo = Foo (foo: Num) (bar: Str)"
           (obj {objConstrs = [fooCr {constrArgs = [Typed foo numT
                                                  , Typed bar strT]}]})
-  , test1 "can declare a polymorphic object without braces with arguments"
+  , test1 "can declare a polymorphic object"
           "object Foo a = Foo (foo: Num) (bar: a)"
           (obj {objConstrs = [fooCr {constrArgs = [Typed foo numT
                                                  , Typed bar (TVar "a")]}]
                , objVars = ["a"]})
   , test1 "can declare multiple constructors with args"
-          "object Foo = {Foo bar; Bar foo}"
+          "object Foo = Foo bar | Bar foo"
           (obj {objConstrs = [ fooCr {constrArgs = [bar]}
                              , barCr {constrArgs = [foo]}]})
   , test1 "can declare extends"
-          "object Foo extends Bar = {Foo}"
+          "object Foo <: Bar = Foo"
           (obj {objExtends = (Just "Bar")})
-  , test1 "can declare extends"
-          "object Foo extends Bar = {Foo}"
-          (obj {objExtends = (Just "Bar")})
+  , test1 "can declare extends without constructors"
+          "object Foo <: Bar"
+          (obj' {objExtends = (Just "Bar")})
   , test1 "can declare extends with constructors"
-          "object Foo extends Bar = {Foo bar; Bar foo}"
+          "object Foo <: Bar = Foo bar | Bar foo"
           (obj {objConstrs = [ fooCr {constrArgs = [bar]}
                              , barCr {constrArgs = [foo]}]
                , objExtends = (Just "Bar")})
   , test1 "can declare extends with constructors that extend"
-          "object Foo extends Bar = {Foo bar extends Bar; Bar extends Foo}"
+          "object Foo <: Bar = Foo bar <: Bar | Bar <: Foo"
           (obj {objConstrs = [ fooCr {constrArgs = [bar]
                                     , constrExtends = Just barC}
                              , barCr {constrExtends = Just fooC}]
                , objExtends = (Just "Bar")})
   , test1 "constructors with logic"
-          ("object Foo extends Bar = {" <>
-           "Foo bar do baz = 1; " <>
-           "Bar {qux = foo bar; print \"hello\"}}")
+          ("object Foo <: Bar = " <>
+           "Foo bar do baz = 1 | " <>
+           "Bar {qux = foo bar; print \"hello\"}")
           (obj {objConstrs = [ fooCr {constrArgs = [bar]
                                     , constrLogic = Just expr1}
                              , barCr {constrLogic = Just expr2}]
                , objExtends = (Just "Bar")})
-  , test1 "generics" "object Foo a = {Bar; Foo (bar: a)}"
+  , test1 "generics" "object Foo a = Bar | Foo (bar: a)"
           (obj {objVars = ["a"],
                 objConstrs = [barCr, fooCr {constrArgs = [Typed bar a]}]})
+  , test1 "with single attribute"
+          "object Foo a = Bar | Foo (bar: a) with foo: Num"
+          (obj { objVars = ["a"]
+               , objConstrs = [barCr, fooCr {constrArgs = [Typed bar a]}]
+               , objAttrs = [Typed foo numT]})
   , test1 "with attributes"
-          "object Foo a = {Bar; Foo (bar: a) with foo: Num; bar: Str}"
+          "object Foo a = Bar | Foo (bar: a) with {foo: Num; bar: Str}"
           (obj { objVars = ["a"]
                , objConstrs = [barCr, fooCr {constrArgs = [Typed bar a]}]
                , objAttrs = [Typed foo numT, Typed bar strT]})
+  , test1 "object with only attributes" "object Foo with bar: Bar"
+          (obj' {objAttrs=[Typed bar barT]})
   ] where
       test1 desc input ex = Test desc input (ObjDec ex)
       obj = defObj { objName = "Foo", objConstrs = [fooCr]}
+      obj' = obj {objConstrs=[]}
       fooCr = defConstr {constrName = "Foo"}
       barCr = defConstr {constrName = "Bar"}
       expr1 = PatternDef baz one

@@ -105,39 +105,33 @@ pObjectDec = do
   keyword "object"
   name <- pIdent upper
   vars <- many $ fmap T.pack lowers
-  extends <- optionMaybe (keyword "extends" *> pIdent upper)
-  exactSym "="
+  extends <- optionMaybe (exactSym "<:" *> pIdent upper)
   (constrs, attrs) <- getConstrs
   return $ defObj {
       objName = name
     , objExtends = extends
     , objVars = vars
     , objConstrs = constrs
-    , objAttrs = attrs
-    }
+    , objAttrs = attrs }
 
 getConstrs :: Parser ([ConstructorDec], [Expr])
-getConstrs = fmap (\c -> ([c], mempty)) pConstructorDec <|> do
-  schar '{'
-  constrs <- pConstructorDec `sepBy1` schar ';'
-  attrs <- option [] $ do
-    keyword "with"
-    pTerm `sepBy1` schar ';'
-  schar '}'
-  return (constrs, attrs)
+getConstrs = (,) <$> constrs <*> attrs where
+  constrs = option [] $ exactSym "=" *> pConstructorDec `sepBy` schar '|'
+  attrs = option [] $ keyword "with" *> getAttrs
+  getAttrs = fmap pure pExpr <|> multi
+  multi = between (schar '{') (schar '}') $ pExpr `sepBy1` schar ';'
 
 pConstructorDec :: Parser ConstructorDec
 pConstructorDec = do
   name <- pIdent upper
   args <- many pTerm
-  extends <- optionMaybe (keyword "extends" >> pExpr)
+  extends <- optionMaybe (exactSym "<:" >> pExpr)
   logic <- optionMaybe pExprOrBlock
-  return $ defConstr {
+  return defConstr {
       constrName = name
     , constrArgs = args
     , constrExtends = extends
-    , constrLogic = logic
-    }
+    , constrLogic = logic }
 
 pType, pTTerm, pTVar, pTConst, pTTuple, pTFunction, pTVector,
   pTApply, pTSet, pTMap, pTList, pTMultiFunc :: Parser Type
