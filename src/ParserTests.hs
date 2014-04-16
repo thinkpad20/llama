@@ -4,6 +4,7 @@ module ParserTests (allTests, main) where
 import qualified Data.Map as M
 import qualified Data.Text as T
 import Prelude hiding (mod)
+import Data.Text (Text)
 
 import Common
 import Tests
@@ -11,32 +12,35 @@ import AST
 import TypeLib
 import Parser (grab)
 
-expr e = Block [e]
+skipTestB :: Name -> input -> Block -> Test input Expr
 skipTestB desc i exprs = SkipTest desc i (Block exprs)
+foo, bar, baz, qux, fooC, barC, one, two, three :: Expr
 (foo, bar, baz, qux) = (Var "foo", Var "bar", Var "baz", Var "qux")
-[fooC, barC, bazC, quxC] = map Constructor ["Foo", "Bar", "Baz", "Qux"]
+[fooC, barC] = map Constructor ["Foo", "Bar"]
+(one, two, three) = (Number 1, Number 2, Number 3)
+fooT, barT, bazT, quxT :: Type
 (fooT, barT, bazT, quxT) = ( tConst "Foo", tConst "Bar"
                            , tConst "Baz", tConst "Qux")
+print_, assert :: Expr -> Expr
 print_ = Apply (Var "print")
 assert = Apply (Var "assert")
-arrayS exprs = expr $ Literal $ ArrayLiteral exprs
+listE, setE, arrayE :: [Expr] -> Expr
 listE exprs = Literal $ ListLiteral exprs
 setE exprs = Literal $ SetLiteral exprs
-dictE exprs = Literal $ DictLiteral exprs
 arrayE exprs = Literal $ ArrayLiteral exprs
-rangeS start stop = rangeE start stop ! expr
+dictE :: [(Expr, Expr)] -> Expr
+dictE exprs = Literal $ DictLiteral exprs
+rangeE :: Expr -> Expr -> Expr
 rangeE start stop = ArrayRange start stop ! Literal
-ops = [ "+", "*", "-", "/", "^", "%", "<", ">", "<="
+ops :: [Text]
+ops = [ "+", "*", "-", "^", "<", ">", "<="
       , ">=", "==", "!=", "$", "|>", "<~", "~>", "||", "&&"]
-[ plus, times, minus, divide, expon, mod, lt, gt, leq, geq
- , eq, neq, bAp, fAp, bComp, fComp, _or, _and] = map binary ops
-opsFuncs = M.fromList [("+", plus), ("*", times), ("-", minus)
-                      , ("/", divide), ("^", expon), ("%", mod)
-                      , ("<", lt), (">", gt), ("<=", leq), (">=", geq)
-                      , ("==", eq), ("!=", neq), ("|>", fAp), ("$", bAp)
-                      , ("~>", fComp), ("<~", bComp)]
-(one, two, three) = (Number 1, Number 2, Number 3)
+plus, times, minus, expon, gt, neq, bAp, _or, _and :: Expr -> Expr -> Expr
+(plus, times, minus, expon) = (binary "+", binary "*", binary "-", binary "^")
+(gt, neq, bAp) = (binary ">", binary "!=", binary "$")
+(_or, _and) = (binary "||", binary "&&")
 
+binOpsTests :: [Test String Expr]
 binOpsTests = [test (T.unpack op) | op <- ops] where
   test op = Test ("can parse `" <> T.pack op <> "'")
                  ("1 " <> op <> " 2")
@@ -237,7 +241,7 @@ typingTests = TestGroup "Typed expressions"
   , collection "map2" "{Num =>" "}" (\t -> mapOf (numT, t))
   ]
   where multi = TMultiFunc . M.fromList
-        multi1 a b = multi [(a, b)]
+        multi1 x y = multi [(x, y)]
         [a, b, c] = map TVar ["a", "b", "c"]
         test name input typ = Test name input (Typed foo typ)
         collection name open close f = TestGroup name tests where
@@ -375,6 +379,28 @@ objectTests = TestGroup "Object declarations" [
                                     , constrExtends = Just barC}
                              , barCr {constrExtends = Just fooC}]
                , objExtends = (Just "Bar")})
+  , test1 "can declare extends with an arbitrary expression"
+          "object Foo <: Bar = Foo bar <: bar"
+          (obj {objExtends = Just "Bar",
+                objConstrs = [fooCr { constrArgs = [bar]
+                                    , constrExtends = Just bar}]})
+  , test1 "can declare extends with an arbitrary expression and a with statement"
+          "object Foo <: Bar = Foo bar <: bar with baz: Num"
+          (obj {objExtends = Just "Bar",
+                objConstrs = [fooCr { constrArgs = [bar]
+                                    , constrExtends = Just bar}],
+                objAttrs = [Typed baz numT]})
+  , test1 "extended expression can have its own with statement"
+          "object Foo <: Bar = Foo bar <: bar with baz = 1"
+          (obj {objExtends = Just "Bar",
+                objConstrs = [fooCr { constrArgs = [bar]
+                                    , constrExtends = Just (With bar [("baz", one)])}]})
+  , test1 "extended expression can have its own with statement, and the object has withs as well"
+          "object Foo <: Bar = Foo bar <: bar with baz = 1 with qux: Num"
+          (obj {objExtends = Just "Bar",
+                objConstrs = [fooCr { constrArgs = [bar]
+                                    , constrExtends = Just (With bar [("baz", one)])}],
+                objAttrs = [Typed qux numT]})
   , test1 "constructors with logic"
           ("object Foo <: Bar = " <>
            "Foo bar do baz = 1 | " <>
@@ -407,6 +433,9 @@ objectTests = TestGroup "Object declarations" [
       expr1 = PatternDef baz one
       expr2 = Block [PatternDef qux (Apply foo bar), print_ (InString "hello")]
       a = TVar "a"
+
+--withTests :: Test String Expr
+--withTests
 
 rassocTests :: Test String Expr
 rassocTests = TestGroup "Right-associative functions"
@@ -580,6 +609,7 @@ forInTests = TestGroup "For statements" tests where
       (ForIn foo bar (ForIn baz qux one))
     ]
 
+doTests :: IO TesterState
 doTests = runTests grab [ expressionTests
                         , assignmentTests
                         , arrayTests
@@ -595,6 +625,7 @@ doTests = runTests grab [ expressionTests
                         , objectTests
                         ]
 
+allTests :: [TesterState -> IO TesterState]
 allTests = [run grab [ expressionTests
                      , assignmentTests
                      , arrayTests
@@ -611,4 +642,5 @@ allTests = [run grab [ expressionTests
                      ]
             ]
 
-main = doTests
+main :: IO ()
+main = doTests >> return ()

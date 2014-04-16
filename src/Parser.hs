@@ -457,10 +457,19 @@ pExpression = do
       "before" -> Before expr rest
 
 pExpr :: Parser Expr
-pExpr = lexeme $ choice [ pModified
-                        , pLambda
-                        , pRightAssociativeFunction
-                        , pIf ]
+pExpr = do
+  e <- expr
+  withs <- many pWith
+  return $ go e (P.reverse withs)
+  where go e [] = e
+        go e (attrs:rest) = With (go e rest) attrs
+        pWith = try $ keyword "with" *> getAttrs
+        getAttrs = fmap pure attr <|> between (schar '(') (schar ')') (many1 attr)
+        attr = (,) <$> pIdent lower <* exactSym "=" <*> pTerm
+        expr = lexeme $ choice [ pModified
+                               , pLambda
+                               , pRightAssociativeFunction
+                               , pIf ]
 
 pTopLevel :: Parser Expr
 pTopLevel = choice [pPrefixSymbol, pExpression, pTypeDef, ObjDec <$> pObjectDec]

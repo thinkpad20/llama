@@ -56,6 +56,7 @@ data Expr = Var         !Name
           | Prefix      !Name !Expr
           | LambdaDot   !Expr
           | AssignOp    !Name !Expr !Expr
+          | With        !Expr ![(Name, Expr)]
           | Continue
           | WildCard
           deriving (P.Show, Eq)

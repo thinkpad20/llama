@@ -1,5 +1,5 @@
 {-# LANGUAGE LambdaCase, OverloadedStrings #-}
-module Tests (Test(..), runTests, run, runAllTests) where
+module Tests (Test(..), TesterState, runTests, run, runAllTests) where
 
 import Prelude (IO, Eq(..), Ord(..), Bool(..),
                 Double, String, Maybe(..), Int, Monad(..),
@@ -73,9 +73,9 @@ runTests' :: (Eq result, Render input, Render result, Render error) =>
             [Test input result] ->
             Tester ()
 runTests' function tests = do
-  let run = if any containsOnly tests then runTestOnly else runTest
+  let run' = if any containsOnly tests then runTestOnly else runTest
   forM_ (zip [1..] tests) $ \(count, test) ->
-    run function count test
+    run' function count test
 
 containsOnly :: Test input result -> Bool
 containsOnly test = case test of
@@ -151,8 +151,8 @@ runTestOnly function count test = case test of
   Test _ _ _ -> return ()
   ShouldError _ _ -> return ()
   TestGroup _ tests ->
-    forM_ (zip [1..] tests) $ \(count, test) ->
-      runTestOnly function count test
+    forM_ (zip [1..] tests) $ \(i, test') ->
+      runTestOnly function i test'
   TestGroupOnly name tests -> do
     putStrI "| "
     addGroupName name
@@ -239,7 +239,7 @@ report = do
   let rep n testType c = do
         let n' = (fromIntegral n)::Double
         let tests = if n == 1 then "1 test " else show n <> " tests "
-        let percent = if tot' == 0 then "0" else show (round $ 100 * n' / tot')
+        let percent = if tot' == 0 then "0" else show (round $ 100 * n' / tot' :: Int)
         let percentStr = " (" <> percent <> "%)"
         withColor c $ putStrLn' $ tests <> testType <> percentStr
   rep s "passed" Green
@@ -259,45 +259,66 @@ indent str = do lev <- getILevel
 withIndent :: Tester a -> Tester a
 withIndent x = upIndent >> x >>= \result -> downIndent >> return result
 
+line :: Tester ()
 line = putStrLn' ""
 putStrLn', putStr', putStrLnI, putStrI :: T.Text -> Tester ()
 putStrLn' s = lift (putStrLn s) >> flush
 putStr' s = lift (putStr s) >> flush
 putStrLnI str = indent str >>= putStrLn'
 putStrI str = indent str >>= putStr'
-getSuccesses, getFailures, getErrors :: Tester [TestResult]
+getSuccesses, getFailures, getErrors, getExpectedErrors :: Tester [TestResult]
 getSuccesses = get <!> successes
 getFailures = get <!> failures
 getErrors = get <!> errors
 getExpectedErrors = get <!> expectedErrors
 
+getGroupNames :: Tester [Name]
+getGroupNames = get <!> groupNames
+
+getGroupName :: Tester Name
+getGroupName = get <!> groupNames <!> reverse <!> T.intercalate ", "
+
+addGroupName :: Name -> Tester ()
+addGroupName name = modify (\s -> s { groupNames = name : groupNames s } )
+
+removeGroupName :: Tester ()
+removeGroupName = modify (\s -> s {groupNames = tail $ groupNames s})
+
+getILevel, getNSpaces :: Tester Int
 getILevel = indentLevel <$> get
 getNSpaces = spaceCount <$> get
+
+addSuccess :: Name -> Tester ()
 addSuccess name = do
-  gNames <- getGroupNames
-  let names = reverse $ name : gNames
   modify $ \s -> s {successes = TestSuccess [name] : successes s}
+
+addFailure :: (Render a, Render a1, Render a2) =>
+              Name -> a -> a1 -> a2 -> StateT TesterState IO ()
 addFailure name input expect result = do
   gNames <- getGroupNames
   let names = reverse $ name : gNames
   let f = TestFailure names (render input) (render expect) (render result)
   modify $ \s -> s { failures = f : failures s }
+
+addExpectedError :: (Render a, Render a1) =>
+                    Name -> a -> a1 -> StateT TesterState IO ()
 addExpectedError name input result = do
   gNames <- getGroupNames
   let names = reverse $ name : gNames
   let f = TestExpectedError names (render input) (render result)
   modify $ \s -> s { expectedErrors = f : expectedErrors s }
+
+addError :: (Render a, Render a1) =>
+            Name -> a -> a1 -> StateT TesterState IO ()
 addError name input message = do
   gNames <- getGroupNames
   let names = reverse $ name : gNames
   let e = TestError names (render input) (render message)
   modify $ \s -> s { errors = e : errors s }
-getGroupNames = get <!> groupNames
-getGroupName = get <!> groupNames <!> reverse <!> T.intercalate ", "
-addGroupName name = modify (\s -> s { groupNames = name : groupNames s } )
-removeGroupName = modify (\s -> s {groupNames = tail $ groupNames s})
+
 upIndent :: Tester ()
 upIndent = modify (\s -> s {indentLevel = indentLevel s + 1})
+
 downIndent :: Tester ()
 downIndent = modify (\s -> s {indentLevel = indentLevel s - 1})
 
@@ -318,21 +339,9 @@ withUL action = do
   lift $ setSGR [SetUnderlining NoUnderline]
   return result
 
-sampleTests = TestGroup "Division"
-  [
-    Test "division" (10, 2) 5 -- passes
-  , Test "division" (5, 5) 1 -- passes
-  , Test "division" (5, 0) 0 -- error
-  , Test "division" (14, 7) 2 -- wrong
-  ]
-
-stupidDiv :: (Int, Int) -> Either T.Text Int
-stupidDiv (_, 0) = Left "can't divide by zero!"
-stupidDiv (14, 7) = Right 3 -- oh noes
-stupidDiv (a, b) = Right (a `div` b)
-
+show :: Show a => a -> T.Text
 show = P.show ~> T.pack
+
+putStrLn, putStr :: T.Text -> IO ()
 putStrLn = P.putStrLn . T.unpack
 putStr = P.putStr . T.unpack
-
-main = runTests stupidDiv [sampleTests]
