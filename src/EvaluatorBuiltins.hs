@@ -12,6 +12,7 @@ import Prelude (IO, Eq(..), Ord(..), Bool(..)
                , fst, (+), (-), (/), (=<<), otherwise, fmap)
 import qualified Prelude as P
 import qualified Data.HashTable.IO as H
+import Control.Monad ((>=>))
 import Data.Sequence
 import Data.Text
 import Data.IORef
@@ -22,11 +23,8 @@ import EvaluatorLib
 builtIns :: IO Env
 builtIns = H.fromList
   [
-    ("println", Builtin bi_println)
-  , ("+", Builtin bi_plus)
-  , ("-", Builtin bi_minus)
-  , ("*", Builtin bi_times)
-  , ("/", Builtin bi_divide)
+    ("println", Builtin bi_println), ("+", Builtin bi_plus)
+  , ("-", Builtin bi_minus), ("*", Builtin bi_times), ("/", Builtin bi_divide)
   , ("<", Builtin bi_lt), (">", Builtin bi_gt), ("<=", Builtin bi_leq)
   , (">=", Builtin bi_geq), ("==", Builtin bi_eq), ("!=", Builtin bi_neq)
   , ("negate", Builtin bi_negate), ("incr!", Builtin bi_incr)
@@ -37,7 +35,7 @@ builtIns = H.fromList
   ]
 
 bi_println :: Builtin
-bi_println = ("println", unboxTo println) where
+bi_println = ("println", unbox >=> println) where
   println val = lift2 (p val) >> pure unitV
   p (VNumber n) | isInt n = P.print (P.floor n :: Int)
                 | otherwise = P.print n
@@ -45,7 +43,7 @@ bi_println = ("println", unboxTo println) where
   p val = print val
 
 bi_negate :: Builtin
-bi_negate = ("negate", unboxTo neg) where
+bi_negate = ("negate", unbox >=> neg) where
   neg (VNumber n) = pure $ VNumber $ P.negate n
   neg val = numTypeError val
 
@@ -69,12 +67,12 @@ bi_leq = bi_binaryDDB "<=" (<=)
 bi_geq = bi_binaryDDB ">=" (>=)
 bi_neq = bi_binaryDDB "!=" (/=)
 
-bi_vectorAppend = ("Vector append", unboxTo f) where
+bi_vectorAppend = ("Vector append", unbox >=> f) where
   f (VVector vec) = pure $ Builtin ("Vector append " <> render vec, f' vec)
   f val = typeError "Vector" val
   f' vec val = pure $ VVector $ vec |> val
 
-bi_vectorPrepend = ("Vector prepend", unboxTo f) where
+bi_vectorPrepend = ("Vector prepend", unbox >=> f) where
   f (VVector vec) = pure $ Builtin ("Vector prepend " <> render vec, f' vec)
   f val = typeError "Vector" val
   f' vec val = pure $ VVector $ val <| vec
@@ -105,10 +103,10 @@ bi_incr = ("incr!", f) where
     val -> throwErrorC ["Expecting a number, not `", render val, "'"]
 
 bi_binaryDDD :: Name -> (Double -> Double -> Double) -> Builtin
-bi_binaryDDD name op = (name, unboxTo f) where
-  f (VNumber n) = pure $ Builtin (render n <> name, unboxTo (fN n))
+bi_binaryDDD name op = (name, unbox >=> f) where
+  f (VNumber n) = pure $ Builtin (render n <> name, unbox >=> fN n)
   f (VLocal ref) = deref ref >>= \case
-    VNumber n -> pure $ Builtin (render n <> name, unboxTo (fN n))
+    VNumber n -> pure $ Builtin (render n <> name, unbox >=> fN n)
     val -> numTypeError val
   f val = numTypeError val
   fN n (VNumber n') = pure $ VNumber (op n n')
@@ -116,10 +114,10 @@ bi_binaryDDD name op = (name, unboxTo f) where
   fN _ val = numTypeError val
 
 bi_binaryDDB :: Name -> (Double -> Double -> Bool) -> Builtin
-bi_binaryDDB name op = (name, unboxTo f) where
-  f (VNumber n) = pure $ Builtin (render n <> name, unboxTo (fN n))
+bi_binaryDDB name op = (name, unbox >=> f) where
+  f (VNumber n) = pure $ Builtin (render n <> name, unbox >=> fN n)
   f (VLocal ref) = deref ref >>= \case
-    VNumber n -> pure $ Builtin (render n <> name, unboxTo (fN n))
+    VNumber n -> pure $ Builtin (render n <> name, unbox >=> fN n)
     val -> numTypeError val
   f val = numTypeError val
   fN n (VNumber n') = pure $ VBool (op n n')

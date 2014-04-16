@@ -82,6 +82,8 @@ traverse ds e | doTest ds e = doTransform ds e
   Assign e1 e2 -> Assign <$> rec e1 <*> rec e2
   Return expr -> Return <$> rec expr
   Throw expr -> Throw <$> rec expr
+  TryCatch expr options finally -> TryCatch <$> rec expr <*> mapM recTup options
+                                            <*> recMaybe finally
   Break expr -> Break <$> rec expr
   After e1 e2 -> After <$> rec e1 <*> rec e2
   Before e1 e2 -> Before <$> rec e1 <*> rec e2

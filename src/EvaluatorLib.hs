@@ -41,8 +41,9 @@ data Value = VNumber !Double
            | VTuple  !(Seq Value)
            | VReturn !Value
            | VBreak  !Value
-           | VContinue
            | VThrow  !Value
+           | VMaybe !(Maybe Value)
+           | VContinue
            | PMap !PMap
            | MMap !MMap
            | PSet !PSet
@@ -135,21 +136,10 @@ readRef :: IORef Value -> Eval Value
 readRef !ref = lift2 (readIORef ref)
 
 nothingV :: Value
-nothingV =
-  VObj $ _obj {
-    outerType = TConst "Maybe"
-  , innerType = "Nothing"
-  }
+nothingV = VMaybe Nothing
 
-justV :: Value -> Eval Value
-justV val = do
-  attrs <- new
-  hInsert attrs "0" val
-  return $ VObj $ _obj {
-    outerType = TConst "Maybe"
-  , innerType = "Just"
-  , attribs = Just attrs
-  }
+justV :: Value -> Value
+justV val = VMaybe (Just val)
 
 new :: Eval Env
 new = lift2 H.new
@@ -191,9 +181,6 @@ unbox :: Value -> Eval Value
 unbox !(VRef ref) = lift2 $ readIORef ref
 unbox !val = return val
 
-unboxTo :: (Value -> Eval Value) -> Value -> Eval Value
-unboxTo !func !val = unbox val >>= func
-
 lookupOrError :: Name -> Eval Value
 lookupOrError !name = lookup name >>= \case
   Just val -> return val
@@ -219,29 +206,37 @@ typeError !expect !val = throwErrorC ["Expected a value of type `", expect
                                    , "', but got a `", render val, "'"]
 
 getClosure :: Expr -> Expr -> Eval Env
-getClosure !(Var argName) !expr = do
-  newEnv <- new
-  runStateT (go newEnv expr) [S.singleton argName]
-  return newEnv
+getClosure !pattern !expr = case pattern of
+  Var argName -> do
+    newEnv <- new
+    runStateT (loop argName newEnv expr) [S.singleton argName]
+    return newEnv
+  _ -> throwErrorC ["Can't handle pattern `", render pattern, "'"]
   where
-    go :: Env -> Expr -> StateT [Set Name] Eval ()
-    go !env = \case
+    loop :: Name -> Env -> Expr -> StateT [Set Name] Eval ()
+    loop !argName !env = \case
       Number _ -> return ()
       String _ -> return ()
-      Block es -> mapM_ (go env) es
-      Tuple es kws | kws == mempty -> mapM_ (go env) es
+      Block es -> mapM_ go es
+      Tuple es kws | kws == mempty -> mapM_ go es
                    | otherwise -> lift $ throwErrorC ["Kwarg closures aren't implemented"]
       Constructor name -> lift (lookupOrError name) >>= lift . hInsert env name
       Var name | name == argName -> lift $ hInsert env name (VLocal Arg)
                | otherwise -> findName name >>= \case
                  True -> return ()
                  False -> lift . hInsert env name =<< lift (lookupOrError name)
-      Apply a b -> go env a >> go env b
-      Lambda param body -> push >> getNames param >> go env body <* pop
-      Define var ex -> addName var >> go env ex
-      If c t f -> go env c >> go env t >> go env f
-      Literal (ArrayLiteral exprs) -> mapM_ (go env) exprs
+      Apply a b -> go a >> go b
+      Lambda param body -> push >> getNames param >> go body <* pop
+      Define var ex -> addName var >> go ex
+      If c t f -> go c >> go t >> go f
+      Literal (ArrayLiteral exprs) -> mapM_ go exprs
+      TryCatch toTry ifErr finally -> go toTry >> mapM_ goPat ifErr >> goMayb finally
+      Throw e -> go e
+      Return e -> go e
       e -> lift $ throwErrorC ["Can't get closure of ", render e]
+      where go = loop argName env
+            goPat (_, res) = go res
+            goMayb = \case {Nothing -> return (); Just e -> go e}
     getNames :: Expr -> StateT [Set Name] Eval ()
     getNames !ex = case ex of
       Var name -> addName name

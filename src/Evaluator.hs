@@ -7,14 +7,13 @@
 {-# LANGUAGE BangPatterns #-}
 module Evaluator (EvalState, initState, evalIt, evalIt', evalItWith) where
 
-import Prelude (IO, Eq(..), Ord(..), Bool(..)
+import Prelude (IO, Eq(..), Ord(..), Bool(..), not
                , Double, Maybe(..), undefined, Monad(..)
                , ($), Int, (.), (*), Either(..), String
                , fst, snd, (+), (-), (/), (=<<), otherwise, fmap)
 import qualified Prelude as P
 import Data.Sequence (length)
 import Data.IORef
-import Data.Text hiding (length)
 
 import Common hiding (intercalate)
 import AST
@@ -63,20 +62,80 @@ eval !expression = case expression of
     loop where
     loop = do
       eval cond >>= checkBool >>= \case
-        False -> return unitV
+        False -> return nothingV
         True -> eval body >>= \case
           VReturn val -> return (VReturn val)
-          VBreak _ -> return unitV
+          VThrow val -> return (VThrow val)
+          VBreak val -> return $ justV val
           _ -> eval step >> loop
-  If c t f -> eval c >>= \case
-    VBool True -> eval t
-    VBool False -> eval f
-    val -> throwErrorC ["Value `", render val, "' is not of type Bool."]
-  If' c t -> eval c >>= \case
-    VBool True -> justV =<< eval t
-    VBool False -> return nothingV
-    val -> throwErrorC ["Value `", render val, "' is not of type Bool."]
+  TryCatch try options finally -> evalTryCatch try options finally
+  If c t f -> eval c >>= checkBool >>= \case
+    True -> eval t
+    False -> eval f
+  If' c t -> eval c >>= checkBool >>= \case
+    True -> justV <$> eval t
+    False -> return nothingV
+  Throw expr -> VThrow <$> eval expr
+  Return expr -> VReturn <$> eval expr
   expr -> throwErrorC ["Evaluator can't handle ", render expr]
+
+{-do `try` expr
+  exception thrown?
+  yes ->
+    is there a catch that matches the exception?
+    yes ->
+      evaluate what's in the catch
+      is there a return value in the catch?
+      yes ->
+        is there a finally block?
+        yes ->
+          evaluate the finally
+          is there a return value in the finally?
+          yes ->
+            return that
+          no ->
+            return the catch's return
+        no ->
+          return the catch's return
+      no ->
+        is there a finally block?
+        yes ->
+          evaluate finally
+          is there a return value in finally?
+          yes ->
+            return it
+          no -> return ()
+        no ->
+          return ()
+    no ->
+      is there a finally?
+      yes ->
+        evaluate the finally
+        is there a return in the finally?
+        yes ->
+          return that
+        no ->
+          reraise the exception
+      no ->
+        reraise the exception
+  no -> return whatever was computed
+-}
+
+evalTryCatch :: Expr -> [(Expr, Expr)] -> Maybe Expr -> Eval Value
+evalTryCatch try options finally = eval try >>= \case
+  exc@(VThrow _) -> case options of
+    [] -> doFinally False exc unitV
+    ((_, branch):_) -> doCatch branch exc
+  val -> return val
+  where
+    doCatch branch exc = eval branch >>= doFinally True exc
+    doFinally wasCaught exception toReturn = case finally of
+      Nothing -> return $ if wasCaught then toReturn else exception
+      Just fin -> eval fin >>= \case
+        ret@(VReturn _) -> return ret
+        _ -> if not wasCaught then return exception else case toReturn of
+          ret@(VReturn _) -> return ret
+          _ -> return unitV
 
 checkBool :: Value -> Eval Bool
 checkBool !val = unbox val >>= \case
@@ -90,14 +149,21 @@ evalBlock :: [Expr] -> Eval Value
 evalBlock !exprs = case exprs of
   [] -> return unitV
   [e] -> eval e
-  (e:es) -> eval e >> evalBlock es
+  (e:es) -> eval e >>= \case
+    VReturn val -> return val
+    VThrow val -> return (VThrow val)
+    _ -> evalBlock es
 
 evalFunc :: Value -> Value -> Eval Value
 evalFunc !func !arg = case func of
   Closure n expr env -> do
     let name = case n of {Just nm -> nm; Nothing -> "anonymous function"}
-    pushFrame name arg env *> eval expr <* popFrame
+    pushFrame name arg env *> (eval expr >>= unReturn) <* popFrame
   Builtin (_, bi) -> bi arg
+
+unReturn :: Value -> Eval Value
+unReturn (VReturn val) = return val
+unReturn val = return val
 
 evalLamda :: Expr -> Expr -> Eval Value
 evalLamda !param !body = Closure Nothing body <$> getClosure param body
@@ -108,9 +174,6 @@ initState = do
   !ref <- newIORef 0
   let frame = Frame {eEnv=env, eArg=unitV, eTrace=defSTE}
   return ES {esStack=[frame], esInstrCount=ref}
-
-runEval :: Expr -> IO (Either ErrorList Value, EvalState)
-runEval expr = initState >>= \s -> runEvalWith s expr
 
 runEvalWith :: EvalState -> Expr -> IO (Either ErrorList Value, EvalState)
 runEvalWith state expr = runStateT (runErrorT (eval expr)) state

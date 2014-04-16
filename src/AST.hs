@@ -46,6 +46,7 @@ data Expr = Var         !Name
           | Assign      !Expr !Expr
           | Return      !Expr
           | Throw       !Expr
+          | TryCatch    !Expr ![(Expr, Expr)] !(Maybe Expr)
           | Break       !Expr
           | After       !Expr !Expr
           | Before      !Expr !Expr

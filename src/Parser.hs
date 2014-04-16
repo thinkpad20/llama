@@ -33,7 +33,8 @@ keywords, keySyms :: [String]
 keywords = [ "if", "do", "else", "case", "of", "infix", "typedef"
            , "object", "while", "for", "in", "then", "after", "before"
            , "return", "break", "continue", "mut", "ref", "pure"
-           , "local", "lazy", "extends", "with", "block", "forever"]
+           , "throw", "try", "catch", "local", "lazy", "with"
+           , "block", "forever", "finally"]
 keySyms =  ["->", "|", "=", ";", "..", "=>", "?", ":", "#", ":=", "&="]
 
 keyword, exactStr :: Name -> Parser Name
@@ -426,11 +427,28 @@ pLambda = try $ do
 pReturn :: Parser Expr
 pReturn = Return <$ keyword "return" <*> option unit pExpr
 
+pBreak :: Parser Expr
+pBreak = Return <$ keyword "break" <*> option unit pExpr
+
+pContinue :: Parser Expr
+pContinue = Continue <$ keyword "continue"
+
+pThrow :: Parser Expr
+pThrow = Throw <$ keyword "throw" <*> pExpr
+
+pTryCatch :: Parser Expr
+pTryCatch = TryCatch <$ keyword "try" <*> pExprOrBlock
+                     <*> many catches
+                     <*> option Nothing finally
+  where finally = keyword "finally" *> (Just <$> pExprOrBlock)
+        catches = (,) <$ keyword "catch" <*> pExpr <*> pBlock
+
 pExpression :: Parser Expr
 pExpression = do
   many pAnnotation
   expr <- lexeme $ choice $ [ pDefine, pExtend, pAssign
-                            , pFor, pReturn, pExpr ]
+                            , pFor, pReturn, pExpr, pTryCatch
+                            , pThrow, pBreak, pContinue ]
   option expr $ do
     kw <- keyword "after" <|> keyword "before"
     rest <- pBlock
