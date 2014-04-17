@@ -202,10 +202,6 @@ renderEnv !env = lift2 $ do
 getAttribute :: Name -> Value -> Eval Value
 getAttribute = undefined
 
-typeError :: Name -> Value -> Eval a
-typeError !expect !val = throwErrorC ["Expected a value of type `", expect
-                                   , "', but got a `", render val, "'"]
-
 getClosure :: Expr -> Expr -> Eval Env
 getClosure !pattern !expr = case pattern of
   Var argName -> do
@@ -314,10 +310,6 @@ indexOf idx (instValues -> vals)
 
 unitV :: Value
 unitV = VTuple mempty
-
-numTypeError :: Value -> Eval a
-numTypeError !val =
-  throwErrorC ["Value `", render val, "' is not of type Num"]
 
 error :: Text -> a
 error !msg = P.error $ unpack msg

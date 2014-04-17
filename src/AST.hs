@@ -40,7 +40,7 @@ data Expr = Var         !Name
           | For         !Expr !Expr !Expr !Expr
           | ForIn       !Expr !Expr !Expr
           | Forever     !Expr
-          | PatternDef  !Expr !Expr -- e.g. `foo bar (baz: T) = qux`
+          | PatternDef  !Expr !Expr
           | Define      !Name !Expr
           | Extend      !Name !Expr
           | Assign      !Expr !Expr

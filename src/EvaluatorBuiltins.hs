@@ -4,6 +4,7 @@
 {-# LANGUAGE TypeSynonymInstances #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE OverlappingInstances #-}
+{-# LANGUAGE BangPatterns #-}
 module EvaluatorBuiltins where
 
 import Prelude (IO, Eq(..), Ord(..), Bool(..)
@@ -27,11 +28,11 @@ builtIns = H.fromList
   , ("-", Builtin bi_minus), ("*", Builtin bi_times), ("/", Builtin bi_divide)
   , ("<", Builtin bi_lt), (">", Builtin bi_gt), ("<=", Builtin bi_leq)
   , (">=", Builtin bi_geq), ("==", Builtin bi_eq), ("!=", Builtin bi_neq)
+  , ("<>", Builtin bi_strAppend), ("read", Builtin bi_read)
   , ("negate", Builtin bi_negate), ("incr!", Builtin bi_incr)
   , ("append", Builtin bi_vectorAppend), ("prepend", Builtin bi_vectorPrepend)
-  , ("append!", Builtin bi_vectorRefAppend)
+  , ("append!", Builtin bi_vectorRefAppend), ("show", Builtin bi_show)
   , ("prepend!", Builtin bi_vectorRefPrepend)
-  , ("read", Builtin bi_read)
   ]
 
 bi_println :: Builtin
@@ -51,6 +52,23 @@ bi_read :: Builtin
 bi_read = ("read", read) where
   read (VRef ref) = readRef ref
   read val = typeError "Reference" val
+
+bi_strAppend :: Builtin
+bi_strAppend = ("<>", unbox >=> app) where
+  app (VString s) = pure $ Builtin (render s <> " <>", unbox >=> app' s)
+  app (VLocal ref) = deref ref >>= app
+  app val = strTypeError val
+  app' s (VString s') = pure $ VString (s <> s')
+  app' s (VLocal ref) = app' s =<< deref ref
+  app' _ val = strTypeError val
+
+bi_show :: Builtin
+bi_show = ("show", unbox >=> s) where
+  s (VNumber n) | isInt n = toS $ render (P.floor n :: Int)
+                | otherwise = toS $ render n
+  s (VString s) = toS $ render s
+  s val = toS $ render val
+  toS = return . VString
 
 bi_plus, bi_minus, bi_divide, bi_times, bi_eq,
   bi_lt, bi_gt, bi_neq, bi_leq, bi_geq, bi_incr,
@@ -105,9 +123,7 @@ bi_incr = ("incr!", f) where
 bi_binaryDDD :: Name -> (Double -> Double -> Double) -> Builtin
 bi_binaryDDD name op = (name, unbox >=> f) where
   f (VNumber n) = pure $ Builtin (render n <> name, unbox >=> fN n)
-  f (VLocal ref) = deref ref >>= \case
-    VNumber n -> pure $ Builtin (render n <> name, unbox >=> fN n)
-    val -> numTypeError val
+  f (VLocal ref) = deref ref >>= f
   f val = numTypeError val
   fN n (VNumber n') = pure $ VNumber (op n n')
   fN n (VLocal ref) = fN n =<< deref ref
@@ -116,10 +132,16 @@ bi_binaryDDD name op = (name, unbox >=> f) where
 bi_binaryDDB :: Name -> (Double -> Double -> Bool) -> Builtin
 bi_binaryDDB name op = (name, unbox >=> f) where
   f (VNumber n) = pure $ Builtin (render n <> name, unbox >=> fN n)
-  f (VLocal ref) = deref ref >>= \case
-    VNumber n -> pure $ Builtin (render n <> name, unbox >=> fN n)
-    val -> numTypeError val
+  f (VLocal ref) = deref ref >>= f
   f val = numTypeError val
   fN n (VNumber n') = pure $ VBool (op n n')
   fN n (VLocal ref) = fN n =<< deref ref
   fN _ val = numTypeError val
+
+numTypeError, strTypeError :: Value -> Eval a
+numTypeError = typeError "Num"
+strTypeError = typeError "Str"
+
+typeError :: Name -> Value -> Eval a
+typeError !expect !val = throwErrorC ["Expected a value of type `", expect
+                                     , "', but got a `", render val, "'"]
