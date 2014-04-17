@@ -1,3 +1,4 @@
+```
 > object Foo = Foo Str | Bar | Baz Int attrs size : Int
 > foo = Foo 'hello'
 ObjectError: object `Foo` requires attribute `size` (`with size=...`)
@@ -29,3 +30,4 @@ Exception
     Bloopit <: Bar with size=0 
   | Blip <: Baz 2 with size=1
   with name: Str
+```

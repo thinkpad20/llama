@@ -10,9 +10,11 @@ module Evaluator (EvalState, initState, evalIt, evalIt', evalItWith) where
 import Prelude (IO, Eq(..), Ord(..), Bool(..), not
                , Double, Maybe(..), undefined, Monad(..)
                , ($), Int, (.), (*), Either(..), String
-               , fst, snd, (+), (-), (/), (=<<), otherwise, fmap)
+               , fst, snd, (+), (-), (/), (=<<), otherwise
+               , fmap, (&&), (||))
 import qualified Prelude as P
-import Data.Sequence (length)
+import Data.Sequence (length, index)
+import qualified Data.Text as T
 import Data.IORef
 
 import Common hiding (intercalate)
@@ -77,49 +79,43 @@ eval !expression = case expression of
     False -> return nothingV
   Throw expr -> VThrow <$> eval expr
   Return expr -> VReturn <$> eval expr
+  Deref constrName idx expr -> eval expr >>= evalDeref constrName idx
+  PatAssert pa -> VBool <$> evalPatAssert pa
   expr -> throwErrorC ["Evaluator can't handle ", render expr]
 
-{-do `try` expr
-  exception thrown?
-  yes ->
-    is there a catch that matches the exception?
-    yes ->
-      evaluate what's in the catch
-      is there a return value in the catch?
-      yes ->
-        is there a finally block?
-        yes ->
-          evaluate the finally
-          is there a return value in the finally?
-          yes ->
-            return that
-          no ->
-            return the catch's return
-        no ->
-          return the catch's return
-      no ->
-        is there a finally block?
-        yes ->
-          evaluate finally
-          is there a return value in finally?
-          yes ->
-            return it
-          no -> return ()
-        no ->
-          return ()
-    no ->
-      is there a finally?
-      yes ->
-        evaluate the finally
-        is there a return in the finally?
-        yes ->
-          return that
-        no ->
-          reraise the exception
-      no ->
-        reraise the exception
-  no -> return whatever was computed
--}
+evalDeref :: Name -> Int -> Value -> Eval Value
+evalDeref constrName idx val = case val of
+  VInstance inst | constrName == instConstr inst -> indexOf idx inst
+                 | otherwise -> case instParent inst of
+                   Nothing ->
+                     throwError1 "instance's constructor name doesn't match"
+                   Just p -> evalDeref constrName idx p
+  VTuple vals | length vals > idx -> return $ index vals idx
+              | otherwise -> throwError1 "index out of range on tuple"
+  VVector vals | length vals > idx -> return $ index vals idx
+               | otherwise -> throwError1 "index out of range on vector"
+  VString str  | T.length str > idx -> return $ VString $ T.singleton $ T.index str idx
+               | otherwise -> throwError1 "index out of range on string"
+  VMaybe (Just val) | idx == 0 -> return val
+  _ -> throwErrorC [render val, " can't be dereferenced at ", render idx]
+
+evalPatAssert :: PatAssert -> Eval Bool
+evalPatAssert (IsConstr name expr) = eval expr >>= \case
+  VInstance inst | name == instConstr inst -> return True
+  VMaybe (Just _) | name == "Just" -> return True
+  VMaybe Nothing | name == "Nothing" -> return True
+  _ -> return False
+evalPatAssert (e1 `IsLiteral` e2) = do
+  (v1, v2) <- (,) <$> eval e1 <*> eval e2
+  isEqual v1 v2
+evalPatAssert (IsTupleOf size expr) = eval expr >>= \case
+  VTuple tup | length tup == size -> return True
+  _ -> return False
+evalPatAssert (IsVectorOf size expr) = eval expr >>= \case
+  VVector vec | length vec == size -> return True
+  _ -> return False
+evalPatAssert (pa1 `And` pa2) =
+  (&&) <$> evalPatAssert pa1 <*> evalPatAssert pa2
 
 evalTryCatch :: Expr -> [(Expr, Expr)] -> Maybe Expr -> Eval Value
 evalTryCatch try options finally = eval try >>= \case

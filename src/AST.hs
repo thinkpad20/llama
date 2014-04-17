@@ -57,9 +57,18 @@ data Expr = Var         !Name
           | LambdaDot   !Expr
           | AssignOp    !Name !Expr !Expr
           | With        !Expr ![(Name, Expr)]
+          | PatAssert   !PatAssert
+          | Deref       !Name !Int !Expr
           | Continue
           | WildCard
           deriving (P.Show, Eq)
+
+data PatAssert = IsLiteral !Expr !Expr
+               | IsConstr !Name !Expr
+               | IsTupleOf !Int !Expr
+               | IsVectorOf !Int !Expr
+               | !PatAssert `And` !PatAssert
+               deriving (P.Show, Eq)
 
 type TKwargs = [(Name, Type)]
 data Type = TVar       !Name
@@ -264,3 +273,10 @@ nothing = Constructor "Nothing"
 true, false :: Expr
 true = Constructor "True"
 false = Constructor "False"
+
+instance Monoid Expr where
+  mempty = Block []
+  Block b1 `mappend` Block b2 = Block (b1 <> b2)
+  Block b `mappend` e = Block (b <> [e])
+  e `mappend` Block b = Block (e:b)
+  e1 `mappend` e2 = Block [e1, e2]

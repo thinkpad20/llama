@@ -5,6 +5,7 @@
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE OverlappingInstances #-}
 {-# LANGUAGE BangPatterns #-}
+{-# LANGUAGE ViewPatterns #-}
 module EvaluatorLib where
 
 import Prelude (IO, Eq(..), Ord(..), Bool(..)
@@ -20,6 +21,7 @@ import Data.Text hiding (length)
 import Data.Sequence
 import qualified Data.Array.IO as A
 import Data.IORef
+import qualified Data.Foldable as F
 
 import Common hiding (intercalate)
 import AST
@@ -51,7 +53,7 @@ data Value = VNumber !Double
            | VRef !(IORef Value)
            | VLocal !LocalRef
            | Closure !(Maybe Name) !Expr !Env
-           | VObj !Obj
+           | VInstance !Instance
            | Builtin !Builtin
            deriving (P.Show)
 
@@ -74,7 +76,7 @@ instance Render Value where
     VBreak val -> "break " <> render val
     VThrow val -> "throw " <> render val
     VContinue -> "continue"
-    VObj obj -> show obj
+    VInstance inst -> show inst
     Closure (Just name) _ _ -> "Function `" <> name <> "'"
     Closure Nothing expr _ -> "Anonymous Function {" <> render expr <> "}"
     Builtin (name, _) -> "Builtin: " <> name
@@ -93,15 +95,14 @@ data LocalRef = Arg
 
 instance Render LocalRef
 
-data Obj = Obj {
-    outerType :: !Type
-  , innerType :: Text
-  , attribs   :: !(Maybe Env)
+data Instance = Instance {
+    instType   :: !Type
+  , instConstr :: !Text
+  , instParent :: !(Maybe Value)
+  , instValues :: !(Seq Value)
+  , instAttrs  :: !(Maybe Env)
   }
   deriving (P.Show)
-
-_obj :: Obj
-_obj = Obj {outerType=unitT, innerType="", attribs=Nothing}
 
 data EvalState = ES {
     esStack :: [Frame]
@@ -228,11 +229,14 @@ getClosure !pattern !expr = case pattern of
       Apply a b -> go a >> go b
       Lambda param body -> push >> getNames param >> go body <* pop
       Define var ex -> addName var >> go ex
+      Assign e e' -> go e >> go e'
       If c t f -> go c >> go t >> go f
       Literal (ArrayLiteral exprs) -> mapM_ go exprs
       TryCatch toTry ifErr finally -> go toTry >> mapM_ goPat ifErr >> goMayb finally
       Throw e -> go e
       Return e -> go e
+      Modified _ e -> go e
+      For e1 e2 e3 e4 -> go e1 >> go e2 >> go e3 >> go e4
       e -> lift $ throwErrorC ["Can't get closure of ", render e]
       where go = loop argName env
             goPat (_, res) = go res
@@ -268,6 +272,45 @@ deref !Arg = do
   ES {esStack=(f:_)} <- get
   pure (eArg f)
 deref !ref = error $ "Can't handle reference type " <> render ref
+
+-- A more powerful version of (==), because it operates in the IO monad.
+isEqual :: Value -> Value -> Eval Bool
+isEqual v1 v2 = case (v1, v2) of
+  (VNumber n, VNumber n') -> return $ n == n'
+  (VBool b, VBool b') -> return $ b == b'
+  (VString s, VString s') -> return $ s == s'
+  (VVector v, VVector v') -> do
+    let zipped = P.zip (F.toList v) (F.toList v')
+    P.all (== True) <$> P.mapM (P.uncurry isEqual) zipped
+  (VTuple t, VTuple t') -> do
+    let zipped = P.zip (F.toList t) (F.toList t')
+    P.all (== True) <$> P.mapM (P.uncurry isEqual) zipped
+  (VReturn v, VReturn v') -> isEqual v v'
+  (VBreak v, VBreak v') -> isEqual v v'
+  (VThrow v, VThrow v') -> isEqual v v'
+  (VMaybe (Just v), VMaybe (Just v')) -> isEqual v v'
+  (VMaybe (Just v), VMaybe Nothing) -> return False
+  (VMaybe Nothing, VMaybe (Just v)) -> return False
+  (VMaybe Nothing, VMaybe Nothing) -> return True
+  (VContinue, VContinue) -> return True
+  (VRef r, VRef r') -> do
+    (v, v') <- (,) <$> readRef r <*> readRef r'
+    isEqual v v'
+  (_, _) -> throwErrorC [ "Can't determine if vals ", render v1
+                        , " and ", render v2, " are equal"]
+           -- | PMap !PMap
+           -- | MMap !MMap
+           -- | PSet !PSet
+           -- | MSet !MSet
+           -- | VLocal !LocalRef
+           -- | Closure !(Maybe Name) !Expr !Env
+           -- | VInstance !Instance
+           -- | Builtin !Builtin
+
+indexOf :: Int -> Instance -> Eval Value
+indexOf idx (instValues -> vals)
+  | idx < length vals = return $ Data.Sequence.index vals idx
+  | otherwise = throwErrorC ["Index out of range on object"]
 
 unitV :: Value
 unitV = VTuple mempty

@@ -15,6 +15,8 @@ import Prelude (IO, Show(..), Eq(..), Ord(..), Bool(..),
                 ($), (.), floor, map, Functor(..), mapM,
                 (+), (-), elem, Either(..), tail, otherwise,
                 error, undefined, fst, putStrLn, (||), foldl)
+import Control.Monad (MonadPlus(..))
+import Control.Monad.State.Strict (runStateT)
 import qualified Data.Map as M
 import qualified Data.Set as S
 import qualified Prelude as P
@@ -94,6 +96,8 @@ traverse ds e | doTest ds e = doTransform ds e
   WildCard -> return WildCard
   InString is -> InString <$> recIs is
   Attribute expr name -> (\ex -> Attribute ex name) <$> rec expr
+  Deref name idx expr -> Deref name idx <$> rec expr
+  PatAssert pa -> PatAssert <$> recPA pa
   _ -> error $ "Expression not covered in desugarer: " <> P.show e
   where rec = traverse ds
         recNS n expr = pushNS n *> rec expr <* popNS
@@ -111,6 +115,12 @@ traverse ds e | doTest ds e = doTransform ds e
         recIs (Interp s ex s') = Interp <$> recIs s <*> rec ex <*> recIs s'
         recIs (InterpShow s ex s') = InterpShow <$> recIs s <*> rec ex <*> recIs s'
         recIs s = return s
+        recPA pa = case pa of
+          IsLiteral e1 e2 -> IsLiteral <$> rec e1 <*> rec e2
+          IsConstr name e -> IsConstr name <$> rec e
+          IsTupleOf size e -> IsTupleOf size <$> rec e
+          IsVectorOf size e -> IsVectorOf size <$> rec e
+          And pa1 pa2 -> And <$> recPA pa1 <*> recPA pa2
         recCr cr@(ConstructorDec { constrArgs=args, constrExtends=extends
                                  , constrLogic=logic }) = do
           args' <- mapM rec args
@@ -136,7 +146,8 @@ popNS = modify $ \s -> s { dsNameSpace = nsTail $ dsNameSpace s
 -- constructor type of the expression) and a transforming function
 -- which takes that expression and returns its desugared version.
 dsAfterBefore, dsLambdaDot, dsDot, dsLambdas, dsPrefixLine, dsForIn,
-  dsPatternDef, dsInString, dsForever, dsMultiCase, dsIf' :: Desugarer
+  dsPatternDef, dsInString, dsForever, dsMultiCase,
+  dsIf', dsCase :: Desugarer
 dsAfterBefore = ("Before/After", test, ds) where
   test (After _ _) = True
   test (Before _ _) = True
@@ -284,6 +295,55 @@ dsIf' = tup where
   ds (If' cond result) = If <$> rec cond <*> (just <$> rec result) <*> pure nothing
   rec = traverse tup
 
+dsCase = tup where
+  tup = ("Case", test, ds)
+  test (Case _ _) = True
+  test _ = False
+  rec = traverse tup
+  ds (Case e options) = go e options
+  --go :: Expr -> [(Expr, Expr)] -> Desugar
+  go e = \case
+    [] -> return $ Throw $ Constructor "PatternMatchError"
+    (pat, res):opts -> boolAndAssigns e pat >>= \case
+      (Nothing, assns) -> return $ assns <> res
+      (Just cond, assns) -> If (PatAssert cond) (assns <> res) <$> go e opts
+
+boolAndAssigns :: Expr -> Expr -> Desugar (Maybe PatAssert, Expr)
+boolAndAssigns start expr = fst <$> runStateT (go start expr) ("", 0) where
+  go :: Expr -> Expr -> StateT (Name, Int) Desugar (Maybe PatAssert, Expr)
+  go start expr = case expr of
+    Number n -> return (lit $ Number n, mempty)
+    String s -> return (lit $ String s, mempty)
+    Var v -> case start of
+        Var v' | v' == v -> return (Nothing, mempty)
+        _ -> return (Nothing, Define v start)
+    Constructor name -> do
+      return (Just $ IsConstr name start, mempty)
+    Tuple exprs _ -> do
+      list <- mapM convertWithIndex $ P.zip [0..] exprs
+      return (mkBool (P.length exprs) list, mkAssigns list)
+      where convertWithIndex (i, e) = do start' <- aRef i
+                                         go start' e
+    Apply a b -> do
+      (b1, a1) <- go start a
+      (_, i)   <- get
+      (b2, a2) <- aRef i >>= \start' -> go start' b
+      modify (\(name, i) -> (name, i + 1))
+      return (b1 `and` b2, a1 <> a2)
+    _ -> lift $ throwErrorC ["Unhandled case: ", render expr]
+    where lit expr = Just $ start `IsLiteral` expr
+          aRef n = do
+            (name, _) <- get
+            return $ Deref name n start
+          Just pa1 `and` Just pa2 = Just $ pa1 `And` pa2
+          a `and` b = a `mplus` b
+          -- make an AND of all the a==b expressions in subcompilations
+          mkBool :: Int -> [(Maybe PatAssert, Expr)] -> Maybe PatAssert
+          mkBool len list = P.foldr and (Just $ IsTupleOf len start)
+                                        (fst <$> list)
+          -- concatenate all of the assignments from the subcompilations
+          mkAssigns list = mconcat (P.snd <$> list)
+
 -- | @unApply@ "unwinds" a series of applies into a list of
 -- expressions that are on the right side, paired with the
 -- root-level expression. So for example `foo bar baz` which
@@ -347,7 +407,8 @@ desugarers = [ dsAfterBefore
              , dsPatternDef
              , dsInString
              , dsMultiCase
-             , dsIf']
+             , dsIf'
+             , dsCase]
 
 desugar :: Expr -> Desugar Expr
 desugar expr = go desugarers expr where
