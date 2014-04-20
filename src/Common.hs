@@ -57,10 +57,13 @@ class Show a => Render a where
   render = P.show ~> T.pack
   renderIO :: a -> IO T.Text
   renderIO = return . render
+  renderI :: Int -> a -> T.Text
+  renderI _ = render
 
 instance Render Double
 instance Render T.Text
 instance Render Int
+instance Render Integer
 instance Render Char
 instance (Render a, Render b) => Render (a, b) where
   render (a, b) = "(" <> render a <> "," <> render b <> ")"
