@@ -1,0 +1,3 @@
+object Maybe a = Nothing | Just a;
+
+flip f x y = f y x;

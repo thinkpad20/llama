@@ -158,7 +158,7 @@ instance Render Expr where
     Assign (Var v) e@(Function _ _) -> [v, " = ", renderI n e]
     Assign (Var v) e -> [v, " = ", renderI n e]
     Assign e e' -> [renderI n e, " = ", renderI n e']
-    Function ns blk -> ["function (", sep ns, ") {\n",
+    Function ns blk -> ["function(", sep ns, ") {\n",
                          renderI (n+1) blk, sp n "}"]
     Array exprs -> ["[", sep $ map (renderI n) exprs, "]"]
     Dot e name -> [renderI n e, ".", name]

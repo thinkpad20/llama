@@ -24,7 +24,7 @@ import TypeLib
 import ParserLib
 
 skip :: Parser ()
-skip = many (oneOf " \t") *> option () lineComment
+skip = many (oneOf " \t\n") *> option () lineComment
   where lineComment = do char '#'
                          many (noneOf "\n")
                          (char '\n' >> return ()) <|> eof

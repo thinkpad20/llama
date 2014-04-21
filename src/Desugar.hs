@@ -324,6 +324,7 @@ assertsAndDefs start expr = fst <$> runStateT (go start expr) ("", 0) where
       Var v' | v' == v -> return (Nothing, mempty)
       _ -> return (Nothing, Define v matchWith)
     Constructor name -> do
+      modify (\(_, i) -> (name, i))
       return (Just $ IsConstr name matchWith, mempty)
     Tuple exprs _ -> do
       list <- mapM convertWithIndex $ P.zip [0..] exprs

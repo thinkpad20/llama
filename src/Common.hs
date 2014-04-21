@@ -15,7 +15,7 @@ module Common ( (!), (<!>), (<$>), (<$), (<*), (*>), (<*>), pure
               , isInt, ErrorList(..), throwError1, throwErrorC, addError
               , addError', forever, isSpace, catMaybes, sortWith, each
               , unless, mconcatMapM, show, whenM, unlessM, lift2, toList
-              , mapM_, fromList)
+              , mapM_, fromList, liftIO)
               where
 
 import Prelude hiding (show, mapM_)
@@ -57,8 +57,10 @@ class Show a => Render a where
   render = P.show ~> T.pack
   renderIO :: a -> IO T.Text
   renderIO = return . render
+  renderI' :: a -> State (Int, T.Text) ()
+  renderI' _ = return ()
   renderI :: Int -> a -> T.Text
-  renderI _ = render
+  renderI i a = snd $ execState (renderI' a) (i, "")
 
 instance Render Double
 instance Render T.Text

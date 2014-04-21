@@ -1,8 +1,14 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE LambdaCase #-}
-module CompileJS where
+module CompileJS (compileIt, jsPreamble) where
 
+import qualified Prelude as P
+import Prelude (IO, Eq(..), Ord(..), Bool(..), (=<<), fromIntegral,
+                Double, String, Maybe(..), Int, Monad(..),
+                ($), (.), floor, map, Functor(..), mapM,
+                (+), (-), elem, Either(..), error, fst)
 import qualified JavaScript.AST as J
+import qualified Data.HashMap.Strict as H
 import Data.Monoid
 import Data.Text hiding (map, foldr)
 import Control.Applicative
@@ -37,10 +43,6 @@ eToBlk expr = case expr of
     let name' = if isSymbol name then toString name else name
     assn <- J.Assign (J.Var name') <$> eToE e
     return $ J.Block [name'] [J.Expr assn]
-  Apply a b -> do
-    a' <- eToE a
-    b' <- eToE b
-    call a' [b']
   Block es -> blkToBlk es
   Throw expr -> singleS =<< J.Throw <$> eToE expr
   e -> singleS =<< J.Return <$> eToE e
@@ -77,14 +79,18 @@ eToE expr = case expr of
           toArg _ = throwErrorC ["Can't handle arbitrary exprs in args"]
   Block exprs -> iffe exprs
   Throw e -> J.Call (J.Var "_throw") . pure <$> eToE e
-  Apply a (Tuple es _) -> J.Call <$> eToE a <*> mapM eToE es
+  Apply (Apply (Var "==") x) y -> J.Binary "===" <$> eToE x <*> eToE y
   Apply (Apply (Var op) x) y | op `elem` ["+", "-", "*"] ->
-    J.Binary op <$> eToE y <*> eToE y
+    J.Binary op <$> eToE x <*> eToE y
+  Apply a (Tuple es _) -> J.Call <$> eToE a <*> mapM eToE es
   Apply a b -> J.Call <$> eToE a <*> (pure <$> eToE b)
   Dot b a -> J.Call <$> eToE a <*> (pure <$> eToE b)
   Define name e -> declare name >> J.Assign (J.Var name) <$> eToE e
   Assign a b -> J.Assign <$> eToE a <*> eToE b
   otherwise -> throwErrorC ["Unhandlable expression: ", render expr]
+
+jTuple :: [J.Expr] -> J.Expr
+jTuple es = J.Call (J.Var "__Tuple") [J.Array es]
 
 paToE :: PatAssert -> JSCompiler J.Expr
 paToE = \case
@@ -112,9 +118,6 @@ iffe exprs = do
   let func = J.Function [] block
   return $ J.Call func []
 
-jTuple :: [J.Expr] -> J.Expr
-jTuple es = J.Call (J.Var "__Tuple") [J.Array es]
-
 -- compile is the top-level compilation function. It's almost identical to
 -- eToBlk except that it does not produce a return on bare expressions or
 -- if statements.
@@ -137,11 +140,14 @@ compile expr = case expr of
 declare _ = return ()
 
 compileObjectDec :: ObjectDec -> JSCompiler J.Block
-compileObjectDec ObjectDec {objConstrs=constrs, objName=name} =
-  mconcat <$> mapM (compileConstr name) constrs
+compileObjectDec ObjectDec {objConstrs=constrs,
+                            objName=name,
+                            objAttrs=attrs} =
+  let attrs' = map render attrs in
+  mconcat <$> mapM (compileConstr name attrs') constrs
 
-compileConstr :: Name -> ConstructorDec -> JSCompiler J.Block
-compileConstr objName c = do
+compileConstr :: Name -> [Name] -> ConstructorDec -> JSCompiler J.Block
+compileConstr objName attrs c = do
   parent <- case constrExtends c of
     Nothing -> return J.Null
     Just e -> eToE e
@@ -151,10 +157,13 @@ compileConstr objName c = do
   args <- forM (constrArgs c) $ \case
     Var n -> return n
     e -> newName e
-  let new = llamaObj objName (constrName c) args J.emptyObj parent logic
-  let mkFunc [] = new
+  let attrs' = J.Object $ H.fromList (map (\n -> (n,J.Var n)) attrs)
+  let new = llamaObj objName (constrName c) args attrs' parent logic
+      mkFunc [] = case attrs of
+        [] -> new
+        _  -> J.Function attrs (J.Block [] [J.Return $ new])
       mkFunc (a:as) = J.Function [a] (J.Block [] [J.Return $ mkFunc as])
-  let func = J.Expr $ J.Assign (J.Var $ constrName c) (mkFunc args)
+      func = J.Expr $ J.Assign (J.Var $ constrName c) (mkFunc $ args)
   return $ J.Block [constrName c] [func]
 
 llamaObj :: Name -- The type's name
@@ -183,6 +192,11 @@ compileIt input = case desugarIt input of
   Left err -> Left $ ErrorList [render err]
   Right expr -> unsafePerformIO $ runCompile expr
 
+compileIt' :: String -> String
+compileIt' input = case compileIt input of
+  Left err -> error $ P.show err
+  Right js -> unpack $ renderI 2 js
+
 toString :: Text -> Text
 toString ">" = "_gt"
 toString "<" = "_lt"
@@ -199,6 +213,10 @@ toString "||" = "_or"
 toString "^" = "_pow"
 toString "::" = "_cons"
 toString "<>" = "_append"
+toString "!" = "_f_apply"
+toString "$" = "_apply"
+toString "~>" = "_f_comp"
+toString "<~" = "_comp"
 toString s = unpack s ! map fromChar ! mconcat ! pack where
   fromChar '>' = "_gt"
   fromChar '<' = "_lt"
@@ -215,3 +233,4 @@ toString s = unpack s ! map fromChar ! mconcat ! pack where
   fromChar '@' = "_at"
   fromChar ':' = "_col"
 
+jsPreamble = "var ConstructorNotFoundError, Exception, Just, LlamaObject, LookupError, NoAttributeError, Nothing, PatternMatchError, is_instance, print, println, show, _divide, _minus, _plus, _throw, _times;\nLlamaObject = require('./llama_core').LlamaObject;\nis_instance = require('./llama_core').is_instance;\nException = require('./llama_core').Exception;\nLookupError = require('./llama_core').LookupError;\nPatternMatchError = require('./llama_core').PatternMatchError;\nConstructorNotFoundError = require('./llama_core').ConstructorNotFoundError;\nNoAttributeError = require('./llama_core').NoAttributeError;\nNothing = require('./llama_core').Nothing;\nJust = require('./llama_core').Just;\n_throw = require('./llama_core')._throw;\nshow = require('./llama_core').show;\nprintln = require('./llama_core').println;\nprint = require('./llama_core').print;\n_plus = require('./llama_core')._plus;\n_minus = require('./llama_core')._minus;\n_times = require('./llama_core')._times;\n_divide = require('./llama_core')._divide;\n_plus = require('./llama_core')._plus;\n\n"
