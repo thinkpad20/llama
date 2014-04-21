@@ -344,7 +344,7 @@ assertsAndDefs start expr = fst <$> runStateT (go start expr) ("", 0) where
           a `and` b = a `mplus` b
           -- make an AND of all the a==b expressions in subcompilations
           mkBool len list =
-            P.foldr and (Just $ IsTupleOf len matchWith) (fst <$> list)
+            P.foldl and (Just $ IsTupleOf len matchWith) (fst <$> list)
           -- concatenate all of the assignments from the subcompilations
           mkAssigns list = mconcat (P.snd <$> list)
 

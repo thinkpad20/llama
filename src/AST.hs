@@ -67,6 +67,7 @@ data PatAssert = IsLiteral !Expr !Expr
                | IsConstr !Name !Expr
                | IsTupleOf !Int !Expr
                | IsVectorOf !Int !Expr
+               | IsArrayOf !Int !Expr
                | !PatAssert `And` !PatAssert
                deriving (P.Show, Eq)
 

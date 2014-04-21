@@ -1,0 +1,20 @@
+var ConstructorNotFoundError, Exception, Just, LlamaObject, LookupError, NoAttributeError, Nothing, PatternMatchError, is_instance, print, println, show, _divide, _minus, _plus, _throw, _times;
+LlamaObject = require('./llama_core').LlamaObject;
+is_instance = require('./llama_core').is_instance;
+Exception = require('./llama_core').Exception;
+LookupError = require('./llama_core').LookupError;
+PatternMatchError = require('./llama_core').PatternMatchError;
+ConstructorNotFoundError = require('./llama_core').ConstructorNotFoundError;
+NoAttributeError = require('./llama_core').NoAttributeError;
+Nothing = require('./llama_core').Nothing;
+Just = require('./llama_core').Just;
+_throw = require('./llama_core')._throw;
+show = require('./llama_core').show;
+println = require('./llama_core').println;
+print = require('./llama_core').print;
+_plus = require('./llama_core')._plus;
+_minus = require('./llama_core')._minus;
+_times = require('./llama_core')._times;
+_divide = require('./llama_core')._divide;
+_plus = require('./llama_core')._plus;
+

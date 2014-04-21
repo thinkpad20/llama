@@ -2,7 +2,8 @@
 module JavaScript.AST (Statement(..),
                        Expr(..),
                        Block(..),
-                       throwNewError) where
+                       throwNewError,
+                       emptyObj) where
 
 import qualified Prelude as P
 import Prelude (IO, Eq(..), Ord(..), Bool(..), Show(..),
@@ -11,6 +12,8 @@ import Prelude (IO, Eq(..), Ord(..), Bool(..), Show(..),
                 (+), (-), (*), elem, Either(..), Integer)
 import Data.Monoid
 import Data.Text hiding (map)
+import Data.HashMap.Strict hiding (map)
+import qualified Data.HashMap.Strict as H
 import qualified Data.List as L
 
 import Control.Applicative
@@ -23,8 +26,8 @@ data Statement =
   | If Expr Block Block
   | If' Expr Block
   | While Expr Block
-  | For Expr Expr Expr Block
-  | Declare Name
+  | For Statement Statement Statement Block
+  | Declare [Name]
   | Return Expr
   | Return'
   | Throw Expr
@@ -40,13 +43,19 @@ data Expr =
   | This
   | Function [Name] Block
   | Parens Expr
-  | Dot Expr Expr
+  | Dot Expr Name
   | Call Expr [Expr]
   | ArrayReference Expr Expr
+  | Object (HashMap Name Expr)
   | Binary Text Expr Expr
   | Unary Text Expr
   | Ternary Expr Expr Expr
+  | Null
+  | Undefined
   | New Expr
+
+emptyObj :: Expr
+emptyObj = Object mempty
 
 instance Show Expr where
   show t = case t of
@@ -58,7 +67,7 @@ instance Show Expr where
     Bool True -> "true"
     Bool False -> "false"
     Array exprs -> c ["[", sep $ map show exprs, "]"]
-    Dot e1 e2 -> show e1 <> "." <> show e2
+    Dot e name -> show e <> "." <> unpack name
     Call f@(Function _ _) es ->
       c ["(", show f, ")(", sep (map show es), ")"]
     Call e es -> c [show e, "(", sep (map show es), ")"]
@@ -68,13 +77,22 @@ instance Show Expr where
                                     ":", show e3, ")"]
     ArrayReference e1 e2 -> show e1 <> "[" <> show e2 <> "]"
     New e -> "new " <> show e
-    Assign e e' -> show e <> " = " <> show e'
+    Assign (Var n) (Function ns blk) ->
+      c ["function ", unpack n, "(", sep $ map unpack ns, "){", show blk, "}"]
+    Assign e e' -> show e <> "=" <> show e'
+    Null -> "null"
+    Object o -> toJsObject o
     where c   = mconcat
           sep = L.intercalate ","
 
+toJsObject :: HashMap Name Expr -> String
+toJsObject mp = do
+  let doit = each (keys mp) $ \k -> unpack k <> ":" <> show (mp H.! k)
+  "{" <> L.intercalate "," doit <> "}"
+
 instance Show Statement where
   show s = case s of
-    Expr e -> show e <> ";"
+    Expr e -> show e
     If' e b -> c ["if(", show e, "){", show b, "}"]
     If e b1 b2 -> c [show (If' e b1), "else", showElse b2] where
       showElse (Block _ [_if@(If _ _ _)]) = " " <> show _if
@@ -82,25 +100,25 @@ instance Show Statement where
     While e b -> "while(" <> show e <> "){" <> show b <> "}"
     For e1 e2 e3 b -> c ["for(", show e1,";", show e2, ";", show e3,
                              "){", show b, "}"]
-    Return' -> "return;"
-    Return e -> "return " <> show e <> ";"
-    Break -> "break;"
-    Throw e -> "throw " <> show e <> ";"
-    Declare v -> "var " <> unpack v <> ";"
+    Return' -> "return"
+    Return e -> "return " <> show e
+    Break -> "break"
+    Throw e -> "throw " <> show e
+    Declare ns -> "var " <> unpack (intercalate "," ns)
     where c = mconcat
 
 instance Show Block where
   show = blockToBlock ~> s where
-    s (Block _ stmts) = mconcat $ map show stmts
+    s (Block _ stmts) = L.intercalate ";" (map show stmts) <> ";"
 
 instance Monoid Block where
   mempty = Block [] []
   mappend (Block ns a) (Block ns' b) = Block (ns <> ns') (a <> b)
 
 blockToBlock :: Block -> Block
-blockToBlock (Block names stmts) = do
-  let decs = map Declare names
-  Block [] $ decs <> stmts
+blockToBlock (Block names stmts) = case names of
+  [] -> Block [] stmts
+  _ -> Block [] $ Declare names : stmts
 
 indentation :: Int
 indentation = 2
@@ -115,7 +133,7 @@ instance Render Statement where
     While e b -> ["while (", renderI n e, ") {", rec b, sp n "}"]
     For e1 e2 e3 b -> ["for (", renderI n e1, ";", renderI n e2,
                          ";", renderI n e3, ") {", rec b, sp n "}"]
-    Declare name -> ["var ", name, ";\n"]
+    Declare names -> ["var ", intercalate ", " names, ";\n"]
     Return' -> ["return;"]
     Return e -> ["return ", renderI n e, ";"]
     Break -> ["break;"]
@@ -143,7 +161,7 @@ instance Render Expr where
     Function ns blk -> ["function (", sep ns, ") {\n",
                          renderI (n+1) blk, sp n "}"]
     Array exprs -> ["[", sep $ map (renderI n) exprs, "]"]
-    Dot e1 e2 -> [renderI n e1, ".", renderI n e2]
+    Dot e name -> [renderI n e, ".", name]
     Call e es -> [renderI n e, "(", intercalate ", " (map (renderI n) es), ")"]
     ArrayReference e e' -> [renderI n e, "[", renderI n e', "]"]
     Binary op e1 e2 -> [renderI n e1, " ", op, " ", renderI n e2]

@@ -135,8 +135,8 @@ addError msg (ErrorList msgs) = throwError $ ErrorList $ msg : msgs
 addError' ::  (Monad m) => [T.Text] -> ErrorList -> ErrorT ErrorList m a
 addError' = addError . mconcat
 
-each :: [a] -> (a -> b) -> [b]
-each = flip map
+each :: Functor f => f a -> (a -> b) -> f b
+each = flip fmap
 
 mconcatMapM :: (Monad f, Functor f, Monoid t) => (a -> f t) -> [a] -> f t
 mconcatMapM f list = mconcat <$> mapM f list

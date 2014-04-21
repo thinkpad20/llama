@@ -1,5 +1,12 @@
 _ = require 'underscore'
 
+Object.prototype.deref = (idx) ->
+  return @ if idx is 0
+  _throw PatternMatchError()
+
+# So that we can use `throw` in expressions
+_throw = (exc) -> throw exc
+
 class LlamaObject
   constructor: (@___type_name,
                 @___constr_name,
@@ -8,9 +15,6 @@ class LlamaObject
                 @parent,
                 affect) ->
     if affect? then affect @
-    for [key, val] in _.pairs ___attrs
-      Object.defineProperty @, key,
-        get: -> @get ___constr_name, key
   deref: (constr_name, idx) ->
     if @___constr_name is constr_name
       if idx < @___values.length
@@ -18,27 +22,27 @@ class LlamaObject
       else _throw DerefRangeError idx
     else if @___parent? then @___parent.deref constr_name, idx
     else _throw ConstructorNotFoundError constr_name
-  get: (constr_name, key) ->
+  get_attr: (constr_name, key) ->
     if @___constr_name is constr_name
       if @___attrs[key]?
         @___attrs[key]
       else _throw NoAttributeError key
-    else if @parent? then @parent.get constr_name, idx
+    else if @parent? then @parent.get_attr constr_name, idx
     else _throw ConstructorNotFoundError constr_name
 
 is_instance = (obj, name) ->
-  # Check some primitive types here...
+  return true if _.isArray obj and name is 'Array'
+  return true if _.isNumber obj and name is 'Num'
+  return true if _.isString obj and name is 'Str'
+  return true if _.isBoolean obj and name is 'Bool'
   return true if obj.___type_name is name
   obj.___parent? and is_instance obj.___parent, name
 
-_throw = (exc) ->
-  if not is_instance exc, 'Exception'
-    throw new Error 'Attempt to throw a non-exception'
-  throw exc
+get_trace = -> new Error().stack.split '\n'
 
-# object Maybe a = Nothing | Just a
-Nothing = new LlamaObject 'Maybe', 'Nothing'
-Just = (_a) -> new LlamaObject 'Maybe', 'Just', [_a]
+Exception = (msg) ->
+  new LlamaObject 'Exception', 'Exception', [msg], {}, null, (self) ->
+    self.___attrs.trace = get_trace()
 
 NoAttributeError = (attr) -> (obj) ->
   parent = Exception "Attribute #{show attr} not found on object #{show obj}"
@@ -47,16 +51,6 @@ NoAttributeError = (attr) -> (obj) ->
 ConstructorNotFoundError = (constrName) ->
   parent = Exception "Constructor #{show constr_name} not found on object #{show obj}"
   new LlamaObject 'NoAttributeError', 'NoAttributeError', [attr], {}, parent
-
-# object Exception =
-#   Exception (msg: Str) {
-#    trace := Sys\get_trace()
-#   }
-#   with !trace: [Str]
-get_trace = -> new Error().stack.split '\n'
-Exception = (msg) ->
-  new LlamaObject 'Exception', 'Exception', [msg], {}, null, (self) ->
-    self.___attrs.trace = get_trace()
 
 # object LookupError (a : Show) <: Exception =
 #   LookupError (key: a) <: Exception 'Key #{key} was not found'
@@ -74,6 +68,21 @@ PatternMatchError = (pat) -> (val) ->
   parent = Exception s
   new LlamaObject 'PatternMatchError', 'PatternMatchError', [pat, val], {}, parent
 
+Number.prototype.get_attr = (name) ->
+  return this[name] if this[name]?
+  _throw NoAttributeError name
+
+String.prototype.get_attr = (name) ->
+  return this[name] if this[name]?
+  _throw NoAttributeError name
+
+Function.prototype._call = (arg) ->
+  if _.isArray arg then @apply null, arg else @ arg
+
+# object Maybe a = Nothing | Just a
+Nothing = new LlamaObject 'Maybe', 'Nothing'
+Just = (_a) -> new LlamaObject 'Maybe', 'Just', [_a]
+
 _plus = (x) -> (y) -> x + y
 _minus = (x) -> (y) -> x - y
 _times = (x) -> (y) -> x * y
@@ -82,11 +91,23 @@ _append = _plus
 
 show = (x) -> x
 println = console.log
+print = process.stdout.write
 
 exports.LlamaObject = LlamaObject
-exports.LookupError = LookupError
-exports.PatternMatchError = PatternMatchError
 exports.is_instance = is_instance
 exports.Exception = Exception
+exports.LookupError = LookupError
+exports.PatternMatchError = PatternMatchError
+exports.ConstructorNotFoundError = ConstructorNotFoundError
+exports.NoAttributeError = NoAttributeError
 exports.Nothing = Nothing
 exports.Just = Just
+exports._throw = _throw
+exports.show = show
+exports.println = println
+exports.print = print
+exports._plus = _plus
+exports._minus = _minus
+exports._times = _times
+exports._divide = _divide
+exports._append = _plus
