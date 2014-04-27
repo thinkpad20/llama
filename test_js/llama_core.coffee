@@ -28,6 +28,29 @@ class LlamaObject
     else _throw ConstructorNotFoundError constr_name, @
   is_constr: (constr_name) ->
     @constr_name is constr_name or @parent and @parent.is_constr constr_name
+  repr: (with_attrs=false) ->
+    result = @constr_name
+    for val in @values
+      if val.values.length <= 1
+        result = "#{result} #{val.repr(with_attrs)}"
+      else
+        result = "#{result} (#{val.repr(with_attrs)})"
+    if with_attrs then "#{result}#{@repr_attrs()}" else result
+  repr_attrs: ->
+    if _.size @attrs is 0 then ''
+    else if _.size @attrs is 1
+      name = (_.keys @attrs)[0]
+      " with #{name}=#{@attrs[name].repr(true)}"
+    else
+      result = " with {"
+      first = true
+      for k, v of @attrs
+        if first
+          result = "#{result}{#{k}=#{v.repr(true)}"
+          first = false
+        else
+          result = "#{result};#{k}=#{v.repr(true)}"
+      "#{result}}"
 
 Object.prototype.deref = (idx) ->
   return @ if idx is 0
@@ -36,6 +59,10 @@ Object.prototype.deref = (idx) ->
 Object.prototype.get_attr = (name) ->
   return this[name] if this[name]?
   _throw NoAttributeError name
+
+Object.prototype.values = []
+Object.prototype.repr = -> "#{@}"
+String.prototype.repr = -> JSON.stringify @
 
 Array.prototype.deref = (idx) -> @[idx]
 
@@ -64,27 +91,27 @@ Exception = (msg) ->
 
 NoAttributeError = (attr, obj) ->
   type = TConst 'NoAttributeError'
-  parent = Exception "Attribute #{show attr} not found on object #{show obj}"
+  parent = Exception "Attribute #{attr.repr()} not found on object #{obj.repr()}"
   new LlamaObject type, 'NoAttributeError', [attr], {}, parent
 
 DerefRangeError = (idx, obj) ->
   type = TConst 'DerefRangeError'
-  parent = Exception "Index #{show idx} out of range on object #{show obj}"
+  parent = Exception "Index #{idx.repr()} out of range on object #{obj.repr()}"
   new LlamaObject type, 'NoAttributeError', [attr], {}, parent
 
 ConstructorNotFoundError = (constr_name, obj) ->
   type = TConst 'ConstructorNotFoundError'
-  parent = Exception "Constructor #{show constr_name} not found on object #{show obj}"
+  parent = Exception "Constructor #{constr_name.repr()} not found on object #{show obj.repr()}"
   new LlamaObject type, 'ConstructorNotFoundError', [constr_name, obj], {}, parent
 
 LookupError = (key) ->
   type = TConst 'LookupError'
-  parent = Exception _append(_append('Key ')(show key))(' was not found')
+  parent = Exception "Couldn't find key #{key}"
   new LlamaObject type, 'LookupError', [key], {}, parent
 
 PatternMatchError = (pat, val) ->
   type = TConst 'PatternMatchError'
-  parent = Exception "Couldn't match value #{val} with pattern #{pat}"
+  parent = Exception "Couldn't match value #{val.repr()} with pattern #{pat.repr()}"
   new LlamaObject type, 'PatternMatchError', [pat, val], {}, parent
 
 _TypeError = (msg) ->
@@ -94,7 +121,7 @@ _TypeError = (msg) ->
 
 NoInstanceError = (trait, type) ->
   type = TConst 'TraitError'
-  parent = Exception "No instance of #{trait} for #{type}"
+  parent = Exception "No instance of #{trait} for #{type.repr()}"
   new LlamaObject type, 'TraitError', [msg], {}, parent
 
 class Trait
@@ -235,3 +262,5 @@ exports.TFunction = TFunction
 exports.TWildCard = TWildCard
 exports.Default = Default
 exports._default = _default
+exports.End = End
+exports.Cons = Cons
