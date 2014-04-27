@@ -1,135 +1,209 @@
 _ = require 'underscore'
 
-Object.prototype.deref = (idx) ->
-  return @ if idx is 0
-  _throw PatternMatchError()
-
 # So that we can use `throw` in expressions
 _throw = (exc) -> throw JSON.stringify exc.get_attr 'Exception', 'trace'
 
 class LlamaObject
-  constructor: (@___type_name,
-                @___constr_name,
-                @___values=[],
-                @___attrs={},
+  constructor: (@type,
+                @constr_name,
+                @values=[],
+                @attrs={},
                 @parent,
                 affect) ->
     if affect? then affect @
   deref: (constr_name, idx) ->
-    unless _.isString constr_name
-      _throw TypeError 'constr_name needs to be a string!'
-    unless _.isNumber idx
-      _throw TypeError 'idx needs to be a number!'
-    if @___constr_name is constr_name
-      if idx < @___values.length
-        @___values[idx]
+    if @constr_name is constr_name
+      if idx < @values.length
+        @values[idx]
       else _throw DerefRangeError idx, @
     else if @parent?
       @parent.deref constr_name, idx
     else _throw ConstructorNotFoundError constr_name, @
   get_attr: (constr_name, key) ->
-    unless _.isString constr_name
-      _throw TypeError 'constr_name needs to be a string!'
-    unless _.isString key
-      _throw TypeError 'key needs to be a string!'
-    if @___constr_name is constr_name
-      if @___attrs[key]? then @___attrs[key]
+    if @constr_name is constr_name
+      if @attrs[key]? then @attrs[key]
       else _throw NoAttributeError key, @
     else if @parent?
       @parent.get_attr constr_name, key
     else _throw ConstructorNotFoundError constr_name, @
+  is_constr: (constr_name) ->
+    @constr_name is constr_name or @parent and @parent.is_constr constr_name
 
-is_instance = (obj, name) ->
-  return true if _.isArray obj and name is 'Array'
-  return true if _.isNumber obj and name is 'Num'
-  return true if _.isString obj and name is 'Str'
-  return true if _.isBoolean obj and name is 'Bool'
-  return true if obj.___type_name is name
-  obj.___parent? and is_instance obj.___parent, name
+Object.prototype.deref = (idx) ->
+  return @ if idx is 0
+  _throw PatternMatchError()
 
-Exception = (msg) ->
-  new LlamaObject 'Exception', 'Exception', [msg], {}, null, (self) ->
-    self.___attrs.trace = new Error(msg).stack
-
-NoAttributeError = (attr, obj) ->
-  parent = Exception "Attribute #{show attr} not found on object #{show obj}"
-  new LlamaObject 'NoAttributeError', 'NoAttributeError', [attr], {}, parent
-
-DerefRangeError = (idx, obj) ->
-  parent = Exception "Index #{show idx} out of range on object #{show obj}"
-  new LlamaObject 'NoAttributeError', 'NoAttributeError', [attr], {}, parent
-
-ConstructorNotFoundError = (constr_name, obj) ->
-  parent = Exception "Constructor #{show constr_name} not found on object #{show obj}"
-  new LlamaObject 'ConstructorNotFoundError', 'ConstructorNotFoundError', [constr_name, obj], {}, parent
-
-# object LookupError (a : Show) <: Exception =
-#   LookupError (key: a) <: Exception 'Key #{key} was not found'
-LookupError = (key) ->
-  parent = Exception _append(_append('Key ')(show key))(' was not found')
-  new LlamaObject 'LookupError', 'LookupError', [key], {}, parent
-
-# object PatternMatchError (a : Show) a <: Exception =
-#   PatternMatchError (pat: a) (val: a) <:
-#     Exception "Couldn't match value #{val} with pattern #{pat}"
-PatternMatchError = (pat) -> (val) ->
-  s = _append("Couldn't match value ")(show val)
-  s = _append(s)(' with pattern ')
-  s = _append(s)(show pat)
-  parent = Exception s
-  new LlamaObject 'PatternMatchError', 'PatternMatchError', [pat, val], {}, parent
-
-TypeError = (msg) ->
-  parent = Exception msg
-  new LlamaObject 'TypeError', 'TypeError', [msg], {}, parent
-
-Number.prototype.get_attr = (name) ->
+Object.prototype.get_attr = (name) ->
   return this[name] if this[name]?
   _throw NoAttributeError name
 
-String.prototype.get_attr = (name) ->
-  return this[name] if this[name]?
-  _throw NoAttributeError name
+Array.prototype.deref = (idx) -> @[idx]
 
 Function.prototype._call = (arg) ->
   if _.isArray arg then @apply null, arg else @ arg
 
-_plus = (x) -> (y) -> x + y
-_minus = (x) -> (y) -> x - y
-_times = (x) -> (y) -> x * y
-_divide = (x) -> (y) -> x / y
-_append = (a) -> (b) ->
-  if _.isNumber(a) and _.isNumber(b)
-    a + b
-  else if _.isString(a) and _.isString(b)
-    a + b
-  else if is_instance(a, 'List') and is_instance(b, 'List')
-    if a.___constr_name is 'End'
-      b
-    else
-      val = a.deref 'Cons', 0
-      next = a.deref 'Cons', 1
-      Cons(val)(_append(next)(b))
-  else
-    throw TypeError "_append not implemented for #{a}, #{b}"
+TVar = (name) -> new LlamaObject 'Type', 'TVar', [name]
+TConst = (name) -> new LlamaObject 'Type', 'TConst', [name]
+TFunction = (a, b) -> new LlamaObject 'Type', 'TFunction', [a, b]
+TApply = (a, b) -> new LlamaObject 'Type', 'TApply', [a, b]
+TUnion = (types) ->
+  new LlamaObject 'Type', 'TUnion', types
+TTuple = (types) ->
+  new LlamaObject 'Type', 'TTuple', types
+TWildCard = new LlamaObject 'Type', 'TWildCard'
 
-str_to_list = (str) ->
+Num = TConst 'Num'
+Str = TConst 'Str'
+Number.prototype.type = Num
+String.prototype.type = Str
+
+Exception = (msg) ->
+  type = TConst 'Exception'
+  new LlamaObject type, 'Exception', [msg], {}, null, (self) ->
+    self.attrs.trace = new Error(msg).stack
+
+NoAttributeError = (attr, obj) ->
+  type = TConst 'NoAttributeError'
+  parent = Exception "Attribute #{show attr} not found on object #{show obj}"
+  new LlamaObject type, 'NoAttributeError', [attr], {}, parent
+
+DerefRangeError = (idx, obj) ->
+  type = TConst 'DerefRangeError'
+  parent = Exception "Index #{show idx} out of range on object #{show obj}"
+  new LlamaObject type, 'NoAttributeError', [attr], {}, parent
+
+ConstructorNotFoundError = (constr_name, obj) ->
+  type = TConst 'ConstructorNotFoundError'
+  parent = Exception "Constructor #{show constr_name} not found on object #{show obj}"
+  new LlamaObject type, 'ConstructorNotFoundError', [constr_name, obj], {}, parent
+
+LookupError = (key) ->
+  type = TConst 'LookupError'
+  parent = Exception _append(_append('Key ')(show key))(' was not found')
+  new LlamaObject type, 'LookupError', [key], {}, parent
+
+PatternMatchError = (pat, val) ->
+  type = TConst 'PatternMatchError'
+  parent = Exception "Couldn't match value #{val} with pattern #{pat}"
+  new LlamaObject type, 'PatternMatchError', [pat, val], {}, parent
+
+_TypeError = (msg) ->
+  type = TConst 'TypeError'
+  parent = Exception msg
+  new LlamaObject type, 'TypeError', [msg], {}, parent
+
+NoInstanceError = (trait, type) ->
+  type = TConst 'TraitError'
+  parent = Exception "No instance of #{trait} for #{type}"
+  new LlamaObject type, 'TraitError', [msg], {}, parent
+
+class Trait
+  constructor: (@tvar, @funcs) -> @instances = {}
+  add_instance: (type, impls) ->
+    @instances[@get_type_name type] = impls
+  get_instance: (func_name, type) ->
+    if @instances[type_name = @get_type_name type]?
+      @instances[type_name][func_name]
+    else
+      _throw NoInstanceError JSON.stringify name, type_name
+  make_stub: (func_name, captures) ->
+    new Stub @, func_name, captures
+  get_type_name: (type) ->
+    switch type.constr_name
+      when 'TConst'
+        type.deref 'TConst', 0
+      when 'TApply'
+        @get_type_name type.deref 'TApply', 0
+      else
+        _throw _TypeError "Can't make an instance with a #{type.constr_name}"
+
+class Stub
+  constructor: (@trait, @func_name, @captures) ->
+  cast: (type) ->
+    result = @trait.get_instance @func_name, type
+    for arg in @captures
+      result = result arg
+    result
+
+############ Show trait #############
+Show = new Trait 'a', show: TFunction (TVar 'a'), TConst 'Str'
+show = (a) ->
+  _show = Show.get_instance 'show', a.type
+  _show a
+
+Show.add_instance Num, show: (n) -> "#{n}"
+Show.add_instance Str, show: JSON.stringify
+
+########### Append trait ############
+Append = new Trait()
+_append = (a) ->
+  __append = Append.get_instance '_append', a.type
+  __append a
+
+Append.add_instance Num, _append: (a) -> (b) -> a + b
+Append.add_instance Str, _append: (s1) -> (s2) -> s1 + s2
+Append.add_instance (TApply (TConst '[~]'), TVar 'a'),
+  _append: (l1) -> (l2) ->
+    _throw 'list append not implemented'
+
+########## Length trait ###########
+Length = new Trait()
+length = (a) ->
+  _length = Length.get_instance 'length', a.type
+  _length a
+
+Length.add_instance Str, length: (s) -> s.length
+
+########## Default trait ############
+Default = new Trait()
+_default = Default.make_stub 'default', []
+
+Default.add_instance Str, default: ''
+Default.add_instance Num, default: 0
+
+_plus   = (x) -> (y) -> x + y
+_minus  = (x) -> (y) -> x - y
+_times  = (x) -> (y) -> x * y
+_divide = (x) -> (y) -> x / y
+
+
+############## A linked list implementation ################
+List = (a) -> TApply (TConst '[~]'), a
+End = new LlamaObject (List TWildCard), '[~]'
+Cons = (a) -> (list) ->
+  type = List a.type
+  new LlamaObject type, '~', [a, list]
+
+str_or_array_to_list = (str_or_array) ->
   res = End
-  for c in str.split("").reverse().join("")
-    res = Cons(c)(res)
+  for i in [str_or_array.length - 1 .. 0] by -1
+    res = Cons(str_or_array[i])(res)
   res
 
-_apply = (f) -> (x) -> f x
-_f_apply = (x) -> (f) -> f x
-_comp = (f) -> (g) -> (x) -> f g x
-_f_comp = (g) -> (f) -> (x) -> f g x
+list_to_array = (list) ->
+  result = []
+  while list.is_constr '~'
+    a = list.deref '~', 0
+    result.push a
+    list = list.deref '~', 1
+  result.reverse()
 
-show = JSON.stringify
+
+_apply   = (f) -> (x) -> f x
+_f_apply = (x) -> (f) -> f x
+_comp    = (f) -> (g) -> (x) -> f g x
+_f_comp  = (g) -> (f) -> (x) -> f g x
+
+Maybe = (t) -> TApply (TConst 'Maybe'), t
+Just = (a) ->
+  type = Maybe a.type
+  new LlamaObject type, 'Just', [a]
+Nothing = new LlamaObject (Maybe TWildCard), 'Nothing'
+
 println = console.log
 print = process.stdout.write
 
 exports.LlamaObject = LlamaObject
-exports.is_instance = is_instance
 exports.Exception = Exception
 exports.LookupError = LookupError
 exports.PatternMatchError = PatternMatchError
@@ -148,4 +222,16 @@ exports._f_apply = _f_apply
 exports._apply = _apply
 exports._f_comp = _f_comp
 exports._comp = _comp
-exports.str_to_list = str_to_list
+exports.str_or_array_to_list = str_or_array_to_list
+exports.Show = Show
+exports.show = show
+exports.Trait = Trait
+exports.Just = Just
+exports.Nothing = Nothing
+exports.TVar = TVar
+exports.TConst = TConst
+exports.TApply = TApply
+exports.TFunction = TFunction
+exports.TWildCard = TWildCard
+exports.Default = Default
+exports._default = _default

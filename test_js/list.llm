@@ -26,3 +26,20 @@ intersperse i list = case list of
   | Cons x list2 => Cons x (Cons i (list2.intersperse i));
 
 join_by x = intersperse x ~> join;
+
+# reverse (list: [~ a]) = result after
+# { result = ref [~];
+#   for x in list do result := x ~ result };
+
+# lmap (f: a -> b) (list: [~ a]) = reverse acc after
+# { acc = ref [~]
+#   for x in list do acc := f x ~ acc; };
+
+# foldr (step: a -> b -> b) (end: b) (list: lazy [~ a]) = case list of
+#     [~] => end
+#   | x~xs => step x (foldr step end xs);
+
+# foldl (step: b -> a -> b) (start: mut b) (list: [~ a]) = start after
+#   for x in list do start := step start x;
+
+# mconcat: [~ m of Monoid] -> m = foldl mappend mempty;

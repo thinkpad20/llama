@@ -4,8 +4,8 @@ module CompileJS (compileIt, jsPreamble) where
 
 import qualified Prelude as P
 import Prelude (IO, Eq(..), Ord(..), Bool(..), (=<<), fromIntegral,
-                Double, String, Maybe(..), Int, Monad(..),
-                ($), (.), floor, map, Functor(..), mapM,
+                Double, String, Maybe(..), Int, Monad(..), otherwise,
+                ($), (.), floor, map, Functor(..), mapM, (||), undefined,
                 (+), (-), elem, Either(..), error, fst)
 import qualified JavaScript.AST as J
 import qualified Data.HashMap.Strict as H
@@ -183,6 +183,44 @@ llamaObj objName constrName argNames attrs parent logic =
 
 newName :: Expr -> JSCompiler Name
 newName _ = throwErrorC ["Can't create new names yet"]
+
+contains :: Name -> Type -> Bool
+contains n (TVar n') = n == n'
+contains n (TApply a b) = contains n a || contains n b
+contains n (TFunction a b) = contains n a || contains n b
+contains _ _ = False
+
+gen :: Name -- The name of the bound type variable
+    -> Name -- The name of the trait
+    -> Name -- The name of the function being generated
+    -> Type -- The type of the function being traversed
+    -> JSCompiler J.Expr -- The js function being generated
+gen varName traitName funcName t = go [] t where
+  go :: [Name] -> Type -> JSCompiler J.Expr
+  go argNames (TVar n)
+    | n == varName = makeStub traitName funcName (P.reverse argNames)
+  go argNames t@(TApply a b)
+    | contains varName a = getInstance (P.reverse argNames)
+    | contains varName b = getInstance (P.reverse argNames)
+  go argNames (TFunction a b)
+    | contains varName a = getInstance traitName funcName (P.reverse argNames)
+    | otherwise = makeArgName a >>= \arg -> go (arg:argNames) b
+  go _ _ = throwErrorC ["Type variable `", varName, "` not found in signature"]
+  getInstance args = do
+    argName <- makeArgName varName
+    newFuncName <- makeArgName funcName
+    return $
+      J.Function [argName] $ J.Block [newFuncName] [
+          J.Assign (J.Var newFuncName) $
+            J.Call
+              (J.Dot (J.Var traitName) "get_instance")
+              [ J.Var funcName
+              , J.Dot (J.Var argName) "type"]
+        , J.Return $
+            J.Call (J.Var newFuncName) [J.Var argName]
+        ]
+  makeStub = undefined
+  makeArgName = undefined
 
 runCompile :: Expr -> IO (Either ErrorList J.Block)
 runCompile expr = fst <$> runStateT (runErrorT $ compile expr) []

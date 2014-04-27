@@ -6,6 +6,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE PackageImports #-}
 module Desugar (desugarIt, desugarIt',dsLambdas, dsLambdaDot,
                 dsConstructors, dsDot, dsForever, dsForIn, dsIf',
                 dsAfterBefore, dsPrefixLine) where
@@ -16,7 +17,7 @@ import Prelude (IO, Show(..), Eq(..), Ord(..), Bool(..),
                 (+), (-), elem, Either(..), tail, otherwise,
                 error, undefined, fst, putStrLn, (||), foldl)
 import Control.Monad (MonadPlus(..))
-import Control.Monad.State.Strict (runStateT, liftIO)
+import "mtl" Control.Monad.State.Strict (runStateT, liftIO)
 import qualified Data.Map as M
 import qualified Data.Set as S
 import qualified Prelude as P
