@@ -4,13 +4,9 @@
 {-# LANGUAGE OverloadedStrings #-}
 module AST where
 
-import Prelude (IO, Eq(..), Ord(..), Bool(..),
-                Double, String, Maybe(..), Int, Monad(..),
-                ($), (.), floor, map, Functor(..), mapM,
-                (+), (-), elem, Either(..))
 import qualified Prelude as P
-import Data.Text hiding (map)
-import Data.Monoid
+import Data.Text (intercalate, replicate)
+import qualified Data.Text as T
 import Data.String
 import qualified Data.Map as M
 
@@ -193,10 +189,10 @@ instance Render Expr where
     render' expr = case expr of
       Var name -> return name
       Constructor name -> return name
-      Number n | isInt n -> return $ show $ (floor n :: Int)
-      Number n -> return $ show n
+      Number n | isInt n -> return $ render $ (floor n :: Int)
+      Number n -> return $ render n
       Block blk -> block blk
-      String s -> return $ show s
+      String s -> return $ render s
       Dot e1 e2 -> return $ render'' e1 <> "." <> render'' e2
       Apply (Var op) (Tuple [e1, e2] _)
         | isSymbol op -> return $ render'' e1 <> " " <> op <> " " <> render'' e2
@@ -236,7 +232,7 @@ instance Render Expr where
       Throw ex -> mkLine $ "throw " <> render ex
       Return ex -> mkLine $ "return " <> render ex
       TypeDef name typ -> mkLine $ "typedef " <> name <> " = " <> render typ
-      _ -> return $ show expr
+      _ -> return $ render expr
     mkLine str = get >>= \i -> return $ replicate i " " <> str
     join = return . intercalate "\n"
     block blk = up *> fmap (intercalate "; ") (mapM render' blk) <* down
@@ -255,7 +251,7 @@ symChars :: String
 symChars = "><=+-*/^~!%&$:#|?"
 
 isSymbol :: Text -> Bool
-isSymbol = all (`elem` symChars)
+isSymbol = T.all (`elem` symChars)
 
 binary :: Name -> Expr -> Expr -> Expr
 binary name e1 e2 = Apply (Apply (Var name) e1) e2

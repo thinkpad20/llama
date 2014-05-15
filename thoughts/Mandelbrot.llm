@@ -1,0 +1,74 @@
+```
+script Mandelbrot
+
+imports String\create
+        Char\chr
+        Sys, Sys\Posix\{waitpid, fork, WEXITED}
+        Array\sized_array
+
+niter = 50
+limit = 4.0
+workers = 64
+
+try w = (Sys\argv 1).read : Int
+catch ArrayIndexError
+  println "No size provided."
+  Sys\exit 1
+catch ReadError
+  println "Size must be an integer."
+  Sys\exit 1
+
+rows = w / workers
+
+worker (w: Int) (h_lo: Int) (h_hi: Int) = buf after
+  buf = sized_array $ (w / 8 + (if w.mod 8 > 0 then 1 else 0)) * (h_hi - h_lo)
+  ptr, byte = (ref 0, ref 0)
+  fw = fh = w / 2.0
+  red_w = w - 1
+  red_h_hi = h_hi - 1
+  for y in [h_lo .. red_h_hi]
+    ci = y / fh - 1.0
+    for x in [0 .. red_w]
+      cr = x / fw - 1.5
+      zr, zi, trmti, n = (ref 0.0, ref 0.0, ref 0.0, ref 0)
+      forever
+        zi := 2.0 * zr.read * zi.read + ci
+        zr := trmti.read + cr
+        tr, ti = (zr.read.square, zi.read.square)
+        if tr + ti > limit
+          byte .= shiftl 1
+          break
+        else if n.incr! == niter
+          byte |= read ! shiftl 1 ! bitor 0x01
+          break
+        else
+          trmti := tr - ti
+      if x.mod 8 == 7
+        buf[: ptr.read] := byte.read.chr
+        ptr.incr!
+        byte := 0
+    if w.mod 8 != 0
+      buf[: ptr.read] := chr $ byte.read.shiftl (8 - rem)
+      ptr.incr!
+      byte := 0
+
+rem = w.mod workers
+println "P4\n#{w} #{w}\n"
+spawn = i if i == 0 = Sys\exit 0
+      | i =>
+  red_i = i - 1
+  case fork () of
+    0   => spawn red_i
+    pid =>
+      buf = worker w i j after
+        i = red_i * rows + min red_i rem
+        j = i * rows + min i rem
+      case waitpid [] pid of
+        _, WEXITED 0 =>
+          println "#{buf}" buf;
+          Sys\exit 0
+        _ => throw Exception()
+
+println 'Spawning workers...'
+spawn workers
+```

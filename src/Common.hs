@@ -7,34 +7,53 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE PackageImports #-}
 {-# LANGUAGE BangPatterns #-}
-module Common ( (!), (<!>), (<$>), (<$), (<*), (*>), (<*>), pure
-              , get, modify, put, lift, forM_, forM, when, Monoid(..)
-              , (<>), StateT(..), State, ErrorT(..), indentBy, Name
-              , intercalate, Identity(..), runState, evalState, (>>==)
-              , trim, line, throwError, catchError, (~>), Render(..)
-              , isInt, ErrorList(..), throwError1, throwErrorC, addError
-              , addError', forever, isSpace, catMaybes, sortWith, each
-              , unless, mconcatMapM, show, whenM, unlessM, lift2, toList
-              , mapM_, fromList, liftIO)
-              where
+module Common (
+    module Control.Applicative
+  , module Control.Monad.Error
+  , module Control.Monad.Identity
+  , module Control.Monad.State.Strict
+  , module Control.Monad.Writer
+  , module Data.Char
+  , module Data.Foldable
+  , module Data.List
+  , module Data.Maybe
+  , module Data.Monoid
+  , module Data.Sequence
+  , module Data.Text
+  , module GHC.Exts
+  , module Prelude
+  , Render(..), Name
+  , ErrorList(..), throwError1, throwErrorC, addError, addError'
+  , mconcatMapM, whenM, unlessM, lift2
+  , isInt, isIntTo, trim, indentBy, contains, line, each
+  , (!), (<!>), (>>==), (~>)) where
 
-import Prelude hiding (show, mapM_)
+import Prelude (IO, Eq(..), Ord(..), Bool(..), tail, Show(..), Char,
+                Double, String, Maybe(..), Int, Monad(..), Integer,
+                ($), (.), floor, map, Functor(..), mapM, fst, snd,
+                (+), (-), Either(..), unwords, flip, head, error,
+                fromIntegral, round, (^), (*), putStrLn, map,
+                otherwise, length)
 import qualified Prelude as P
-import Control.Monad hiding (forM_, mapM_)
-import "mtl" Control.Monad.State.Strict hiding (forM_, mapM_)
-import "mtl" Control.Monad.Error hiding (forM_, mapM_)
-import Data.Monoid
-import GHC.Exts (sortWith)
-import qualified Data.Text as T
-import Control.Applicative hiding (many, (<|>))
-import Data.List (intercalate)
-import "mtl" Control.Monad.Identity hiding (forM_, mapM_)
+import Control.Applicative (Applicative(..), (<$>))
+import "mtl" Control.Monad.Error (MonadError(..), Error(..), ErrorT(..))
+import "mtl" Control.Monad.Identity (Identity(..))
+import "mtl" Control.Monad.State.Strict (MonadState(..), State(..)
+                                        , StateT(..), MonadTrans(..)
+                                        , modify
+                                        , execState, evalState, lift)
+import "mtl" Control.Monad.Writer (MonadWriter(..), WriterT(..))
 import Data.Char (isSpace)
+import Data.Foldable
+import Data.List (intercalate)
 import Data.Maybe (catMaybes)
+import Data.Monoid
+import Data.Sequence hiding (replicate, length)
+import Data.Text (Text(..), pack, unpack)
+import qualified Data.Text as T
 import qualified Data.Map as M
 import qualified Data.Set as S
-import Data.Sequence
-import Data.Foldable
+import GHC.Exts (sortWith)
 import Text.Parsec (ParseError)
 
 instance Render a => Render (Seq a) where
@@ -57,6 +76,8 @@ class Show a => Render a where
   render = P.show ~> T.pack
   renderIO :: a -> IO T.Text
   renderIO = return . render
+  pretty :: a -> T.Text
+  pretty = render
   renderI' :: a -> State (Int, T.Text) ()
   renderI' _ = return ()
   renderI :: Int -> a -> T.Text
@@ -67,11 +88,11 @@ instance Render T.Text
 instance Render Int
 instance Render Integer
 instance Render Char
+instance Render ()
 instance (Render a, Render b) => Render (a, b) where
   render (a, b) = "(" <> render a <> "," <> render b <> ")"
 
-instance Render String where
-  render = P.show ~> T.pack
+instance Render String
 
 instance Render a => Render [a] where
   render as = "[" <> T.intercalate ", " (map render as) <> "]"
