@@ -124,11 +124,16 @@ pApply = pChain >>= parseRest where
                      -- return what we have so far
 
 pParens :: Parser Expr
-pParens = item $ do
-  exprs <- pPunc '(' *> pSmallExpr `sepBy` pPunc ',' <* pPunc ')'
-  case exprs of
-    [expr] -> return $ unExpr expr
-    exprs -> return $ Tuple exprs mempty
+pParens = item $ pPunc '(' >> do
+  ex <- pExpr
+  choice [getBlock ex, getTuple ex, return $ unExpr ex] <* pPunc ')'
+  where
+    getBlock ex = (pPunc ';' <|> same) *> do
+      exprs <- pExpr `sepBy` same
+      return $ Block (ex:exprs)
+    getTuple ex = pPunc ',' *> do
+      exprs <- pExpr `sepBy` pPunc ','
+      return $ Tuple (ex:exprs) mempty
 
 ---------------------------------------------------
 ---------------  Binary operators  ----------------

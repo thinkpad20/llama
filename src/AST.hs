@@ -52,7 +52,7 @@ data AbsExpr expr = Var         !Name
                   | AssignOp    !Name !expr !expr
                   | With        !expr ![(Name, expr)]
                   | PatAssert   !(PatAssert expr)
-                  | Deref       !Name !Int !expr
+                  | GetAttrib   !Name !Int !expr
                   | Continue
                   | WildCard
                   deriving (P.Show, Eq, Functor)
