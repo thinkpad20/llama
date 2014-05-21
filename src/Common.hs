@@ -9,16 +9,20 @@
 {-# LANGUAGE BangPatterns #-}
 module Common (
     module Control.Applicative
+  , module Control.Monad
   , module Control.Monad.Error
   , module Control.Monad.Identity
   , module Control.Monad.State.Strict
+  , module Control.Monad.Trans
   , module Control.Monad.Writer
   , module Data.Char
   , module Data.Foldable
+  , module Data.HashMap.Strict
   , module Data.List
   , module Data.Maybe
   , module Data.Monoid
   , module Data.Sequence
+  , module Data.String
   , module Data.Text
   , module GHC.Exts
   , module Prelude
@@ -33,11 +37,14 @@ import Prelude (IO, Eq(..), Ord(..), Bool(..), tail, Show(..), Char,
                 ($), (.), floor, map, Functor(..), mapM, fst, snd,
                 (+), (-), Either(..), unwords, flip, head, error,
                 fromIntegral, round, (^), (*), putStrLn, map,
-                otherwise, length)
+                otherwise, length, Read(..), read, (&&), FilePath,
+                readFile, print, not)
 import qualified Prelude as P
-import Control.Applicative (Applicative(..), (<$>))
+import Control.Applicative
+import Control.Monad ((>=>))
 import "mtl" Control.Monad.Error (MonadError(..), Error(..), ErrorT(..))
 import "mtl" Control.Monad.Identity (Identity(..))
+import "mtl" Control.Monad.Trans (liftIO)
 import "mtl" Control.Monad.State.Strict (MonadState(..), State(..)
                                         , StateT(..), MonadTrans(..)
                                         , modify
@@ -45,11 +52,15 @@ import "mtl" Control.Monad.State.Strict (MonadState(..), State(..)
 import "mtl" Control.Monad.Writer (MonadWriter(..), WriterT(..))
 import Data.Char (isSpace)
 import Data.Foldable
+import Data.HashMap.Strict hiding (map, (!), toList, fromList, empty
+                                  , filter, foldr, foldl', null, adjust
+                                  , singleton)
 import Data.List (intercalate)
 import Data.Maybe (catMaybes)
 import Data.Monoid
-import Data.Sequence hiding (replicate, length)
-import Data.Text (Text(..), pack, unpack)
+import Data.Sequence hiding (replicate, length, empty)
+import Data.String
+import Data.Text (Text(..), pack, unpack, snoc)
 import qualified Data.Text as T
 import qualified Data.Map as M
 import qualified Data.Set as S

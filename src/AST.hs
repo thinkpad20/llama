@@ -2,70 +2,68 @@
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE TypeSynonymInstances #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE DeriveFunctor #-}
 module AST where
 
 import qualified Prelude as P
-import Data.Text (intercalate, replicate)
-import qualified Data.Text as T
-import Data.String
 import qualified Data.Map as M
+import qualified Data.Text as T
 
-import Common hiding (intercalate)
+import Common
 
+type Kwargs expr = [(Name, Either Type expr)]
+data AbsExpr expr = Var         !Name
+                  | Number      !Double
+                  | String      !Text
+                  | InString    !(InString expr)
+                  | Constructor !Name
+                  | Block       ![expr]
+                  | Dot         !expr !expr
+                  | Apply       !expr !expr
+                  | Binary      !Name !expr !expr
+                  | Attribute   !expr !Name
+                  | Lambda      !expr !expr
+                  | Lambdas     ![(expr, expr)]
+                  | Case        !expr ![(expr, expr)]
+                  | MultiCase   !expr ![([expr], expr)]
+                  | Tuple       ![expr] (Kwargs expr)
+                  | Literal     !(Literal expr)
+                  | DeRef       !expr !expr
+                  | Typed       !expr !Type
+                  | If          !expr !expr !(Maybe expr)
+                  | For         !expr !expr !expr !expr
+                  | ForIn       !expr !expr !expr
+                  | Forever     !expr
+                  | PatternDef  !expr !expr
+                  | Define      !Name !expr
+                  | Extend      !Name !expr
+                  | Assign      !expr !expr
+                  | Return      !expr
+                  | Throw       !expr
+                  | TryCatch    !expr ![(expr, expr)] !(Maybe expr)
+                  | Break       !expr
+                  | After       !expr !expr
+                  | Before      !expr !expr
+                  | ObjDec      !(ObjectDec expr)
+                  | Modified    !Mod !expr
+                  | TypeDef     !Name !Type
+                  | Prefix      !Name !expr
+                  | LambdaDot   !expr
+                  | AssignOp    !Name !expr !expr
+                  | With        !expr ![(Name, expr)]
+                  | PatAssert   !(PatAssert expr)
+                  | Deref       !Name !Int !expr
+                  | Continue
+                  | WildCard
+                  deriving (P.Show, Eq, Functor)
 
-type Kwargs = [(Name, Either Expr Type)]
-data Expr = Var         !Name
-          | Number      !Double
-          | String      !Text
-          | InString    !InString
-          | Constructor !Name
-          | Block       !Block
-          | Dot         !Expr !Expr
-          | Apply       !Expr !Expr
-          | Attribute   !Expr !Name
-          | Lambda      !Expr !Expr
-          | Lambdas     ![(Expr, Expr)]
-          | Case        !Expr ![(Expr, Expr)]
-          | MultiCase   !Expr ![([Expr], Expr)]
-          | Tuple       ![Expr] Kwargs
-          | Literal     !Literal
-          | DeRef       !Expr !Expr
-          | Typed       !Expr !Type
-          | If          !Expr !Expr !Expr
-          | If'         !Expr !Expr
-          | For         !Expr !Expr !Expr !Expr
-          | ForIn       !Expr !Expr !Expr
-          | Forever     !Expr
-          | PatternDef  !Expr !Expr
-          | Define      !Name !Expr
-          | Extend      !Name !Expr
-          | Assign      !Expr !Expr
-          | Return      !Expr
-          | Throw       !Expr
-          | TryCatch    !Expr ![(Expr, Expr)] !(Maybe Expr)
-          | Break       !Expr
-          | After       !Expr !Expr
-          | Before      !Expr !Expr
-          | ObjDec      !ObjectDec
-          | Modified    !Mod !Expr
-          | TypeDef     !Name !Type
-          | Prefix      !Name !Expr
-          | LambdaDot   !Expr
-          | AssignOp    !Name !Expr !Expr
-          | With        !Expr ![(Name, Expr)]
-          | PatAssert   !PatAssert
-          | Deref       !Name !Int !Expr
-          | Continue
-          | WildCard
-          deriving (P.Show, Eq)
-
-data PatAssert = IsLiteral !Expr !Expr
-               | IsConstr !Name !Expr
-               | IsTupleOf !Int !Expr
-               | IsVectorOf !Int !Expr
-               | IsArrayOf !Int !Expr
-               | !PatAssert `And` !PatAssert
-               deriving (P.Show, Eq)
+data PatAssert expr = IsLiteral !expr !expr
+                    | IsConstr !Name !expr
+                    | IsTupleOf !Int !expr
+                    | IsVectorOf !Int !expr
+                    | IsArrayOf !Int !expr
+                    | !(PatAssert expr) `And` !(PatAssert expr)
+                    deriving (P.Show, Eq, Functor)
 
 type TKwargs = [(Name, Type)]
 data Type = TVar       !Name
@@ -77,35 +75,35 @@ data Type = TVar       !Name
           | TMultiFunc !TypeMap
           deriving (P.Show, Eq, Ord)
 
-type Attribute = (Name, Type, Maybe Expr)
+type Attribute expr = (Name, Type, Maybe expr)
 
 data Mod = Mut | Ref | Pure | Local | Lazy deriving (P.Show, Eq, Ord)
 type TypeMap = M.Map Type Type
 
-instance Render Type where
-  render t = case t of
-    TVar name -> name
-    TConst name -> name
-    TTuple ts _ -> "(" <> intercalate ", " (map render ts) <> ")"
-    TApply (TConst "[]") typ -> "[" <> render typ <> "]"
-    TApply (TConst "[!]") typ -> "[!" <> render typ <> "]"
-    TApply a b -> render a <> " " <> render' b
-    TFunction t1 t2 -> render'' t1 <> " -> " <> render t2
-    TMod modi typ -> render modi <> " " <> render typ
-    TMultiFunc tset -> "{" <> renderSet tset <> "}"
-    where render' typ = case typ of
-            TApply _ _ -> "(" <> render typ <> ")"
-            _ -> render typ
-          render'' typ = case typ of
-            TFunction _ _ -> "(" <> render typ <> ")"
-            _ -> render typ
-          renderSet tset =
-            let pairs = M.toList tset
-                rPair (from, to) = render from <> " -> " <> render to
-            in intercalate ", " (map rPair pairs)
+instance Render Type -- where
+  -- render t = case t of
+  --   TVar name -> name
+  --   TConst name -> name
+  --   TTuple ts _ -> "(" <> intercalate ", " (map render ts) <> ")"
+  --   TApply (TConst "[]") typ -> "[" <> render typ <> "]"
+  --   TApply (TConst "[!]") typ -> "[!" <> render typ <> "]"
+  --   TApply a b -> render a <> " " <> render' b
+  --   TFunction t1 t2 -> render'' t1 <> " -> " <> render t2
+  --   TMod modi typ -> render modi <> " " <> render typ
+  --   TMultiFunc tset -> "{" <> renderSet tset <> "}"
+  --   where render' typ = case typ of
+  --           TApply _ _ -> "(" <> render typ <> ")"
+  --           _ -> render typ
+  --         render'' typ = case typ of
+  --           TFunction _ _ -> "(" <> render typ <> ")"
+  --           _ -> render typ
+  --         renderSet tset =
+  --           let pairs = M.toList tset
+  --               rPair (from, to) = render from <> " -> " <> render to
+  --           in intercalate ", " (map rPair pairs)
 
-instance Render [M.Map Name Type] where
-  render mps = line $ "[" <> (intercalate ", " $ map render mps) <> "]"
+-- instance Render [M.Map Name Type] where
+--   render mps = line $ "[" <> (intercalate ", " $ map render mps) <> "]"
 
 instance Monoid Type where
   mempty = TMultiFunc mempty
@@ -123,25 +121,23 @@ instance Render Mod where
   render Local = "local"
   render Lazy = "lazy"
 
-data Literal = ArrayLiteral ![Expr]
-             | ArrayRange   !Expr !Expr
-             | DictLiteral  ![(Expr, Expr)]
-             | SetLiteral   ![Expr]
-             | ListLiteral  ![Expr]
-             deriving (P.Show, Eq)
+data Literal expr = ArrayLiteral ![expr]
+                  | ArrayRange   !expr !expr
+                  | DictLiteral  ![(expr, expr)]
+                  | SetLiteral   ![expr]
+                  | ListLiteral  ![expr]
+                  deriving (P.Show, Eq, Functor)
 
-type Block = [Expr]
-
-data ObjectDec = ObjectDec {
+data ObjectDec expr = ObjectDec {
     objName :: Name
   , objExtends :: Maybe Name
   , objVars :: [Name]
-  , objConstrs :: [ConstructorDec]
-  , objAttrs :: [Expr]
+  , objConstrs :: [ConstructorDec expr]
+  , objAttrs :: [expr]
   }
-  deriving (P.Show, Eq)
+  deriving (P.Show, Eq, Functor)
 
-defObj :: ObjectDec
+defObj :: ObjectDec e
 defObj = ObjectDec {
     objName = "(some object)"
   , objExtends = Nothing
@@ -150,15 +146,15 @@ defObj = ObjectDec {
   , objAttrs = []
   }
 
-data ConstructorDec = ConstructorDec {
+data ConstructorDec expr = ConstructorDec {
     constrName :: Name
-  , constrArgs :: [Expr]
-  , constrExtends :: Maybe Expr
-  , constrLogic :: Maybe Expr
+  , constrArgs :: [expr]
+  , constrExtends :: Maybe expr
+  , constrLogic :: Maybe expr
   }
-  deriving (P.Show, Eq)
+  deriving (P.Show, Eq, Functor)
 
-defConstr :: ConstructorDec
+defConstr :: ConstructorDec e
 defConstr = ConstructorDec {
     constrName = "(some constructor)"
   , constrArgs = []
@@ -166,15 +162,26 @@ defConstr = ConstructorDec {
   , constrLogic = Nothing
   }
 
-data InString = Plain Text
-              | InterpShow InString Expr InString
-              | Interp InString Expr InString
-              deriving (P.Show, Eq)
+data InString e  = Plain Text
+                 | InterpShow (InString e) e (InString e)
+                 | Interp (InString e) e (InString e)
+                 deriving (P.Show, Eq, Functor)
 
-instance IsString InString where
+instance IsString (InString e) where
   fromString str = Plain $ pack str
 
-instance Monoid InString where
+newtype Expr' = Expr' (AbsExpr Expr') deriving (Show, Eq)
+
+class IsExpr e where
+  unExpr :: e -> AbsExpr e
+  bareExpr :: e -> Expr'
+  bareExpr e = Expr' $ fmap bareExpr $ unExpr e
+
+instance IsExpr Expr' where
+  unExpr (Expr' e) = e
+  bareExpr = P.id
+
+instance Monoid (InString e) where
   mempty = Plain mempty
   is1 `mappend` is2 = case (is1, is2) of
     (Plain s, Plain s') -> Plain (s <> s')
@@ -183,97 +190,40 @@ instance Monoid InString where
     (s, Interp is e is') -> Interp (s <> is) e is'
     (Interp is e is', s) -> Interp is e (is' <> s)
 
-instance Render Expr where
-  render e = evalState (render' e) 0 where
-    render' :: Expr -> State Int Text
-    render' expr = case expr of
-      Var name -> return name
-      Constructor name -> return name
-      Number n | isInt n -> return $ render $ (floor n :: Int)
-      Number n -> return $ render n
-      Block blk -> block blk
-      String s -> return $ render s
-      Dot e1 e2 -> return $ render'' e1 <> "." <> render'' e2
-      Apply (Var op) (Tuple [e1, e2] _)
-        | isSymbol op -> return $ render'' e1 <> " " <> op <> " " <> render'' e2
-      Apply (Var op) ex | isSymbol op -> return $ op <> " " <> render'' ex
-      Apply e1 e2 -> return $ render'' e1 <> " " <> render'' e2
-      Tuple es _ -> return $ "(" <> (intercalate "," . map render) es <> ")"
-      Literal (ArrayLiteral exprs) -> return $ "[" <> intercalate ", " (map render exprs) <> "]"
-      Literal (ArrayRange start stop) -> return $ "[" <> render start <> ".." <> render stop <> "]"
-      DeRef object idx -> return $ render'' object <> "[:" <> render idx <> "]"
-      Lambda arg ex -> return $ render'' arg <> " => " <> render ex
-      Case ex alts -> return $ "case " <> render ex <> " of " <> intercalate " | " rPairs
-        where rPairs = map (\(p, r) -> render p <> " => " <> render r) alts
-      Typed ex typ -> return $ render'' ex <> ": " <> render typ
-      If c t f -> do
-        if' <- mkLine $ "if " <> render c
-        else' <- mkLine "else"
-        t' <- render' t
-        f' <- render' f
-        join [if', t', else', f']
-      If' c t -> do
-        if' <- mkLine $ "if " <> render c
-        t' <- render' t
-        join [if', t']
-      For start cond step blk -> do
-        for <- mkLine $ "for " <> render start <> "; "
-                       <> render cond <> "; " <> render step
-        blk' <- render' blk
-        join [for, blk']
-      ForIn pat ex blk -> do
-        for <- mkLine $ "for " <> render pat <> " in " <> render ex
-        blk' <- render' blk
-        join [for, blk']
-      Define name ex -> mkLine $ name <> " = " <> render ex
-      Extend name ex -> mkLine $ name <> " &= " <> render ex
-      Assign e1 e2 -> mkLine $ render e1 <> " := " <> render e2
-      Break ex -> mkLine $ "break " <> render ex
-      Throw ex -> mkLine $ "throw " <> render ex
-      Return ex -> mkLine $ "return " <> render ex
-      TypeDef name typ -> mkLine $ "typedef " <> name <> " = " <> render typ
-      _ -> return $ render expr
-    mkLine str = get >>= \i -> return $ replicate i " " <> str
-    join = return . intercalate "\n"
-    block blk = up *> fmap (intercalate "; ") (mapM render' blk) <* down
-    (up, down) = (modify (+2), modify (\n -> n - 2))
-    render'' expr = case expr of
-      Apply _ _ -> parens
-      Dot _ _ -> parens
-      Lambda _ _ -> parens
-      _ -> render expr
-      where parens = "(" <> render expr <> ")"
-
-instance Render Block where
-  render b = "{" <> (line . trim . intercalate "; " . map render) b <> "}"
+instance Render Expr' where
+  render e = case unExpr e of
+    Var name -> name
+    Constructor name -> name
+    Number n | isInt n -> render (floor n :: Int)
+    Number n -> render n
+    Block es -> "{" <> T.intercalate "; " (map render es) <> "}"
+    String s -> render s
+    Dot e1 e2 -> render' e1 <> "." <> render' e2
+    Apply e1 e2 -> render' e1 <> " " <> render' e2
+    Binary op e1 e2 -> render' e1 <> " " <> op <> " " <> render' e2
+    Tuple es kws | kws == mempty ->
+      "(" <> T.intercalate ", " (map render es) <> ")"
+    Lambda a b -> render a <> " => " <> render b
+    _ -> pack $ show e
+    where
+      rec = render . Expr'
+      render' expr = case unExpr expr of
+        Apply _ _ -> parens
+        Dot _ _ -> parens
+        Lambda _ _ -> parens
+        Binary _ _ _ -> parens
+        _ -> render expr
+        where parens = "(" <> render expr <> ")"
 
 symChars :: String
 symChars = "><=+-*/^~!%&$:#|?"
 
 isSymbol :: Text -> Bool
 isSymbol = T.all (`elem` symChars)
-
-binary :: Name -> Expr -> Expr -> Expr
-binary name e1 e2 = Apply (Apply (Var name) e1) e2
-
-tuple :: [Expr] -> Expr
-tuple exprs = Tuple exprs mempty
-unit :: Expr
-unit = tuple []
-
-just :: Expr -> Expr
-just = Apply (Constructor "Just")
-
-nothing :: Expr
-nothing = Constructor "Nothing"
-
-true, false :: Expr
-true = Constructor "True"
-false = Constructor "False"
-
-instance Monoid Expr where
-  mempty = Block []
-  Block b1 `mappend` Block b2 = Block (b1 <> b2)
-  Block b `mappend` e = Block (b <> [e])
-  e `mappend` Block b = Block (e:b)
-  e1 `mappend` e2 = Block [e1, e2]
+--
+-- instance Monoid (AbsExpr e) where
+--   mempty = Block []
+--   Block b1 `mappend` Block b2 = Block (b1 <> b2)
+--   Block b `mappend` e = Block (b <> [e])
+--   e `mappend` Block b = Block (e:b)
+--   e1 `mappend` e2 = Block [e1, e2]
