@@ -206,6 +206,7 @@ instance Render Expr' where
     Lambda a b -> render a <> " => " <> render b
     DeRef e1 e2 -> render e1 <> "[" <> render e2 <> "]"
     InString istr -> render istr
+    PatternDef e1 e2 -> render e1 <> " = " <> render e2
     _ -> pack $ show e
     where
       rec = render . Expr'

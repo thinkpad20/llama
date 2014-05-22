@@ -51,9 +51,12 @@ pTerm = choice [pNumber, pVariable, pString, pParens]
 pSmallExpr :: Parser Expr
 pSmallExpr = pBinaryOp
 
--- | Any expr, which could be a lambda.
+-- | Any expr, which could be a lambda, or definition, etc.
 pExpr :: Parser Expr
-pExpr = try pLambda <|> pSmallExpr
+pExpr = do
+  expr <- pSmallExpr
+  option expr $ choice [pLambda expr, pPatternDef expr]
+  --try pLambda <|> pSmallExpr
 
 ------------------------------------------------------------
 -------------------------  Blocks  -------------------------
@@ -203,12 +206,15 @@ pLeftBinary ops higher = chainl1 higher go where
 ---------------------  Definitions  ---------------------
 ---------------------------------------------------------
 
-pLambda :: Parser Expr
-pLambda = item $ do
-  param <- pSmallExpr
+pLambda :: Expr -> Parser Expr
+pLambda param = do
   pExactSym "=>"
-  body <- pAnyBlock
-  return $ Lambda param body
+  Expr (_pos param) . Lambda param <$> pAnyBlock
+
+pPatternDef :: Expr -> Parser Expr
+pPatternDef left = do
+  pExactSym "="
+  Expr (_pos left) . PatternDef left <$> pExpr
 
 ---------------------------------------------------------
 -----------------------  Helpers  -----------------------
