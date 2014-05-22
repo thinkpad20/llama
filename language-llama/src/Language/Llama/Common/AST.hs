@@ -32,9 +32,11 @@ data AbsExpr expr = Var         !Name
                   | DeRef       !expr !expr
                   | Typed       !expr !Type
                   | If          !expr !expr !(Maybe expr)
-                  | For         !expr !expr !expr !expr
-                  | ForIn       !expr !expr !expr
-                  | Forever     !expr
+                  | Unless      !expr !expr !(Maybe expr)
+                  | PostIf      !expr !expr
+                  | PostUnless  !expr !expr
+                  | ForComp     !expr !(ForPattern expr)
+                  | For         !(ForPattern expr) !expr
                   | PatternDef  !expr !expr
                   | Define      !Name !expr
                   | Extend      !Name !expr
@@ -56,6 +58,12 @@ data AbsExpr expr = Var         !Name
                   | GetAttrib   !Name !Int !expr
                   | Continue
                   | WildCard
+                  deriving (P.Show, Eq, Functor)
+
+data ForPattern e = Forever       -- forever do ...
+                  | ForExpr !e    -- for 10.range do ...
+                  | ForIn !e !e   -- for x in list do ...
+                  | For_ !e !e !e -- for i = 0; i < 10; i.incr! do ...
                   deriving (P.Show, Eq, Functor)
 
 data PatAssert expr = IsLiteral !expr !expr
@@ -210,6 +218,9 @@ instance (IsExpr e, Eq e, Render e) => Render (AbsExpr e) where
     PatternDef e1 e2 -> render e1 <> " = " <> render e2
     Assign e1 e2 -> render e1 <> " := " <> render e2
     Attribute e name -> render' e <> "\\" <> name
+    For for e -> case unExpr e of
+      Block _ -> render for <> " " <> render e
+      _ -> render for <> " do " <> render e
     _ -> pack $ show e
     where
       render' expr = case unExpr expr of
@@ -222,6 +233,15 @@ instance (IsExpr e, Eq e, Render e) => Render (AbsExpr e) where
 
 instance Render Expr' where
   render (Expr' e) = render e
+
+instance Render e => Render (ForPattern e) where
+  render = \case
+    Forever -> "forever"
+    ForExpr e -> "for " <> render e
+    ForIn e1 e2 -> "for " <> render e1 <> " in " <> render e2
+    For_ e1 e2 e3 -> do
+      let [e1', e2', e3'] = map render [e1, e2, e3]
+      "for " <> e1' <> "; " <> e2' <> "; " <> e3'
 
 instance Render e => Render (InString e) where
   render (Bare s) = render s

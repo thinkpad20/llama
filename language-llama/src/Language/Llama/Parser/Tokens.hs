@@ -69,4 +69,5 @@ addChar (IStr is t is') c = IStr is t (is' `addChar` c)
 
 keywords :: [Name]
 keywords = ["case","catch","class","else","finally","for","if","in","return",
-            "of","then","try","unless","with","while", "object"]
+            "of","then","try","unless","with","while", "object", "forever",
+            "do"]

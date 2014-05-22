@@ -109,7 +109,7 @@ tNum :: Tokenizer (Token a)
 tNum = do
   first <- many1 digit
   option (TInt $ read first) $ do
-    dot <- try (char '.' <* notFollowedBy (char '.'))
+    dot <- try (char '.' <* notFollowedBy (char '.' <|> oneOf identChars))
     rest <- many1 digit
     return $ TFloat $ read $ first <> (dot : rest)
 

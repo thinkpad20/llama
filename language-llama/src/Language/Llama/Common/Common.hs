@@ -42,7 +42,7 @@ import Prelude (IO, Eq(..), Ord(..), Bool(..), tail, Show(..), Char,
                 readFile, not)
 import qualified Prelude as P
 import Control.Applicative
-import Control.Monad ((>=>))
+import Control.Monad ((>=>), when)
 import "mtl" Control.Monad.Error (MonadError(..), Error(..), ErrorT(..))
 import "mtl" Control.Monad.Identity (Identity(..))
 import "mtl" Control.Monad.Trans (liftIO)
@@ -51,7 +51,7 @@ import "mtl" Control.Monad.State.Strict (MonadState(..), State(..)
                                         , modify
                                         , execState, evalState, lift)
 import "mtl" Control.Monad.Writer (MonadWriter(..), WriterT(..))
-import Data.Char (isSpace)
+import Data.Char (isSpace, isUpper)
 import Data.Foldable
 import Data.HashMap.Strict hiding (map, (!), toList, fromList, empty
                                   , filter, foldr, foldl', null, adjust

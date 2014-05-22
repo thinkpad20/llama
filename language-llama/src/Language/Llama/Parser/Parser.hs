@@ -7,7 +7,7 @@ import qualified Prelude as P
 import Text.Parsec hiding (satisfy, parse, (<|>), many)
 import Data.Set hiding (map)
 import qualified Data.Set as S
-import Debug.Trace
+import qualified Data.Text as T
 
 import Language.Llama.Common.Common
 import Language.Llama.Common.AST
@@ -26,6 +26,7 @@ data ParserState = ParserState {
   , _level5ops :: [Name]
   , _level6ops :: [Name]
   , _level7ops :: [Name]
+  , _knownSymbols :: Set Name
   , _leftfixities :: Set Name
   , _rightfixities :: Set Name
   }
@@ -45,7 +46,7 @@ pTopLevel = do
 
 -- | The simplest single parsed unit.
 pTerm :: Parser Expr
-pTerm = choice [pNumber, pVariable, pString, pParens]
+pTerm = choice [pNumber, pVariable, pConstructor, pString, pParens]
 
 -- | A "small expr" is simpler than a lambda or similar.
 pSmallExpr :: Parser Expr
@@ -53,10 +54,77 @@ pSmallExpr = pBinaryOp
 
 -- | Any expr, which could be a lambda, or definition, etc.
 pExpr :: Parser Expr
-pExpr = do
-  expr <- pSmallExpr
-  option expr $ choice [pLambda expr, pPatternDef expr]
-  --try pLambda <|> pSmallExpr
+pExpr = pIf <|> pUnless <|> pFor <|> pExpr' where
+  pExpr' = do
+    expr <- pSmallExpr
+    option expr $ do
+      extra <- choice [pLambda, pPatternDef, pAssign, pPostIf, pPostFor]
+      return $ extra expr
+
+pIf :: Parser Expr
+pIf = item $ If <$> cond <*> true <*> false where
+  cond = pKeyword "if" *> pSmallExpr
+  true = pKeyword "then" *> pAnyBlock
+  false = optionMaybe $ pKeyword "else" *> pAnyBlock
+
+pUnless :: Parser Expr
+pUnless = item $ Unless <$> cond <*> true <*> false where
+  cond = pKeyword "unless" *> pSmallExpr
+  true = pKeyword "then" *> pAnyBlock
+  false = optionMaybe $ pKeyword "else" *> pAnyBlock
+
+pFor :: Parser Expr
+pFor = item $ do
+  for <- pForPattern
+  body <- pKeyword "do" *> pInlineBlock
+          <|> pIndentedBlock
+  return $ For for body
+
+---------------------------------------------------------
+---------------------  Definitions  ---------------------
+---------------------------------------------------------
+
+pLambda :: Parser (Expr -> Expr)
+pLambda = do
+  pExactSym "=>"
+  body <- pAnyBlock
+  return $ \param -> Expr (_pos param) $ Lambda param body
+
+pPatternDef :: Parser (Expr -> Expr)
+pPatternDef = do
+  pExactSym "="
+  expr <- pExpr
+  return $ \pat -> Expr (_pos pat) $ Lambda pat expr
+
+pAssign :: Parser (Expr -> Expr)
+pAssign = do
+  pExactSym ":="
+  expr <- pExpr
+  return $ \ref -> Expr (_pos ref) $ Assign ref expr
+
+pPostIf :: Parser (Expr -> Expr)
+pPostIf = do
+  pKeyword "if"
+  cond <- pExpr
+  return $ \expr -> Expr (_pos expr) $ PostIf expr cond
+
+pPostFor :: Parser (Expr -> Expr)
+pPostFor = do
+  for <- pForPattern
+  return $ \expr -> Expr (_pos expr) $ ForComp expr for
+
+pForPattern :: Parser (ForPattern Expr)
+pForPattern = forever <|> for where
+  forever = pKeyword "forever" >> return Forever
+  for = do
+    pKeyword "for"
+    expr <- pSmallExpr
+    let for = do test <- pPunc ';' *> pSmallExpr
+                 step <- pPunc ';' *> pSmallExpr
+                 return $ For_ expr test step
+        forIn = do cont <- pKeyword "in" *> pSmallExpr
+                   return $ ForIn expr cont
+    option (ForExpr expr) $ for <|> forIn
 
 ------------------------------------------------------------
 -------------------------  Blocks  -------------------------
@@ -86,6 +154,11 @@ blockOf p = p `sepBy1` same
 pPunc :: Char -> Parser (Token PToken)
 pPunc c = satisfy $ \case {TPunc c' | c == c' -> True; _ -> False}
 
+-- | A keyword.
+pKeyword :: Name -> Parser Name
+pKeyword name = satisfy go >>= \case TKeyword k -> return k
+  where go = \case {TKeyword n | n == name -> True; _ -> False}
+
 -- | Any identifier (including keywords).
 pAnyIdent :: Parser Name
 pAnyIdent = satisfy go >>= return . unbox where
@@ -94,9 +167,13 @@ pAnyIdent = satisfy go >>= return . unbox where
 
 -- | Parses the exact symbol requested.
 pExactSym :: Name -> Parser Name
-pExactSym name = satisfy go >>= return . unbox where
-  go = \case {TSymbol n | n == name -> True; _ -> False}
-  unbox = \case TSymbol n -> n
+pExactSym name = satisfy go >>= \case TSymbol n -> return n
+  where go = \case {TSymbol n | n == name -> True; _ -> False}
+
+-- | Parses any symbol.
+pAnySym :: Parser Name
+pAnySym = satisfy go >>= \case TSymbol n -> return n
+  where go = \case {TSymbol _ -> True; _ -> False}
 
 -- | Numbers, variables, strings. Munches interpolated strings as well.
 pNumber, pVariable, pString :: Parser Expr
@@ -105,7 +182,11 @@ pNumber = item $ num >>= \case
   TFloat n -> return $ Number n
   where num = satisfy (\case {TInt _ -> True; TFloat _ -> True; _ -> False})
 pVariable = item $ var >>= \(TId n) -> return $ Var n
-  where var = satisfy (\case {TId _ -> True; _ -> False})
+  where var = satisfy test
+        test = \case {TId n | n!T.head!isUpper!not -> True; _ -> False}
+pConstructor = item $ var >>= \(TId n) -> return $ Constructor n
+  where var = satisfy test
+        test = \case {TId n | n!T.head!isUpper -> True; _ -> False}
 pString = item $ str >>= go where
   go :: Token PToken -> Parser (AbsExpr Expr)
   go tkn = case tkn of
@@ -177,7 +258,7 @@ pParens = item $ pPunc '(' >> do
 
 -- | Entry point for binary operators.
 pBinaryOp :: Parser Expr
-pBinaryOp = pLevel0
+pBinaryOp = pUnknownBinary
 
 pLevel0, pLevel1, pLevel2, pLevel3, pLevel4,
   pLevel5, pLevel6, pLevel7 :: Parser Expr
@@ -195,6 +276,17 @@ pLevel ops higher = do
   ops <- getState <!> ops
   pLeftBinary ops higher
 
+-- | Grabs any binary, i.e. one that didn't get caught by an earlier
+-- parser.
+pUnknownBinary :: Parser Expr
+pUnknownBinary = pLevel0 >>= go where
+  go left = option left $ pAnySym >>= \op -> do
+    known <- _knownSymbols <$> getState
+    when (op `S.member` known) $ do
+      unexpected $ unpack $ "Symbol " <> op <> " with known precedence"
+    right <- pUnknownBinary
+    go $ Expr (_pos left) $ Binary op left right
+
 -- | Right-associative binary parser. Takes a list of operators, and the
 -- next-higher-precedence parser to run first.
 pRightBinary :: [Text] -> Parser Expr -> Parser Expr
@@ -209,22 +301,6 @@ pLeftBinary :: [Text] -> Parser Expr -> Parser Expr
 pLeftBinary ops higher = chainl1 higher go where
   go = choice (map pExactSym ops) >>= go'
   go' op = pure $ \e1 -> Expr (_pos e1) . Binary op e1
-
----------------------------------------------------------
----------------------  Definitions  ---------------------
----------------------------------------------------------
-
-pLambda :: Expr -> Parser Expr
-pLambda param = do pExactSym "=>"
-                   Expr (_pos param) . Lambda param <$> pAnyBlock
-
-pPatternDef :: Expr -> Parser Expr
-pPatternDef pat = do pExactSym "="
-                     Expr (_pos pat) . PatternDef pat <$> pExpr
-
-pAssign :: Expr -> Parser Expr
-pAssign ref = do pExactSym ":="
-                 Expr (_pos ref) . Assign ref <$> pExpr
 
 ---------------------------------------------------------
 -----------------------  Helpers  -----------------------
@@ -274,6 +350,9 @@ initState = ParserState {
   , _level5ops     = ["*", "/"]
   , _level6ops     = ["**", "^"]
   , _level7ops     = ["~>", "<~"]
+  , _knownSymbols  = S.fromList [ "$", "!", "&&", "||", "|^|", ">", ">", "<="
+                                , ">=", "==", "!=", "+", "-", "*", "/", "**"
+                                , "^", "~>", "~>"]
   , _leftfixities  = S.fromList ["!", "+", "-", "*", "/"]
   , _rightfixities = S.fromList ["**", "^", "&&", "||", "|^|"]
   }
