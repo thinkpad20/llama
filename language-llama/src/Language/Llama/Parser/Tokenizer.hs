@@ -331,7 +331,7 @@ tOneToken = lexeme $ item $ choice
   , tPunc '.'
   , tSymbol
   , tDent
-  , tCharPuncs "(){}[]:,;."
+  , tCharPuncs "(){}[]:,;.\\"
   ]
 
 ----------------------------------------------------------

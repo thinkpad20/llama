@@ -125,9 +125,17 @@ pString = item $ str >>= go where
           return $ InterpShow is1' expr is2'
   str = satisfy (\case {TStr _ -> True; TIStr _ -> True; _ -> False})
 
+-- | Using the backslash to dereference an attribute off of an object.
+pAttribute :: Parser Expr
+pAttribute = pTerm >>= go where
+  go term = option term $ do
+    pPunc '\\'
+    name <- pAnyIdent
+    go $ Expr (_pos term) $ Attribute term name
+
 -- | Parses a term, possibly followed by a dot or brackets.
 pChain :: Parser Expr
-pChain = pTerm >>= go where
+pChain = pAttribute >>= go where
   go expr = option expr $ do
     lookAhead next >>= \pt -> case tToken pt of
       -- If there is an immediate square bracket, it's an object dereference.
@@ -207,14 +215,16 @@ pLeftBinary ops higher = chainl1 higher go where
 ---------------------------------------------------------
 
 pLambda :: Expr -> Parser Expr
-pLambda param = do
-  pExactSym "=>"
-  Expr (_pos param) . Lambda param <$> pAnyBlock
+pLambda param = do pExactSym "=>"
+                   Expr (_pos param) . Lambda param <$> pAnyBlock
 
 pPatternDef :: Expr -> Parser Expr
-pPatternDef left = do
-  pExactSym "="
-  Expr (_pos left) . PatternDef left <$> pExpr
+pPatternDef pat = do pExactSym "="
+                     Expr (_pos pat) . PatternDef pat <$> pExpr
+
+pAssign :: Expr -> Parser Expr
+pAssign ref = do pExactSym ":="
+                 Expr (_pos ref) . Assign ref <$> pExpr
 
 ---------------------------------------------------------
 -----------------------  Helpers  -----------------------

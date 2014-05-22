@@ -3,6 +3,7 @@
 {-# LANGUAGE TypeSynonymInstances #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE DeriveFunctor #-}
+{-# LANGUAGE LambdaCase #-}
 module Language.Llama.Common.AST where
 
 import qualified Prelude as P
@@ -190,8 +191,8 @@ instance Monoid (InString e) where
     (s, Interp is e is') -> Interp (s <> is) e is'
     (Interp is e is', s) -> Interp is e (is' <> s)
 
-instance Render Expr' where
-  render e = case unExpr e of
+instance (IsExpr e, Eq e, Render e) => Render (AbsExpr e) where
+  render e = case e of
     Var name -> name
     Constructor name -> name
     Number n | isInt n -> render (floor n :: Int)
@@ -207,9 +208,10 @@ instance Render Expr' where
     DeRef e1 e2 -> render e1 <> "[" <> render e2 <> "]"
     InString istr -> render istr
     PatternDef e1 e2 -> render e1 <> " = " <> render e2
+    Assign e1 e2 -> render e1 <> " := " <> render e2
+    Attribute e name -> render' e <> "\\" <> name
     _ -> pack $ show e
     where
-      rec = render . Expr'
       render' expr = case unExpr expr of
         Apply _ _ -> parens
         Dot _ _ -> parens
@@ -217,6 +219,9 @@ instance Render Expr' where
         Binary _ _ _ -> parens
         _ -> render expr
         where parens = "(" <> render expr <> ")"
+
+instance Render Expr' where
+  render (Expr' e) = render e
 
 instance Render e => Render (InString e) where
   render (Bare s) = render s
