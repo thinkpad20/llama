@@ -218,11 +218,21 @@ instance (IsExpr e, Eq e, Render e) => Render (AbsExpr e) where
     PatternDef e1 e2 -> render e1 <> " = " <> render e2
     Assign e1 e2 -> render e1 <> " := " <> render e2
     Attribute e name -> render' e <> "\\" <> name
+    If cond t f -> _if "if" cond <> _thenelse t f
+    Unless cond t f -> _if "unless" cond <> _thenelse t f
+    PostIf e cond -> render e <> " " <> _if "if" cond
+    PostUnless e cond -> render e <> " " <> _if "unless" cond
     For for e -> case unExpr e of
       Block _ -> render for <> " " <> render e
       _ -> render for <> " do " <> render e
     _ -> pack $ show e
     where
+      _if kw c = kw <> " " <> render c
+      _thenelse t f = do
+        let f' = case f of {Nothing -> ""; Just e -> " else " <> render e}
+        let t' = case unExpr t of Block _ -> " " <> render t
+                                  _ -> " then " <> render t
+        t' <> f'
       render' expr = case unExpr expr of
         Apply _ _ -> parens
         Dot _ _ -> parens

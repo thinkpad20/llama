@@ -58,26 +58,26 @@ pExpr = pIf <|> pUnless <|> pFor <|> pExpr' where
   pExpr' = do
     expr <- pSmallExpr
     option expr $ do
-      extra <- choice [pLambda, pPatternDef, pAssign, pPostIf, pPostFor]
+      extra <- choice [ pLambda, pPatternDef, pAssign, pPostIf, pPostUnless
+                      , pPostFor]
       return $ extra expr
 
 pIf :: Parser Expr
 pIf = item $ If <$> cond <*> true <*> false where
   cond = pKeyword "if" *> pSmallExpr
-  true = pKeyword "then" *> pAnyBlock
+  true = pKeyword "then" *> pAnyBlock <|> pIndentedBlock
   false = optionMaybe $ pKeyword "else" *> pAnyBlock
 
 pUnless :: Parser Expr
 pUnless = item $ Unless <$> cond <*> true <*> false where
   cond = pKeyword "unless" *> pSmallExpr
-  true = pKeyword "then" *> pAnyBlock
+  true = pKeyword "then" *> pAnyBlock <|> pIndentedBlock
   false = optionMaybe $ pKeyword "else" *> pAnyBlock
 
 pFor :: Parser Expr
 pFor = item $ do
   for <- pForPattern
-  body <- pKeyword "do" *> pInlineBlock
-          <|> pIndentedBlock
+  body <- pKeyword "do" *> pAnyBlock <|> pIndentedBlock
   return $ For for body
 
 ---------------------------------------------------------
@@ -107,6 +107,12 @@ pPostIf = do
   pKeyword "if"
   cond <- pExpr
   return $ \expr -> Expr (_pos expr) $ PostIf expr cond
+
+pPostUnless :: Parser (Expr -> Expr)
+pPostUnless = do
+  pKeyword "unless"
+  cond <- pExpr
+  return $ \expr -> Expr (_pos expr) $ PostUnless expr cond
 
 pPostFor :: Parser (Expr -> Expr)
 pPostFor = do
@@ -144,7 +150,7 @@ pIndentedBlock = item $ indented $ Block <$> blockOf pExpr
 
 -- | Grabs one or more @p@s separated by semicolon or same indentation.
 blockOf :: Parser a -> Parser [a]
-blockOf p = p `sepBy1` same
+blockOf p = p `sepEndBy1` many1 same
 
 ------------------------------------------------------------
 -----------------------  Primitives  -----------------------
