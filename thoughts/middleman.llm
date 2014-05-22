@@ -1,0 +1,38 @@
+# Using a putative HTTP MiddleWare framework called 'MiddleMan' in Llama
+import Os\pwd
+       SimpleArgs\argv,
+       SimpleLogs, \levels
+       Server\HttpHandler, \Server, \run,
+       MiddleMan\middleware, \default_headers, \cookie_decoder,
+                \file_server, \not_found, \handle
+
+level = argv.get('log-level', default='WARN')
+logger = SimpleLogs\defaultLogger()
+stack = middleware [default_headers,
+                    cookie_decode,
+                    file_server pwd(),
+                    not_found]
+http = handle stack |> HttpHandler
+
+for event in split 'connect read write close error'
+  http.on event event.go after
+    go e = (client,) => println "#[client\id]: #[event]"
+
+# Set up error handler
+http.on 'error' go after
+  go (client, err) = println "Error (#[client\id]): #[err]"
+
+# Set up initial behavior
+http.on 'listen' go after go port = println "Listening on #{port}"
+
+# Start server on port 8000
+Server(http).run(port=argv.get('port', default=8000), logger=logger)
+
+
+middleware : [MiddleWare] -> WebStack
+handle : WebStack -> Thingie
+HttpHandler : Thingie -> Http
+Server : Http -> Server
+typedef RunOptions = (port ?: Int, logger ?: Logger)
+run : Server -> RunOptions -> ()
+on : Http -> Str -> (? -> ()) -> ()

@@ -4,3 +4,4 @@ src/*.prof
 src/\#*
 src/Profile
 src/llama
+test_js/node_modules

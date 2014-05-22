@@ -6,6 +6,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE PackageImports #-}
 module Desugar (desugarIt, desugarIt',dsLambdas, dsLambdaDot,
                 dsConstructors, dsDot, dsForever, dsForIn, dsIf',
                 dsAfterBefore, dsPrefixLine) where
@@ -16,7 +17,7 @@ import Prelude (IO, Show(..), Eq(..), Ord(..), Bool(..),
                 (+), (-), elem, Either(..), tail, otherwise,
                 error, undefined, fst, putStrLn, (||), foldl)
 import Control.Monad (MonadPlus(..))
-import Control.Monad.State.Strict (runStateT)
+import "mtl" Control.Monad.State.Strict (runStateT, liftIO)
 import qualified Data.Map as M
 import qualified Data.Set as S
 import qualified Prelude as P
@@ -191,6 +192,8 @@ dsLambdaDot = ("LambdaDot", test, ds) where
       expr -> foldl Apply <$> rec expr <*> pure exprs'
   rec = traverse ("LambdaDot", test, ds)
 
+instance Render PatAssert
+
 dsPatternDef = ("Patterned definition", test, ds) where
   rec = traverse ("Patterned definition", test, ds)
   test (PatternDef _ _) = True
@@ -201,7 +204,9 @@ dsPatternDef = ("Patterned definition", test, ds) where
     go (exprs, Var name) = do
       body :: Expr <- rec expr
       return $ Define name (P.foldr Lambda body exprs)
-    go (_, _) = throwErrorC ["Invalid pattern: ", render expr]
+    go (_, pat') = rec expr >>= assertsAndDefs pat' >>= \case
+      (Nothing, defs) -> return defs
+      (Just b, defs) -> return $ If (PatAssert b) defs patternMatchError
 
 dsDot = ("Dot", test, ds) where
   test (Dot _ _) = True
@@ -300,47 +305,48 @@ dsCase = tup where
   test (Case _ _) = True
   test _ = False
   rec = traverse tup
-  ds (Case e options) = go e options
-  --go :: Expr -> [(Expr, Expr)] -> Desugar
+  ds (Case e options) = do
+    e' <- rec e
+    options' <- mapM (\(a,b) -> (,) <$> rec a <*> rec b) options
+    go e' options'
   go e = \case
-    [] -> return $ Throw $ Constructor "PatternMatchError"
-    (pat, res):opts -> boolAndAssigns e pat >>= \case
-      (Nothing, assns) -> return $ assns <> res
-      (Just cond, assns) -> If (PatAssert cond) (assns <> res) <$> go e opts
+    [] -> return patternMatchError
+    (pat, res):opts -> assertsAndDefs pat e >>= \case
+      (Nothing, defs) -> return $ defs <> res
+      (Just cond, defs) -> If (PatAssert cond) (defs <> res) <$> go e opts
 
-boolAndAssigns :: Expr -> Expr -> Desugar (Maybe PatAssert, Expr)
-boolAndAssigns start expr = fst <$> runStateT (go start expr) ("", 0) where
+assertsAndDefs :: Expr -> Expr -> Desugar (Maybe PatAssert, Expr)
+assertsAndDefs start expr = fst <$> runStateT (go start expr) ("", 0) where
   go :: Expr -> Expr -> StateT (Name, Int) Desugar (Maybe PatAssert, Expr)
-  go start expr = case expr of
+  go expr matchWith = case expr of
     Number n -> return (lit $ Number n, mempty)
     String s -> return (lit $ String s, mempty)
-    Var v -> case start of
-        Var v' | v' == v -> return (Nothing, mempty)
-        _ -> return (Nothing, Define v start)
+    Var v -> case matchWith of
+      Var v' | v' == v -> return (Nothing, mempty)
+      _ -> return (Nothing, Define v matchWith)
     Constructor name -> do
-      return (Just $ IsConstr name start, mempty)
+      modify (\(_, i) -> (name, i))
+      return (Just $ IsConstr name matchWith, mempty)
     Tuple exprs _ -> do
       list <- mapM convertWithIndex $ P.zip [0..] exprs
       return (mkBool (P.length exprs) list, mkAssigns list)
-      where convertWithIndex (i, e) = do start' <- aRef i
-                                         go start' e
+      where convertWithIndex (i, e) = aRef i >>= go e
     Apply a b -> do
-      (b1, a1) <- go start a
+      (bool1, assn1) <- go a matchWith
       (_, i)   <- get
-      (b2, a2) <- aRef i >>= \start' -> go start' b
+      (bool2, assn2) <- aRef i >>= go b
       modify (\(name, i) -> (name, i + 1))
-      return (b1 `and` b2, a1 <> a2)
+      return (bool1 `and` bool2, assn1 <> assn2)
     _ -> lift $ throwErrorC ["Unhandled case: ", render expr]
-    where lit expr = Just $ start `IsLiteral` expr
+    where lit expr = Just $ matchWith `IsLiteral` expr
           aRef n = do
             (name, _) <- get
-            return $ Deref name n start
+            return $ Deref name n matchWith
           Just pa1 `and` Just pa2 = Just $ pa1 `And` pa2
           a `and` b = a `mplus` b
           -- make an AND of all the a==b expressions in subcompilations
-          mkBool :: Int -> [(Maybe PatAssert, Expr)] -> Maybe PatAssert
-          mkBool len list = P.foldr and (Just $ IsTupleOf len start)
-                                        (fst <$> list)
+          mkBool len list =
+            P.foldl and (Just $ IsTupleOf len matchWith) (fst <$> list)
           -- concatenate all of the assignments from the subcompilations
           mkAssigns list = mconcat (P.snd <$> list)
 
@@ -395,6 +401,10 @@ defaultEnv = DesugarerEnv {
   , dsNamesInUse = mempty
   , dsObjDecs = mempty
   }
+
+log xs = liftIO $ P.putStrLn $ P.concat $ fmap unpack xs
+
+patternMatchError = Throw $ (Apply (Constructor "PatternMatchError") unit)
 
 desugarers :: [Desugarer]
 desugarers = [ dsAfterBefore

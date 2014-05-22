@@ -7,35 +7,66 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE PackageImports #-}
 {-# LANGUAGE BangPatterns #-}
-module Common ( (!), (<!>), (<$>), (<$), (<*), (*>), (<*>), pure
-              , get, modify, put, lift, forM_, forM, when, Monoid(..)
-              , (<>), StateT(..), State, ErrorT(..), indentBy, Name
-              , intercalate, Identity(..), runState, evalState, (>>==)
-              , trim, line, throwError, catchError, (~>), Render(..)
-              , isInt, ErrorList(..), throwError1, throwErrorC, addError
-              , addError', forever, isSpace, catMaybes, sortWith, each
-              , unless, mconcatMapM, show, whenM, unlessM, lift2, toList
-              , mapM_, fromList)
-              where
+module Language.Llama.Common.Common (
+    module Control.Applicative
+  , module Control.Monad
+  , module Control.Monad.Error
+  , module Control.Monad.Identity
+  , module Control.Monad.State.Strict
+  , module Control.Monad.Trans
+  , module Control.Monad.Writer
+  , module Data.Char
+  , module Data.Foldable
+  , module Data.HashMap.Strict
+  , module Data.List
+  , module Data.Maybe
+  , module Data.Monoid
+  , module Data.Sequence
+  , module Data.String
+  , module Data.Text
+  , module Text.Parsec
+  , module GHC.Exts
+  , module Prelude
+  , Render(..), Name
+  , ErrorList(..), throwError1, throwErrorC, addError, addError'
+  , mconcatMapM, whenM, unlessM, lift2, print
+  , isInt, isIntTo, trim, indentBy, contains, line, each
+  , (!), (<!>), (>>==), (~>)) where
 
-import Prelude hiding (show, mapM_)
+import Prelude (IO, Eq(..), Ord(..), Bool(..), tail, Show(..), Char,
+                Double, String, Maybe(..), Int, Monad(..), Integer,
+                ($), (.), floor, map, Functor(..), mapM, fst, snd,
+                (+), (-), Either(..), unwords, flip, head, error,
+                fromIntegral, round, (^), (*), putStrLn, map,
+                otherwise, length, Read(..), read, (&&), FilePath,
+                readFile, not)
 import qualified Prelude as P
-import Control.Monad hiding (forM_, mapM_)
-import "mtl" Control.Monad.State.Strict hiding (forM_, mapM_)
-import "mtl" Control.Monad.Error hiding (forM_, mapM_)
-import Data.Monoid
-import GHC.Exts (sortWith)
-import qualified Data.Text as T
-import Control.Applicative hiding (many, (<|>))
+import Control.Applicative
+import Control.Monad ((>=>), when)
+import "mtl" Control.Monad.Error (MonadError(..), Error(..), ErrorT(..))
+import "mtl" Control.Monad.Identity (Identity(..))
+import "mtl" Control.Monad.Trans (liftIO)
+import "mtl" Control.Monad.State.Strict (MonadState(..), State(..)
+                                        , StateT(..), MonadTrans(..)
+                                        , modify
+                                        , execState, evalState, lift)
+import "mtl" Control.Monad.Writer (MonadWriter(..), WriterT(..))
+import Data.Char (isSpace, isUpper)
+import Data.Foldable
+import Data.HashMap.Strict hiding (map, (!), toList, fromList, empty
+                                  , filter, foldr, foldl', null, adjust
+                                  , singleton)
 import Data.List (intercalate)
-import "mtl" Control.Monad.Identity hiding (forM_, mapM_)
-import Data.Char (isSpace)
 import Data.Maybe (catMaybes)
+import Data.Monoid
+import Data.Sequence hiding (replicate, length, empty)
+import Data.String
+import Data.Text (Text(..), pack, unpack, snoc)
+import qualified Data.Text as T
 import qualified Data.Map as M
 import qualified Data.Set as S
-import Data.Sequence
-import Data.Foldable
-import Text.Parsec (ParseError)
+import GHC.Exts (sortWith)
+import Text.Parsec (ParseError, SourcePos)
 
 instance Render a => Render (Seq a) where
   render vec = "[" <> T.intercalate "," (toList $ fmap render vec) <> "]"
@@ -45,6 +76,8 @@ instance Error ErrorList where
   strMsg = ErrorList . pure . T.pack
 
 instance Render ErrorList
+instance Render ParseError
+instance Render SourcePos
 
 instance Show ErrorList where
   show (ErrorList msgs) = P.show msgs
@@ -57,16 +90,23 @@ class Show a => Render a where
   render = P.show ~> T.pack
   renderIO :: a -> IO T.Text
   renderIO = return . render
+  pretty :: a -> T.Text
+  pretty = render
+  renderI' :: a -> State (Int, T.Text) ()
+  renderI' _ = return ()
+  renderI :: Int -> a -> T.Text
+  renderI i a = snd $ execState (renderI' a) (i, "")
 
 instance Render Double
 instance Render T.Text
 instance Render Int
+instance Render Integer
 instance Render Char
+instance Render ()
 instance (Render a, Render b) => Render (a, b) where
   render (a, b) = "(" <> render a <> "," <> render b <> ")"
 
-instance Render String where
-  render = P.show ~> T.pack
+instance Render String
 
 instance Render a => Render [a] where
   render as = "[" <> T.intercalate ", " (map render as) <> "]"
@@ -132,14 +172,17 @@ addError msg (ErrorList msgs) = throwError $ ErrorList $ msg : msgs
 addError' ::  (Monad m) => [T.Text] -> ErrorList -> ErrorT ErrorList m a
 addError' = addError . mconcat
 
-each :: [a] -> (a -> b) -> [b]
-each = flip map
+each :: Functor f => f a -> (a -> b) -> f b
+each = flip fmap
 
 mconcatMapM :: (Monad f, Functor f, Monoid t) => (a -> f t) -> [a] -> f t
 mconcatMapM f list = mconcat <$> mapM f list
 
 show :: Show a => a -> T.Text
 show s = T.pack $ P.show s
+
+print :: Render a => a -> IO ()
+print = render ~> unpack ~> putStrLn
 
 whenM, unlessM :: Monad m => m Bool -> m () -> m ()
 whenM test act = test >>= \case
@@ -149,8 +192,6 @@ whenM test act = test >>= \case
 unlessM test act = test >>= \case
   True -> return ()
   False -> act
-
-instance Render ParseError
 
 lift2 :: (Monad (t1 m), Monad m, MonadTrans t, MonadTrans t1) =>
          m a -> t (t1 m) a
