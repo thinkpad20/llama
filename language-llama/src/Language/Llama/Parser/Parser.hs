@@ -7,6 +7,7 @@ import qualified Prelude as P
 import Text.Parsec hiding (satisfy, parse, (<|>), many)
 import Data.Set hiding (map)
 import qualified Data.Set as S
+import Debug.Trace
 
 import Language.Llama.Common.Common
 import Language.Llama.Common.AST
@@ -36,11 +37,9 @@ type Parser = ParsecT [PToken] ParserState Identity
 
 pTopLevel :: Parser Expr
 pTopLevel = do
-  many same
-  pos <- getPosition
-  exprs <- blockOf pExpr
-  many same
-  eof
+  pos <- many same *> getPosition
+  exprs <- option [] $ blockOf pExpr
+  many same *> eof
   -- return $ Expr pos $ Block exprs
   return $ Expr pos $ Block exprs
 
@@ -80,19 +79,23 @@ blockOf p = p `sepBy1` same
 -----------------------  Primitives  -----------------------
 ------------------------------------------------------------
 
+-- | A unit of punctuation, like ( or ;
 pPunc :: Char -> Parser (Token PToken)
 pPunc c = satisfy $ \case {TPunc c' | c == c' -> True; _ -> False}
 
+-- | Any identifier (including keywords).
 pAnyIdent :: Parser Name
 pAnyIdent = satisfy go >>= return . unbox where
   go = \case {TId _ -> True; TKeyword _ -> True; _ -> False}
   unbox = \case {TId n -> n; TKeyword n -> n}
 
+-- | Parses the exact symbol requested.
 pExactSym :: Name -> Parser Name
 pExactSym name = satisfy go >>= return . unbox where
   go = \case {TSymbol n | n == name -> True; _ -> False}
   unbox = \case TSymbol n -> n
 
+-- | Numbers, variables, strings. Munches interpolated strings as well.
 pNumber, pVariable, pString :: Parser Expr
 pNumber = item $ num >>= \case
   TInt i -> return $ Number $ fromIntegral i
@@ -100,8 +103,24 @@ pNumber = item $ num >>= \case
   where num = satisfy (\case {TInt _ -> True; TFloat _ -> True; _ -> False})
 pVariable = item $ var >>= \(TId n) -> return $ Var n
   where var = satisfy (\case {TId _ -> True; _ -> False})
-pString = item $ str >>= \(TStr n) -> return $ String n
-  where str = satisfy (\case {TStr _ -> True; _ -> False})
+pString = item $ str >>= go where
+  go :: Token PToken -> Parser (AbsExpr Expr)
+  go tkn = case tkn of
+    TStr s -> return $ String s
+    TIStr istr -> InString <$> getIstr istr
+  getIstr :: IStr PToken -> Parser (InString Expr)
+  getIstr = \case
+    Plain s -> return $ Bare s
+    IStr is1 tkns is2 -> do
+      is1' <- getIstr is1
+      is2' <- getIstr is2
+      pos <- getPosition
+      case parseFrom pos tkns of
+        Left err -> unexpected $ "Error in interpolated string: " <> show err
+        Right (expr, pos') -> do
+          setPosition pos'
+          return $ InterpShow is1' expr is2'
+  str = satisfy (\case {TStr _ -> True; TIStr _ -> True; _ -> False})
 
 -- | Parses a term, possibly followed by a dot or brackets.
 pChain :: Parser Expr
@@ -196,7 +215,7 @@ pLambda = item $ do
 ---------------------------------------------------------
 
 grab :: (PToken -> Maybe a) -> Parser a
-grab = token show tPosition
+grab = token (render ~> unpack) tPosition
 
 satisfy :: (Token PToken -> Bool) -> Parser (Token PToken)
 satisfy f = satisfy' (f . tToken)
@@ -257,3 +276,23 @@ seeWith parser input = case parseWith parser input of
   Right ast -> P.putStrLn $ unpack $ render ast
 
 see = seeWith pTopLevel
+
+-- | Tokenizes from a given starting position. Returns the ending position.
+parseFrom :: SourcePos
+          -> [PToken]
+          -> Either TokenizerError (Expr, SourcePos)
+parseFrom pos = runParserFrom pos pExpr
+
+-- | Runs a tokenizer given a starting source position. Is used when we
+-- parse a list of tokens inside of a string interpolation.
+runParserFrom :: SourcePos   -- ^ Position from which to start
+              -> Parser a    -- ^ The tokenizer to run
+              -> [PToken]    -- ^ The input string
+              -> Either ParseError (a, SourcePos) -- ^ Result and new pos
+runParserFrom pos parser input = do
+  let parser' = do
+        setPosition pos
+        res <- parser
+        pos' <- getPosition
+        return (res, pos')
+  runIdentity $ runParserT parser' initState "" input

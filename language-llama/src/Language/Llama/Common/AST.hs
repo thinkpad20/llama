@@ -80,27 +80,27 @@ type Attribute expr = (Name, Type, Maybe expr)
 data Mod = Mut | Ref | Pure | Local | Lazy deriving (P.Show, Eq, Ord)
 type TypeMap = M.Map Type Type
 
-instance Render Type -- where
-  -- render t = case t of
-  --   TVar name -> name
-  --   TConst name -> name
-  --   TTuple ts _ -> "(" <> intercalate ", " (map render ts) <> ")"
-  --   TApply (TConst "[]") typ -> "[" <> render typ <> "]"
-  --   TApply (TConst "[!]") typ -> "[!" <> render typ <> "]"
-  --   TApply a b -> render a <> " " <> render' b
-  --   TFunction t1 t2 -> render'' t1 <> " -> " <> render t2
-  --   TMod modi typ -> render modi <> " " <> render typ
-  --   TMultiFunc tset -> "{" <> renderSet tset <> "}"
-  --   where render' typ = case typ of
-  --           TApply _ _ -> "(" <> render typ <> ")"
-  --           _ -> render typ
-  --         render'' typ = case typ of
-  --           TFunction _ _ -> "(" <> render typ <> ")"
-  --           _ -> render typ
-  --         renderSet tset =
-  --           let pairs = M.toList tset
-  --               rPair (from, to) = render from <> " -> " <> render to
-  --           in intercalate ", " (map rPair pairs)
+instance Render Type where
+   render t = case t of
+     TVar name -> name
+     TConst name -> name
+     TTuple ts _ -> "(" <> T.intercalate ", " (map render ts) <> ")"
+     TApply (TConst "[]") typ -> "[" <> render typ <> "]"
+     TApply (TConst "[!]") typ -> "[!" <> render typ <> "]"
+     TApply a b -> render a <> " " <> render' b
+     TFunction t1 t2 -> render'' t1 <> " -> " <> render t2
+     TMod modi typ -> render modi <> " " <> render typ
+     TMultiFunc tset -> "{" <> renderSet tset <> "}"
+     where render' typ = case typ of
+             TApply _ _ -> "(" <> render typ <> ")"
+             _ -> render typ
+           render'' typ = case typ of
+             TFunction _ _ -> "(" <> render typ <> ")"
+             _ -> render typ
+           renderSet tset = do
+             let pairs = M.toList tset
+                 rPair (from, to) = render from <> " -> " <> render to
+             T.intercalate ", " (map rPair pairs)
 
 -- instance Render [M.Map Name Type] where
 --   render mps = line $ "[" <> (intercalate ", " $ map render mps) <> "]"
@@ -162,13 +162,13 @@ defConstr = ConstructorDec {
   , constrLogic = Nothing
   }
 
-data InString e  = Plain Text
+data InString e  = Bare Text
                  | InterpShow (InString e) e (InString e)
                  | Interp (InString e) e (InString e)
                  deriving (P.Show, Eq, Functor)
 
 instance IsString (InString e) where
-  fromString str = Plain $ pack str
+  fromString = Bare . pack
 
 newtype Expr' = Expr' (AbsExpr Expr') deriving (Show, Eq)
 
@@ -182,9 +182,9 @@ instance IsExpr Expr' where
   bareExpr = P.id
 
 instance Monoid (InString e) where
-  mempty = Plain mempty
+  mempty = Bare mempty
   is1 `mappend` is2 = case (is1, is2) of
-    (Plain s, Plain s') -> Plain (s <> s')
+    (Bare s, Bare s') -> Bare (s <> s')
     (s, InterpShow is e is') -> InterpShow (s <> is) e is'
     (InterpShow is e is', s) -> InterpShow is e (is' <> s)
     (s, Interp is e is') -> Interp (s <> is) e is'
@@ -205,6 +205,7 @@ instance Render Expr' where
       "(" <> T.intercalate ", " (map render es) <> ")"
     Lambda a b -> render a <> " => " <> render b
     DeRef e1 e2 -> render e1 <> "[" <> render e2 <> "]"
+    InString istr -> render istr
     _ -> pack $ show e
     where
       rec = render . Expr'
@@ -215,6 +216,14 @@ instance Render Expr' where
         Binary _ _ _ -> parens
         _ -> render expr
         where parens = "(" <> render expr <> ")"
+
+instance Render e => Render (InString e) where
+  render (Bare s) = render s
+  render (InterpShow i1 e i2) = do
+    let i1' = T.init $ T.tail $ render i1
+    let i2' = T.init $ T.tail $ render i2
+    let e' = render e
+    "\"" <> i1' <> "#{" <> e' <> "}" <> i2' <> "\""
 
 symChars :: String
 symChars = "><=+-*/^~!%&$:#|?"
