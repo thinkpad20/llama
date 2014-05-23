@@ -18,6 +18,7 @@ data AbsExpr expr = Var          !Name
                   | String       !Text
                   | InString     !(InString expr)
                   | Constructor  !Name
+                  | !expr `Then` !expr
                   | Block        ![expr]
                   | Dot          !expr !expr
                   | Apply        !expr !expr
@@ -140,6 +141,7 @@ instance (IsExpr e, Eq e, Render e) => Render (AbsExpr e) where
     Constructor name -> name
     Number n | isInt n -> render (floor n :: Int)
     Number n -> render n
+    a `Then` b -> render a <> "; " <> render b
     Block es -> "{" <> T.intercalate "; " (map render es) <> "}"
     String s -> render s
     Dot e1 e2 -> render' e1 <> "." <> render' e2

@@ -40,10 +40,9 @@ type Parser = ParsecT [PToken] ParserState Identity
 pTopLevel :: Parser Expr
 pTopLevel = do
   pos <- many same *> getPosition
-  exprs <- option [] $ pBlockOf pStatement
+  exprs <- pBlockOf pStatement
   many same *> eof
-  -- return $ Expr pos $ Block exprs
-  return $ Expr pos $ Block exprs
+  return $ unblock exprs
 
 -- | The simplest single parsed unit.
 pTerm :: Parser Expr
@@ -190,11 +189,11 @@ pAnyBlockOf p = p `sepBy1` pPunc ';' <|> indented (pBlockOf p)
 
 -- | A block that doesn't start with an indent. Separated with @;@.
 pInlineBlock :: Parser Expr
-pInlineBlock = item $ Block <$> pExpr `sepBy1` pPunc ';'
+pInlineBlock = unblock <$> pExpr `sepBy1` pPunc ';'
 
 -- | An indented block, separators are same indentation OR semicolons.
 pIndentedBlock :: Parser Expr
-pIndentedBlock = item $ indented $ Block <$> pBlockOf pExpr
+pIndentedBlock = indented $ unblock <$> pBlockOf pExpr
 
 -- | Grabs one or more @p@s separated by semicolon or same indentation.
 pBlockOf :: Parser a -> Parser [a]
@@ -373,7 +372,7 @@ pParens = item $ pPunc '(' >> do
   where
     getBlock ex = (pPunc ';' <|> same) *> do
       exprs <- pExpr `sepBy` same
-      return $ Block (ex:exprs)
+      return . unExpr $ unblock (ex:exprs)
     getTuple ex = pPunc ',' *> do
       exprs <- pExpr `sepBy` pPunc ','
       return $ Tuple (ex:exprs) mempty
@@ -472,6 +471,11 @@ unString e = case unExpr e of
   Var n -> n
   Constructor n -> n
   _ -> error "Not a string"
+
+unblock :: [Expr] -> Expr
+unblock [] = error "Empty block"
+unblock [e] = e
+unblock (e:es) = Expr (_pos e) $ e `Then` unblock es
 
 ----------------------------------------------------------
 -----------------  Running the parser  -------------------
