@@ -45,18 +45,18 @@ instance Render t => Render (IStr t) where
 
 instance Render t => Render (Token t) where
   render tkn = case tkn of
-    TId name -> "IDENTIFIER: " <> name
-    TKeyword txt -> "KEYWORD: " <> txt
-    TInt int -> "INT: " <> render int
-    TFloat dub -> "FLOAT: " <> render dub
-    TStr txt -> "STR: " <> render txt
-    TIStr istr -> "ISTR: " <> render istr
-    TSymbol nm -> "SYMBOL: " <> render nm
-    TPunc chr -> "CHAR: " <> render chr
-    Indent -> "INDENT"
-    Outdent -> "OUTDENT"
-    Nodent -> "NODENT"
-    TLineComment txt -> "LINE COMMENT: " <> txt
+    TId name          -> "IDENTIFIER: " <> name
+    TKeyword txt      -> "KEYWORD: " <> txt
+    TInt int          -> "INT: " <> render int
+    TFloat dub        -> "FLOAT: " <> render dub
+    TStr txt          -> "STR: " <> render txt
+    TIStr istr        -> "ISTR: " <> render istr
+    TSymbol nm        -> "SYMBOL: " <> render nm
+    TPunc chr         -> "CHAR: " <> render chr
+    Indent            -> "INDENT"
+    Outdent           -> "OUTDENT"
+    Nodent            -> "NODENT"
+    TLineComment txt  -> "LINE COMMENT: " <> txt
     TBlockComment txt -> "BLOCK COMMENT: " <> txt
 
 addChar :: IStr a -> Char -> IStr a

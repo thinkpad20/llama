@@ -7,27 +7,20 @@
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE PackageImports #-}
-module Desugar (desugarIt, desugarIt',dsLambdas, dsLambdaDot,
-                dsConstructors, dsDot, dsForever, dsForIn, dsIf',
-                dsAfterBefore, dsPrefixLine) where
+module Language.Llama.Desugarer.Desugar (
+  desugarIt, desugarIt',dsLambdas, dsLambdaDot,
+  dsConstructors, dsDot, dsForever, dsForIn, dsIf',
+  dsAfterBefore, dsPrefixLine) where
 
-import Prelude (IO, Show(..), Eq(..), Ord(..), Bool(..),
-                Double, String, Maybe(..), Int, Monad(..),
-                ($), (.), floor, map, Functor(..), mapM,
-                (+), (-), elem, Either(..), tail, otherwise,
-                error, undefined, fst, putStrLn, (||), foldl)
-import Control.Monad (MonadPlus(..))
-import "mtl" Control.Monad.State.Strict (runStateT, liftIO)
+import qualified Prelude as P
 import qualified Data.Map as M
 import qualified Data.Set as S
-import qualified Prelude as P
 import System.IO.Unsafe
 
-import Common
-import AST
-import TypeLib hiding (log, log')
-import Parser
-import Data.Text hiding (tail, foldl, partition, init)
+import Language.Llama.Common.Common
+import Language.Llama.Common.AST
+import Language.Llama.Types.TypeLib hiding (log, log')
+import Language.Llama.Parser.Parser
 
 type Desugarer = (Name, Expr -> Bool, Expr -> Desugar Expr)
 
@@ -53,7 +46,7 @@ doTransform (_, _, t) e = t e
 
 traverse :: Desugarer -> Expr -> Desugar Expr
 traverse ds e | doTest ds e = doTransform ds e
-              | otherwise = case e of
+              | otherwise = case unExpr e of
   Var _ -> return e
   Number _ -> return e
   String _ -> return e
@@ -142,6 +135,7 @@ popNS :: Desugar ()
 popNS = modify $ \s -> s { dsNameSpace = nsTail $ dsNameSpace s
                          , dsNamesInUse = tail $ dsNamesInUse s}
 
+{-
 -- | We have a series of desugarers. Each of which has a test
 -- which determines if it should run (essentially, matching on the
 -- constructor type of the expression) and a transforming function
@@ -448,3 +442,5 @@ desugarIt' :: (Desugarer, String) -> Either ErrorList Expr
 desugarIt' (ds, input) = case grab input of
   Left err -> error $ P.show err
   Right expr -> runDesugar' ds expr
+
+-}

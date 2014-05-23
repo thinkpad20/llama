@@ -13,49 +13,51 @@ import qualified Data.Text as T
 import Language.Llama.Common.Common
 
 type Kwargs expr = [(Name, Either Type expr)]
-data AbsExpr expr = Var         !Name
-                  | Number      !Double
-                  | String      !Text
-                  | InString    !(InString expr)
-                  | Constructor !Name
-                  | Block       ![expr]
-                  | Dot         !expr !expr
-                  | Apply       !expr !expr
-                  | Binary      !Name !expr !expr
-                  | Attribute   !expr !Name
-                  | Lambda      !expr !expr
-                  | Lambdas     ![(expr, expr)]
-                  | Case        !expr ![(expr, expr)]
-                  | MultiCase   !expr ![([expr], expr)]
-                  | Tuple       ![expr] (Kwargs expr)
-                  | Literal     !(Literal expr)
-                  | DeRef       !expr !expr
-                  | Typed       !expr !Type
-                  | If          !expr !expr !(Maybe expr)
-                  | Unless      !expr !expr !(Maybe expr)
-                  | PostIf      !expr !expr
-                  | PostUnless  !expr !expr
-                  | ForComp     !expr !(ForPattern expr)
-                  | For         !(ForPattern expr) !expr
-                  | PatternDef  !expr !expr
-                  | Define      !Name !expr
-                  | Extend      !Name !expr
-                  | Assign      !expr !expr
-                  | Return      !expr
-                  | Throw       !expr
-                  | TryCatch    !expr ![(expr, expr)] !(Maybe expr)
-                  | Break       !expr
-                  | After       !expr !expr
-                  | Before      !expr !expr
-                  | ObjDec      !(ObjectDec expr)
-                  | Modified    !Mod !expr
-                  | TypeDef     !Name !Type
-                  | Prefix      !Name !expr
-                  | LambdaDot   !expr
-                  | AssignOp    !Name !expr !expr
-                  | With        !expr ![(Name, expr)]
-                  | PatAssert   !(PatAssert expr)
-                  | GetAttrib   !Name !Int !expr
+data AbsExpr expr = Var          !Name
+                  | Number       !Double
+                  | String       !Text
+                  | InString     !(InString expr)
+                  | Constructor  !Name
+                  | Block        ![expr]
+                  | Dot          !expr !expr
+                  | Apply        !expr !expr
+                  | Binary       !Name !expr !expr
+                  | Unary        !Name !expr
+                  | Attribute    !expr !Name
+                  | RefAttribute !expr !Name
+                  | Lambda       !expr !expr
+                  | Lambdas      ![(expr, expr)]
+                  | Case         !expr ![(expr, expr)]
+                  | MultiCase    !expr ![([expr], expr)]
+                  | Tuple        ![expr] (Kwargs expr)
+                  | Literal      !(Literal expr)
+                  | DeRef        !expr !expr
+                  | Typed        !expr !Type
+                  | If           !expr !expr !(Maybe expr)
+                  | Unless       !expr !expr !(Maybe expr)
+                  | PostIf       !expr !expr
+                  | PostUnless   !expr !expr
+                  | ForComp      !expr !(ForPattern expr)
+                  | For          !(ForPattern expr) !expr
+                  | PatternDef   !expr !expr
+                  | Define       !Name !expr
+                  | Extend       !Name !expr
+                  | Assign       !expr !expr
+                  | Return       !expr
+                  | Throw        !expr
+                  | TryCatch     !expr ![(expr, expr)] !(Maybe expr)
+                  | Break        !expr
+                  | After        !expr !expr
+                  | Before       !expr !expr
+                  | ObjDec       !(ObjectDec expr)
+                  | Modified     !Text !expr
+                  | TypeDef      !Name !Type
+                  | Prefix       !Name !expr
+                  | LambdaDot    !expr
+                  | AssignOp     !Name !expr !expr
+                  | With         !expr ![(Name, expr)]
+                  | PatAssert    !(PatAssert expr)
+                  | GetAttrib    !Name !Int !expr
                   | Continue
                   | WildCard
                   deriving (P.Show, Eq, Functor)
@@ -79,89 +81,31 @@ data Literal expr = ArrayLiteral ![expr]
                   | ArrayRange   !expr !expr
                   | DictLiteral  ![(expr, expr)]
                   | SetLiteral   ![expr]
-                  | ListLiteral  ![expr]
                   deriving (P.Show, Eq, Functor)
 
-data ObjectDec expr = ObjectDec {
-    objName :: Name
+data ObjectDec expr = ObjectDec
+  { objName :: Name
   , objExtends :: Maybe Name
   , objVars :: [Name]
   , objConstrs :: [ConstructorDec expr]
-  , objAttrs :: [expr]
-  }
+  , objAttrs :: [expr] }
   deriving (P.Show, Eq, Functor)
 
-data ConstructorDec expr = ConstructorDec {
-    constrName :: Name
+data ConstructorDec expr = ConstructorDec
+  { constrName :: Name
   , constrArgs :: [expr]
-  , constrExtends :: Maybe expr
-  }
+  , constrExtends :: Maybe expr }
   deriving (P.Show, Eq, Functor)
 
+-- | An interpolated string.
 data InString e  = Bare Text
                  | InterpShow (InString e) e (InString e)
                  | Interp (InString e) e (InString e)
                  deriving (P.Show, Eq, Functor)
 
-instance IsString (InString e) where
-  fromString = Bare . pack
+instance IsString (InString e) where fromString = Bare . pack
 
 newtype Expr' = Expr' (AbsExpr Expr') deriving (Show, Eq)
-
-type TKwargs = [(Name, Type)]
-data Type = TVar       !Name
-          | TConst     !Name
-          | TTuple     ![Type] !TKwargs
-          | TApply     !Type !Type
-          | TFunction  !Type !Type
-          | TMod       !Mod !Type
-          | TMultiFunc !TypeMap
-          deriving (P.Show, Eq, Ord)
-
-data Mod = Mut | Ref | Pure | Local | Lazy deriving (P.Show, Eq, Ord)
-type TypeMap = M.Map Type Type
-
-instance Render Type where
-   render t = case t of
-     TVar name -> name
-     TConst name -> name
-     TTuple ts _ -> "(" <> T.intercalate ", " (map render ts) <> ")"
-     TApply (TConst "[]") typ -> "[" <> render typ <> "]"
-     TApply (TConst "[!]") typ -> "[!" <> render typ <> "]"
-     TApply a b -> render a <> " " <> render' b
-     TFunction t1 t2 -> render'' t1 <> " -> " <> render t2
-     TMod modi typ -> render modi <> " " <> render typ
-     TMultiFunc tset -> "{" <> renderSet tset <> "}"
-     where render' typ = case typ of
-             TApply _ _ -> "(" <> render typ <> ")"
-             _ -> render typ
-           render'' typ = case typ of
-             TFunction _ _ -> "(" <> render typ <> ")"
-             _ -> render typ
-           renderSet tset = do
-             let pairs = M.toList tset
-                 rPair (from, to) = render from <> " -> " <> render to
-             T.intercalate ", " (map rPair pairs)
-
--- instance Render [M.Map Name Type] where
---   render mps = line $ "[" <> (intercalate ", " $ map render mps) <> "]"
-
-instance Monoid Type where
-  mempty = TMultiFunc mempty
-  TMultiFunc s `mappend` TMultiFunc s' = TMultiFunc $ M.union s s'
-  TMultiFunc s `mappend` TFunction from to = TMultiFunc $ M.insert from to s
-  TFunction from to `mappend` TMultiFunc s = TMultiFunc $ M.insert from to s
-  TFunction f1 t1 `mappend` TFunction f2 t2 =
-    TMultiFunc $ M.fromList [(f1, t1), (f2, t2)]
-  t1 `mappend` t2 = P.error $ "Invalid <>s: " <> P.show t1 <> ", " <> P.show t2
-
-instance Render Mod where
-  render Mut = "mut"
-  render Ref = "ref"
-  render Pure = "pure"
-  render Local = "local"
-  render Lazy = "lazy"
-
 
 class IsExpr e where
   unExpr :: e -> AbsExpr e
@@ -192,8 +136,11 @@ instance (IsExpr e, Eq e, Render e) => Render (AbsExpr e) where
     Dot e1 e2 -> render' e1 <> "." <> render' e2
     Apply e1 e2 -> render' e1 <> " " <> render' e2
     Binary op e1 e2 -> render' e1 <> " " <> op <> " " <> render' e2
-    Tuple es kws | kws == mempty ->
-      "(" <> T.intercalate ", " (map render es) <> ")"
+    Unary op e -> op <> render' e
+    Tuple es kws | kws == mempty -> "(" <> es' <> ")" where
+      es' = if length es == 1 then render (head es) <> ","
+            else T.intercalate ", " (map render es)
+
     Lambda a b -> render a <> " => " <> render b
     DeRef e1 e2 -> render e1 <> "[" <> render e2 <> "]"
     InString istr -> render istr
@@ -210,16 +157,16 @@ instance (IsExpr e, Eq e, Render e) => Render (AbsExpr e) where
     _ -> pack $ show e
     where
       _if kw c = kw <> " " <> render c
-      _thenelse t f = do
-        let f' = case f of {Nothing -> ""; Just e -> " else " <> render e}
-        let t' = case unExpr t of Block _ -> " " <> render t
-                                  _ -> " then " <> render t
-        t' <> f'
+      _thenelse t f = t' <> f' where
+        f' = case f of {Nothing -> ""; Just e -> " else " <> render e}
+        t' = case unExpr t of Block _ -> " " <> render t
+                              _ -> " then " <> render t
       render' expr = case unExpr expr of
         Apply _ _ -> parens
         Dot _ _ -> parens
         Lambda _ _ -> parens
         Binary _ _ _ -> parens
+        Unary _ _ -> parens
         Assign _ _ -> parens
         _ -> render expr
         where parens = "(" <> render expr <> ")"
@@ -244,6 +191,49 @@ instance Render e => Render (InString e) where
     let e' = render e
     "\"" <> i1' <> "#{" <> e' <> "}" <> i2' <> "\""
 
+type TKwargs = [(Name, Type)]
+data Type = TVar       !Name
+          | TConst     !Name
+          | TTuple     ![Type] !TKwargs
+          | TApply     !Type !Type
+          | TFunction  !Type !Type
+          | TMod       !Text !Type
+          | TMultiFunc !TypeMap
+          deriving (P.Show, Eq, Ord)
+
+type TypeMap = M.Map Type Type
+
+instance Render Type where
+   render t = case t of
+     TVar name -> name
+     TConst name -> name
+     TTuple ts _ -> "(" <> T.intercalate ", " (map render ts) <> ")"
+     TApply (TConst "[]") typ -> "[" <> render typ <> "]"
+     TApply (TConst "[!]") typ -> "[!" <> render typ <> "]"
+     TApply a b -> render a <> " " <> render' b
+     TFunction t1 t2 -> render'' t1 <> " -> " <> render t2
+     TMod modi typ -> modi <> " " <> render typ
+     TMultiFunc tset -> "{" <> renderSet tset <> "}"
+     where render' typ = case typ of
+             TApply _ _ -> "(" <> render typ <> ")"
+             _ -> render typ
+           render'' typ = case typ of
+             TFunction _ _ -> "(" <> render typ <> ")"
+             _ -> render typ
+           renderSet tset = do
+             let pairs = M.toList tset
+                 rPair (from, to) = render from <> " -> " <> render to
+             T.intercalate ", " (map rPair pairs)
+
+instance Monoid Type where
+  mempty = TMultiFunc mempty
+  TMultiFunc s `mappend` TMultiFunc s' = TMultiFunc $ M.union s s'
+  TMultiFunc s `mappend` TFunction from to = TMultiFunc $ M.insert from to s
+  TFunction from to `mappend` TMultiFunc s = TMultiFunc $ M.insert from to s
+  TFunction f1 t1 `mappend` TFunction f2 t2 =
+    TMultiFunc $ M.fromList [(f1, t1), (f2, t2)]
+  t1 `mappend` t2 = P.error $ "Invalid <>s: " <> P.show t1 <> ", " <> P.show t2
+
 symChars :: String
 symChars = "><=+-*/^~!%&$:#|?"
 
@@ -251,17 +241,15 @@ isSymbol :: Text -> Bool
 isSymbol = T.all (`elem` symChars)
 
 defConstr :: ConstructorDec e
-defConstr = ConstructorDec {
-    constrName = "(some constructor)"
+defConstr = ConstructorDec
+  { constrName = "(some constructor)"
   , constrArgs = []
-  , constrExtends = Nothing
-  }
+  , constrExtends = Nothing }
 
 defObj :: ObjectDec e
-defObj = ObjectDec {
-    objName = "(some object)"
+defObj = ObjectDec
+  { objName = "(some object)"
   , objExtends = Nothing
   , objVars = []
   , objConstrs = []
-  , objAttrs = []
-  }
+  , objAttrs = [] }

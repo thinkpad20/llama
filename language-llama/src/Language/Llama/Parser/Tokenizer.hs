@@ -302,11 +302,12 @@ tOneToken = lexeme $ item $ choice
   , tKeyword
   , tId
   , tNum
+  , tThisSymbol "!"
   , tSymbol
   , tThisSymbol ".."
   , tPunc '.'
   , tDent
-  , tCharPuncs "(){}[]:,;.\\"
+  , tCharPuncs "(){}[]:,;\\"
   ]
 
 ----------------------------------------------------------

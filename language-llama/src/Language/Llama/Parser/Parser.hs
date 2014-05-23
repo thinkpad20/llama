@@ -39,14 +39,15 @@ type Parser = ParsecT [PToken] ParserState Identity
 pTopLevel :: Parser Expr
 pTopLevel = do
   pos <- many same *> getPosition
-  exprs <- option [] $ blockOf pStatement
+  exprs <- option [] $ pBlockOf pStatement
   many same *> eof
   -- return $ Expr pos $ Block exprs
   return $ Expr pos $ Block exprs
 
 -- | The simplest single parsed unit.
 pTerm :: Parser Expr
-pTerm = choice [pNumber, pVariable, pConstructor, pString, pParens, pArray]
+pTerm = choice [pNumber, pVariable, pConstructor, pString, pParens, pArray
+               , pDictOrSet]
 
 -- | A "small expr" is simpler than a lambda or similar.
 pSmallExpr :: Parser Expr
@@ -57,9 +58,9 @@ pExpr :: Parser Expr
 pExpr = pIf <|> pUnless <|> pFor <|> pExpr' where
   pExpr' = do
     expr <- pSmallExpr
-    option expr $ do
-      extra <- choice [ pLambda, pPatternDef, pPostIf, pPostUnless, pPostFor]
-      return $ extra expr
+    option expr $ fmap ($ expr) extra
+  extra = choice [pLambda, pPatternDef, pPostIf, pPostUnless, pPostFor]
+
 
 -- | More high-level than expressions. Things like object/trait declarations.
 pStatement = choice [pObjectDec, pExpr]
@@ -130,7 +131,7 @@ pPatternDef :: Parser (Expr -> Expr)
 pPatternDef = do
   pExactSym "="
   expr <- pExpr
-  return $ \pat -> Expr (_pos pat) $ Lambda pat expr
+  return $ \pat -> Expr (_pos pat) $ PatternDef pat expr
 
 pObjectDec :: Parser Expr
 pObjectDec = item $ ObjDec <$> do
@@ -171,7 +172,7 @@ pAnyBlock = pIndentedBlock <|> pInlineBlock
 
 -- | @pAnyBlock@ but generalized to any parser.
 pAnyBlockOf :: Parser a -> Parser [a]
-pAnyBlockOf p = p `sepBy1` pPunc ';' <|> indented (blockOf p)
+pAnyBlockOf p = p `sepBy1` pPunc ';' <|> indented (pBlockOf p)
 
 -- | A block that doesn't start with an indent. Separated with @;@.
 pInlineBlock :: Parser Expr
@@ -179,11 +180,11 @@ pInlineBlock = item $ Block <$> pExpr `sepBy1` pPunc ';'
 
 -- | An indented block, separators are same indentation OR semicolons.
 pIndentedBlock :: Parser Expr
-pIndentedBlock = item $ indented $ Block <$> blockOf pExpr
+pIndentedBlock = item $ indented $ Block <$> pBlockOf pExpr
 
 -- | Grabs one or more @p@s separated by semicolon or same indentation.
-blockOf :: Parser a -> Parser [a]
-blockOf p = p `sepEndBy1` many1 same
+pBlockOf :: Parser a -> Parser [a]
+pBlockOf p = p `sepEndBy1` many1 same
 
 ------------------------------------------------------------
 ------------------------  Literals  ------------------------
@@ -200,6 +201,24 @@ pArray = item $ Literal <$> between (pPunc '[') (pPunc ']') go where
       <|> do pPunc ','
              rest <- pExpr `sepEndBy` pPunc ','
              return $ ArrayLiteral $ first : rest
+
+pDictOrSet :: Parser Expr
+pDictOrSet = item $ Literal <$> between (pPunc '{') (pPunc '}') go where
+  go = option (DictLiteral []) $ do
+    first <- pSmallExpr
+    option (SetLiteral [first]) $ do
+      pExactSym "=>" *> dict first
+      <|> pPunc ',' *> set first
+  dict first = do
+    val <- (,) first <$> pExpr
+    option (DictLiteral [val]) $ do
+      pPunc ','
+      rest <- keyval `sepEndBy` pPunc ','
+      return $ DictLiteral $ val : rest
+  set first = do
+    rest <- pExpr `sepEndBy` pPunc ','
+    return $ SetLiteral $ first : rest
+  keyval = (,) <$> pSmallExpr <* pExactSym "=>" <*> pExpr
 
 ------------------------------------------------------------
 -----------------------  Primitives  -----------------------
@@ -267,11 +286,20 @@ pConstrName = var >>= \(TId n) -> return n where
 
 -- | Using the backslash to dereference an attribute off of an object.
 pAttribute :: Parser Expr
-pAttribute = pTerm >>= go where
+pAttribute = pReadRef >>= go where
   go term = option term $ do
     pPunc '\\'
+    ref <- optionMaybe $ pExactSym "!"
     name <- pAnyIdent
-    go $ Expr (_pos term) $ Attribute term name
+    let term' = Attribute term name
+        epos = Expr (_pos term)
+    case ref of
+      Nothing -> go $ epos term'
+      Just _ ->  go $ epos $ Unary "!" $ epos term'
+
+pReadRef :: Parser Expr
+pReadRef = item bangs <|> pTerm where
+  bangs = pExactSym "!" >> Unary "!" <$> pReadRef
 
 -- | Parses a term, possibly followed by a dot or brackets.
 pChain :: Parser Expr
@@ -299,6 +327,11 @@ pApply = pChain >>= parseRest where
     parseRest (Expr (_pos res) (Apply res term))
     <|> return res   -- at some point the second parse will fail; then
                      -- return what we have so far
+
+-- | Parses the negation operator (~)
+pNeg :: Parser Expr
+pNeg = item minus <|> pApply where
+  minus = pExactSym "~" >> Unary "~" <$> pApply
 
 -- | Parses something in parentheses. This can be a single expression, a
 -- tuple, or a block.
@@ -331,15 +364,14 @@ pLevel3 = pLevel _level3ops pLevel4
 pLevel4 = pLevel _level4ops pLevel5
 pLevel5 = pLevel _level5ops pLevel6
 pLevel6 = pLevel _level6ops pLevel7
-pLevel7 = pLevel _level7ops pApply
+pLevel7 = pLevel _level7ops pNeg
 
 pLevel:: (ParserState -> [Text]) -> Parser Expr -> Parser Expr
 pLevel ops higher = do
   ops <- getState <!> ops
   pLeftBinary ops higher
 
--- | Grabs any binary, i.e. one that didn't get caught by an earlier
--- parser.
+-- | Grabs any binary, i.e. one that won't get caught by a later parser.
 pUnknownBinary :: Parser Expr
 pUnknownBinary = pLevel0 >>= go where
   go left = option left $ try $ pAnySym >>= \op -> do
@@ -414,7 +446,8 @@ initState = ParserState {
   , _level7ops     = ["~>", "<~"]
   , _knownSymbols  = S.fromList [ "$", "!", "&&", "||", "|^|", ">", ">", "<="
                                 , ">=", "==", "!=", "+", "-", "*", "/", "**"
-                                , "^", "~>", "~>", ":=", "->", "=>", ".."]
+                                , "^", "~>", "~>", ":=", "->", "=>", ".."
+                                , "=", "~"]
   , _leftfixities  = S.fromList ["!", "+", "-", "*", "/"]
   , _rightfixities = S.fromList ["**", "^", "&&", "||", "|^|"]
   }
