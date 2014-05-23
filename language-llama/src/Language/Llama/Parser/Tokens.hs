@@ -13,6 +13,7 @@ data Token t = TId Name
              | TInt Integer
              | TFloat Double
              | TStr Text
+             | TKeyword Text
              | TIStr (IStr t)
              | TSymbol Name
              | TPunc Char
@@ -21,9 +22,6 @@ data Token t = TId Name
              | Nodent
              | TLineComment Text
              | TBlockComment Text
-             | TKeyword Text
-             | TRaw Text
-             | TRegex Text
              deriving (Show, Eq)
 
 data IStr t = Plain Text
@@ -47,21 +45,19 @@ instance Render t => Render (IStr t) where
 
 instance Render t => Render (Token t) where
   render tkn = case tkn of
-    TId name -> "IDENT: " <> name
+    TId name -> "IDENTIFIER: " <> name
+    TKeyword txt -> "KEYWORD: " <> txt
     TInt int -> "INT: " <> render int
     TFloat dub -> "FLOAT: " <> render dub
     TStr txt -> "STR: " <> render txt
     TIStr istr -> "ISTR: " <> render istr
-    TSymbol nm -> "SYM: " <> render nm
-    TPunc chr -> "PUNC: " <> render chr
+    TSymbol nm -> "SYMBOL: " <> render nm
+    TPunc chr -> "CHAR: " <> render chr
     Indent -> "INDENT"
     Outdent -> "OUTDENT"
     Nodent -> "NODENT"
-    TLineComment txt -> "LCOMMENT: " <> txt
-    TBlockComment txt -> "BCOMMENT: " <> txt
-    TKeyword txt -> "KEYWORD: " <> txt
-    TRaw txt -> "RAW: " <> txt
-    TRegex txt -> "REGEX: " <> txt
+    TLineComment txt -> "LINE COMMENT: " <> txt
+    TBlockComment txt -> "BLOCK COMMENT: " <> txt
 
 addChar :: IStr a -> Char -> IStr a
 addChar (Plain t) c = Plain $ t `snoc` c
@@ -70,4 +66,4 @@ addChar (IStr is t is') c = IStr is t (is' `addChar` c)
 keywords :: [Name]
 keywords = ["case","catch","class","else","finally","for","if","in","return",
             "of","then","try","unless","with","while", "object", "forever",
-            "do"]
+            "do","throw","trait","implement"]

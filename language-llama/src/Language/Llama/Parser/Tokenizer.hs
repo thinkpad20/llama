@@ -181,20 +181,6 @@ balancedString stop = P.reverse <$> loop ([stop], "")
       c | stop == '}' && c `elem` ['"', '\''] -> loop (c:stop:rest, c:str)
       c -> loop (stop:rest, c:str)
 
--- | A "simple" regex.
-tRegex :: Tokenizer (Token a)
-tRegex = do
-  char '/'
-  lookAhead anyChar >>= \case
-    ' ' -> return $ TSymbol "/"
-    c -> TRegex . pack <$> anyChar `manyTillTry` char '/'
-
--- | A multi-line regex.
-tLongRegex :: Tokenizer (Token a)
-tLongRegex = do
-  try $ string "///"
-  TRegex . pack <$> anyChar `manyTillTry` string "///"
-
 ---------------------------------------------------------
 -----------------------  Indentation  -------------------
 ---------------------------------------------------------
@@ -251,16 +237,6 @@ tDent = try $ many tEmptyLine >> (tIndent <|> tNodent <|> tOutdent)
 ------------------------------------------------------------
 ----------------------- Punctuation  -----------------------
 ------------------------------------------------------------
-
--- | Order here matters: longest prefix match comes first.
-validSymbols :: [String]
-validSymbols =
-  [ "++", "+=", "+", "--", "->", "-=", "-", "**", "*=", "*", "//", "/=", "/"
-  , ">>", ">=", "<<", "<=", "<", ">", "=>", "===", "==", "=", "&&", "&", "||"
-  , "|", "?=", "?", "!", ".."]
-
-reservedSymbols :: Set String
-reservedSymbols = fromList [{-"->", "=>", ".", "..", "<:"-}]
 
 -- | All characters valid to use in symbols.
 symChars :: String
@@ -326,10 +302,9 @@ tOneToken = lexeme $ item $ choice
   , tKeyword
   , tId
   , tNum
-  , tLongRegex
-  , tRegex
-  , tPunc '.'
   , tSymbol
+  , tThisSymbol ".."
+  , tPunc '.'
   , tDent
   , tCharPuncs "(){}[]:,;.\\"
   ]

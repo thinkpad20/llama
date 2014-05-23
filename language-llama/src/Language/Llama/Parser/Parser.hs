@@ -39,14 +39,14 @@ type Parser = ParsecT [PToken] ParserState Identity
 pTopLevel :: Parser Expr
 pTopLevel = do
   pos <- many same *> getPosition
-  exprs <- option [] $ blockOf pExpr
+  exprs <- option [] $ blockOf pStatement
   many same *> eof
   -- return $ Expr pos $ Block exprs
   return $ Expr pos $ Block exprs
 
 -- | The simplest single parsed unit.
 pTerm :: Parser Expr
-pTerm = choice [pNumber, pVariable, pConstructor, pString, pParens]
+pTerm = choice [pNumber, pVariable, pConstructor, pString, pParens, pArray]
 
 -- | A "small expr" is simpler than a lambda or similar.
 pSmallExpr :: Parser Expr
@@ -58,9 +58,15 @@ pExpr = pIf <|> pUnless <|> pFor <|> pExpr' where
   pExpr' = do
     expr <- pSmallExpr
     option expr $ do
-      extra <- choice [ pLambda, pPatternDef, pAssign, pPostIf, pPostUnless
-                      , pPostFor]
+      extra <- choice [ pLambda, pPatternDef, pPostIf, pPostUnless, pPostFor]
       return $ extra expr
+
+-- | More high-level than expressions. Things like object/trait declarations.
+pStatement = choice [pObjectDec, pExpr]
+
+---------------------------------------------------------
+--------------------  Control flow  ---------------------
+---------------------------------------------------------
 
 pIf :: Parser Expr
 pIf = item $ If <$> cond <*> true <*> false where
@@ -79,28 +85,6 @@ pFor = item $ do
   for <- pForPattern
   body <- pKeyword "do" *> pAnyBlock <|> pIndentedBlock
   return $ For for body
-
----------------------------------------------------------
----------------------  Definitions  ---------------------
----------------------------------------------------------
-
-pLambda :: Parser (Expr -> Expr)
-pLambda = do
-  pExactSym "=>"
-  body <- pAnyBlock
-  return $ \param -> Expr (_pos param) $ Lambda param body
-
-pPatternDef :: Parser (Expr -> Expr)
-pPatternDef = do
-  pExactSym "="
-  expr <- pExpr
-  return $ \pat -> Expr (_pos pat) $ Lambda pat expr
-
-pAssign :: Parser (Expr -> Expr)
-pAssign = do
-  pExactSym ":="
-  expr <- pExpr
-  return $ \ref -> Expr (_pos ref) $ Assign ref expr
 
 pPostIf :: Parser (Expr -> Expr)
 pPostIf = do
@@ -132,6 +116,51 @@ pForPattern = forever <|> for where
                    return $ ForIn expr cont
     option (ForExpr expr) $ for <|> forIn
 
+---------------------------------------------------------
+---------------------  Definitions  ---------------------
+---------------------------------------------------------
+
+pLambda :: Parser (Expr -> Expr)
+pLambda = do
+  pExactSym "=>"
+  body <- pAnyBlock
+  return $ \param -> Expr (_pos param) $ Lambda param body
+
+pPatternDef :: Parser (Expr -> Expr)
+pPatternDef = do
+  pExactSym "="
+  expr <- pExpr
+  return $ \pat -> Expr (_pos pat) $ Lambda pat expr
+
+pObjectDec :: Parser Expr
+pObjectDec = item $ ObjDec <$> do
+  pKeyword "object"
+  name <- pConstrName
+  vars <- pVarName `sepBy` pPunc ','
+  extends <- optionMaybe $ pExactSym "<:" *> pConstrName
+  (constrs, attrs) <- getConstrs
+  return $ defObj {
+      objName = name
+    , objExtends = extends
+    , objVars = vars
+    , objConstrs = constrs
+    , objAttrs = attrs }
+
+getConstrs :: Parser ([ConstructorDec Expr], [Expr])
+getConstrs = (,) <$> constrs <*> attrs where
+  constrs = option [] $ pExactSym "=" *> pAnyBlockOf pConstructorDec
+  attrs = option [] $ pKeyword "with" *> pAnyBlockOf pExpr
+
+pConstructorDec :: Parser (ConstructorDec Expr)
+pConstructorDec = do
+  name <- pConstrName
+  args <- many pTerm
+  extends <- optionMaybe (pExactSym "<:" >> pSmallExpr)
+  return defConstr {
+      constrName = name
+    , constrArgs = args
+    , constrExtends = extends }
+
 ------------------------------------------------------------
 -------------------------  Blocks  -------------------------
 ------------------------------------------------------------
@@ -140,17 +169,37 @@ pForPattern = forever <|> for where
 pAnyBlock :: Parser Expr
 pAnyBlock = pIndentedBlock <|> pInlineBlock
 
+-- | @pAnyBlock@ but generalized to any parser.
+pAnyBlockOf :: Parser a -> Parser [a]
+pAnyBlockOf p = p `sepBy1` pPunc ';' <|> indented (blockOf p)
+
 -- | A block that doesn't start with an indent. Separated with @;@.
 pInlineBlock :: Parser Expr
 pInlineBlock = item $ Block <$> pExpr `sepBy1` pPunc ';'
 
--- | An intented block, separators are same indentation OR semicolons.
+-- | An indented block, separators are same indentation OR semicolons.
 pIndentedBlock :: Parser Expr
 pIndentedBlock = item $ indented $ Block <$> blockOf pExpr
 
 -- | Grabs one or more @p@s separated by semicolon or same indentation.
 blockOf :: Parser a -> Parser [a]
 blockOf p = p `sepEndBy1` many1 same
+
+------------------------------------------------------------
+------------------------  Literals  ------------------------
+------------------------------------------------------------
+
+pArray :: Parser Expr
+pArray = item $ Literal <$> between (pPunc '[') (pPunc ']') go where
+  go = option (ArrayLiteral []) $ do
+    first <- pExpr
+    option (ArrayLiteral [first]) $ do
+      pExactSym ".."
+      last <- pExpr
+      return $ ArrayRange first last
+      <|> do pPunc ','
+             rest <- pExpr `sepEndBy` pPunc ','
+             return $ ArrayLiteral $ first : rest
 
 ------------------------------------------------------------
 -----------------------  Primitives  -----------------------
@@ -187,9 +236,7 @@ pNumber = item $ num >>= \case
   TInt i -> return $ Number $ fromIntegral i
   TFloat n -> return $ Number n
   where num = satisfy (\case {TInt _ -> True; TFloat _ -> True; _ -> False})
-pVariable = item $ var >>= \(TId n) -> return $ Var n
-  where var = satisfy test
-        test = \case {TId n | n!T.head!isUpper!not -> True; _ -> False}
+pVariable = item $ Var <$> pVarName
 pConstructor = item $ var >>= \(TId n) -> return $ Constructor n
   where var = satisfy test
         test = \case {TId n | n!T.head!isUpper -> True; _ -> False}
@@ -212,6 +259,12 @@ pString = item $ str >>= go where
           return $ InterpShow is1' expr is2'
   str = satisfy (\case {TStr _ -> True; TIStr _ -> True; _ -> False})
 
+pVarName, pConstrName :: Parser Name
+pVarName = var >>= \(TId n) -> return n where
+  var = satisfy $ \case {TId n | n!T.head!isUpper!not -> True; _ -> False}
+pConstrName = var >>= \(TId n) -> return n where
+  var = satisfy $ \case {TId n | n!T.head!isUpper -> True; _ -> False}
+
 -- | Using the backslash to dereference an attribute off of an object.
 pAttribute :: Parser Expr
 pAttribute = pTerm >>= go where
@@ -233,6 +286,9 @@ pChain = pAttribute >>= go where
       TPunc '.' -> do
         dotfunc <- pPunc '.' *> pExpr
         go $ Expr (_pos expr) $ Dot expr dotfunc
+      TSymbol ":=" -> do
+        pExactSym ":="
+        Expr (_pos expr) . Assign expr <$> pExpr
       _ -> return expr
 
 -- | Parses function application. Lower precedence than dot or object ref.
@@ -286,7 +342,7 @@ pLevel ops higher = do
 -- parser.
 pUnknownBinary :: Parser Expr
 pUnknownBinary = pLevel0 >>= go where
-  go left = option left $ pAnySym >>= \op -> do
+  go left = option left $ try $ pAnySym >>= \op -> do
     known <- _knownSymbols <$> getState
     when (op `S.member` known) $ do
       unexpected $ unpack $ "Symbol " <> op <> " with known precedence"
@@ -358,7 +414,7 @@ initState = ParserState {
   , _level7ops     = ["~>", "<~"]
   , _knownSymbols  = S.fromList [ "$", "!", "&&", "||", "|^|", ">", ">", "<="
                                 , ">=", "==", "!=", "+", "-", "*", "/", "**"
-                                , "^", "~>", "~>"]
+                                , "^", "~>", "~>", ":=", "->", "=>", ".."]
   , _leftfixities  = S.fromList ["!", "+", "-", "*", "/"]
   , _rightfixities = S.fromList ["**", "^", "&&", "||", "|^|"]
   }

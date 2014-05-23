@@ -74,6 +74,40 @@ data PatAssert expr = IsLiteral !expr !expr
                     | !(PatAssert expr) `And` !(PatAssert expr)
                     deriving (P.Show, Eq, Functor)
 
+
+data Literal expr = ArrayLiteral ![expr]
+                  | ArrayRange   !expr !expr
+                  | DictLiteral  ![(expr, expr)]
+                  | SetLiteral   ![expr]
+                  | ListLiteral  ![expr]
+                  deriving (P.Show, Eq, Functor)
+
+data ObjectDec expr = ObjectDec {
+    objName :: Name
+  , objExtends :: Maybe Name
+  , objVars :: [Name]
+  , objConstrs :: [ConstructorDec expr]
+  , objAttrs :: [expr]
+  }
+  deriving (P.Show, Eq, Functor)
+
+data ConstructorDec expr = ConstructorDec {
+    constrName :: Name
+  , constrArgs :: [expr]
+  , constrExtends :: Maybe expr
+  }
+  deriving (P.Show, Eq, Functor)
+
+data InString e  = Bare Text
+                 | InterpShow (InString e) e (InString e)
+                 | Interp (InString e) e (InString e)
+                 deriving (P.Show, Eq, Functor)
+
+instance IsString (InString e) where
+  fromString = Bare . pack
+
+newtype Expr' = Expr' (AbsExpr Expr') deriving (Show, Eq)
+
 type TKwargs = [(Name, Type)]
 data Type = TVar       !Name
           | TConst     !Name
@@ -83,8 +117,6 @@ data Type = TVar       !Name
           | TMod       !Mod !Type
           | TMultiFunc !TypeMap
           deriving (P.Show, Eq, Ord)
-
-type Attribute expr = (Name, Type, Maybe expr)
 
 data Mod = Mut | Ref | Pure | Local | Lazy deriving (P.Show, Eq, Ord)
 type TypeMap = M.Map Type Type
@@ -130,56 +162,6 @@ instance Render Mod where
   render Local = "local"
   render Lazy = "lazy"
 
-data Literal expr = ArrayLiteral ![expr]
-                  | ArrayRange   !expr !expr
-                  | DictLiteral  ![(expr, expr)]
-                  | SetLiteral   ![expr]
-                  | ListLiteral  ![expr]
-                  deriving (P.Show, Eq, Functor)
-
-data ObjectDec expr = ObjectDec {
-    objName :: Name
-  , objExtends :: Maybe Name
-  , objVars :: [Name]
-  , objConstrs :: [ConstructorDec expr]
-  , objAttrs :: [expr]
-  }
-  deriving (P.Show, Eq, Functor)
-
-defObj :: ObjectDec e
-defObj = ObjectDec {
-    objName = "(some object)"
-  , objExtends = Nothing
-  , objVars = []
-  , objConstrs = []
-  , objAttrs = []
-  }
-
-data ConstructorDec expr = ConstructorDec {
-    constrName :: Name
-  , constrArgs :: [expr]
-  , constrExtends :: Maybe expr
-  , constrLogic :: Maybe expr
-  }
-  deriving (P.Show, Eq, Functor)
-
-defConstr :: ConstructorDec e
-defConstr = ConstructorDec {
-    constrName = "(some constructor)"
-  , constrArgs = []
-  , constrExtends = Nothing
-  , constrLogic = Nothing
-  }
-
-data InString e  = Bare Text
-                 | InterpShow (InString e) e (InString e)
-                 | Interp (InString e) e (InString e)
-                 deriving (P.Show, Eq, Functor)
-
-instance IsString (InString e) where
-  fromString = Bare . pack
-
-newtype Expr' = Expr' (AbsExpr Expr') deriving (Show, Eq)
 
 class IsExpr e where
   unExpr :: e -> AbsExpr e
@@ -238,6 +220,7 @@ instance (IsExpr e, Eq e, Render e) => Render (AbsExpr e) where
         Dot _ _ -> parens
         Lambda _ _ -> parens
         Binary _ _ _ -> parens
+        Assign _ _ -> parens
         _ -> render expr
         where parens = "(" <> render expr <> ")"
 
@@ -266,10 +249,19 @@ symChars = "><=+-*/^~!%&$:#|?"
 
 isSymbol :: Text -> Bool
 isSymbol = T.all (`elem` symChars)
---
--- instance Monoid (AbsExpr e) where
---   mempty = Block []
---   Block b1 `mappend` Block b2 = Block (b1 <> b2)
---   Block b `mappend` e = Block (b <> [e])
---   e `mappend` Block b = Block (e:b)
---   e1 `mappend` e2 = Block [e1, e2]
+
+defConstr :: ConstructorDec e
+defConstr = ConstructorDec {
+    constrName = "(some constructor)"
+  , constrArgs = []
+  , constrExtends = Nothing
+  }
+
+defObj :: ObjectDec e
+defObj = ObjectDec {
+    objName = "(some object)"
+  , objExtends = Nothing
+  , objVars = []
+  , objConstrs = []
+  , objAttrs = []
+  }
