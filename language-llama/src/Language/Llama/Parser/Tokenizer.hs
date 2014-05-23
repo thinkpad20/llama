@@ -5,6 +5,7 @@
 module Language.Llama.Parser.Tokenizer where
 
 import qualified Prelude as P
+import Prelude (Show)
 import Data.Set hiding (map)
 import Text.Parsec hiding (many, (<|>), spaces)
 import qualified Data.Text as T
@@ -159,7 +160,7 @@ tInString = char '"' >> TIStr <$> go where
            str' <- balancedString '}'
            pos <- getPosition
            case tokenizeFrom pos str' of
-            Left err -> error $ "Error in interpolated string: " <> show err
+            Left err -> error $ "Error in interpolated string: " <> P.show err
             Right (tokens, pos') -> do
               setPosition pos'
               IStr str tokens <$> go
@@ -362,4 +363,4 @@ testFile = readFile >=> testString
 testString :: String -> IO ()
 testString s = case tokenize s of
   Right tokens -> mapM_ print tokens
-  Left err -> error $ show err
+  Left err -> error $ P.show err

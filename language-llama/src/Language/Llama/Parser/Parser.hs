@@ -14,7 +14,8 @@ import Language.Llama.Common.AST
 import Language.Llama.Parser.Tokens
 import Language.Llama.Parser.Tokenizer hiding (item, initState)
 
-data Expr = Expr {_pos :: SourcePos, _expr :: AbsExpr Expr} deriving (P.Show)
+data Expr = Expr {_pos :: SourcePos, _expr :: AbsExpr Expr}
+            deriving (P.Show, Eq)
 instance IsExpr Expr where unExpr (Expr _ e) = e
 instance Render Expr where render = render . bareExpr
 data ParserState = ParserState {
@@ -46,8 +47,8 @@ pTopLevel = do
 
 -- | The simplest single parsed unit.
 pTerm :: Parser Expr
-pTerm = choice [pNumber, pVariable, pConstructor, pString, pParens, pArray
-               , pDictOrSet]
+pTerm = choice [pNumber, pVariable, pConstructor, pString, pParens
+               , pArray, pDictOrSet, pJson]
 
 -- | A "small expr" is simpler than a lambda or similar.
 pSmallExpr :: Parser Expr
@@ -55,11 +56,16 @@ pSmallExpr = pBinaryOp
 
 -- | Any expr, which could be a lambda, or definition, etc.
 pExpr :: Parser Expr
-pExpr = pIf <|> pUnless <|> pFor <|> pExpr' where
+pExpr = pIf <|> pUnless <|> pFor <|> pMod where
+  pMod = item mod <|> pExpr'
+  mod = do
+    m <- choice $ map pKeyword ["ref", "array", "hash"]
+    Modified m <$> pMod
   pExpr' = do
     expr <- pSmallExpr
     option expr $ fmap ($ expr) extra
-  extra = choice [pLambda, pPatternDef, pPostIf, pPostUnless, pPostFor]
+  extra = choice [ pLambda, pPatternDef, pPostIf, pPostUnless, pPostFor
+                 , pAfter]
 
 
 -- | More high-level than expressions. Things like object/trait declarations.
@@ -104,6 +110,12 @@ pPostFor = do
   for <- pForPattern
   return $ \expr -> Expr (_pos expr) $ ForComp expr for
 
+pAfter :: Parser (Expr -> Expr)
+pAfter = do
+  pKeyword "after"
+  rest <- pExprOrBlock
+  return $ \expr -> Expr (_pos expr) $ After expr rest
+
 pForPattern :: Parser (ForPattern Expr)
 pForPattern = forever <|> for where
   forever = pKeyword "forever" >> return Forever
@@ -123,44 +135,42 @@ pForPattern = forever <|> for where
 
 pLambda :: Parser (Expr -> Expr)
 pLambda = do
-  pExactSym "=>"
+  pSymbol "->"
   body <- pAnyBlock
   return $ \param -> Expr (_pos param) $ Lambda param body
 
 pPatternDef :: Parser (Expr -> Expr)
 pPatternDef = do
-  pExactSym "="
-  expr <- pExpr
+  pSymbol "="
+  expr <- pExprOrBlock
   return $ \pat -> Expr (_pos pat) $ PatternDef pat expr
 
 pObjectDec :: Parser Expr
 pObjectDec = item $ ObjDec <$> do
-  pKeyword "object"
+  pKeyword "type"
   name <- pConstrName
   vars <- pVarName `sepBy` pPunc ','
-  extends <- optionMaybe $ pExactSym "<:" *> pConstrName
+  extends <- optionMaybe $ pSymbol "<:" *> pConstrName
   (constrs, attrs) <- getConstrs
-  return $ defObj {
-      objName = name
-    , objExtends = extends
-    , objVars = vars
-    , objConstrs = constrs
-    , objAttrs = attrs }
+  return $ defObj { objName = name
+                  , objExtends = extends
+                  , objVars = vars
+                  , objConstrs = constrs
+                  , objAttrs = attrs }
 
 getConstrs :: Parser ([ConstructorDec Expr], [Expr])
 getConstrs = (,) <$> constrs <*> attrs where
-  constrs = option [] $ pExactSym "=" *> pAnyBlockOf pConstructorDec
+  constrs = option [] $ pSymbol "=" *> pAnyBlockOf pConstructorDec
   attrs = option [] $ pKeyword "with" *> pAnyBlockOf pExpr
 
 pConstructorDec :: Parser (ConstructorDec Expr)
 pConstructorDec = do
   name <- pConstrName
   args <- many pTerm
-  extends <- optionMaybe (pExactSym "<:" >> pSmallExpr)
-  return defConstr {
-      constrName = name
-    , constrArgs = args
-    , constrExtends = extends }
+  extends <- optionMaybe (pSymbol "<:" >> pSmallExpr)
+  return defConstr { constrName = name
+                   , constrArgs = args
+                   , constrExtends = extends }
 
 ------------------------------------------------------------
 -------------------------  Blocks  -------------------------
@@ -169,6 +179,10 @@ pConstructorDec = do
 -- | AnyBlock means either an indented block or an inline block.
 pAnyBlock :: Parser Expr
 pAnyBlock = pIndentedBlock <|> pInlineBlock
+
+-- | An expression, or a block.
+pExprOrBlock :: Parser Expr
+pExprOrBlock = pExpr <|> pKeyword "do" *> pAnyBlock
 
 -- | @pAnyBlock@ but generalized to any parser.
 pAnyBlockOf :: Parser a -> Parser [a]
@@ -191,23 +205,24 @@ pBlockOf p = p `sepEndBy1` many1 same
 ------------------------------------------------------------
 
 pArray :: Parser Expr
-pArray = item $ Literal <$> between (pPunc '[') (pPunc ']') go where
-  go = option (ArrayLiteral []) $ do
+pArray = item $ Literal <$> enclose '[' ']' go where
+  go = option (VecLiteral []) $ do
     first <- pExpr
-    option (ArrayLiteral [first]) $ do
-      pExactSym ".."
+    option (VecLiteral [first]) $ do
+      pSymbol ".."
       last <- pExpr
-      return $ ArrayRange first last
+      return $ VecRange first last
       <|> do pPunc ','
              rest <- pExpr `sepEndBy` pPunc ','
-             return $ ArrayLiteral $ first : rest
+             return $ VecLiteral $ first : rest
 
+-- | Grabs either a dict or a set. If it's empty, by default it's a set.
 pDictOrSet :: Parser Expr
-pDictOrSet = item $ Literal <$> between (pPunc '{') (pPunc '}') go where
+pDictOrSet = item $ Literal <$> enclose '{' '}' go where
   go = option (DictLiteral []) $ do
     first <- pSmallExpr
     option (SetLiteral [first]) $ do
-      pExactSym "=>" *> dict first
+      pSymbol "=>" *> dict first
       <|> pPunc ',' *> set first
   dict first = do
     val <- (,) first <$> pExpr
@@ -218,7 +233,23 @@ pDictOrSet = item $ Literal <$> between (pPunc '{') (pPunc '}') go where
   set first = do
     rest <- pExpr `sepEndBy` pPunc ','
     return $ SetLiteral $ first : rest
-  keyval = (,) <$> pSmallExpr <* pExactSym "=>" <*> pExpr
+  keyval = (,) <$> pSmallExpr <* pSymbol "=>" <*> pExpr
+
+-- | Grabs an embedded JSON literal object.
+pJson :: Parser Expr
+pJson = item $ Literal . JsonLiteral <$> do
+  pKeyword "json" *> jObject where
+  jVal = jArray <|> jObject <|> jString <|> jNum <|> jKeyword
+  keyval = (,) <$> fmap unString pTerm <*> (pSymbol ":" *> jVal)
+  jArray = JArray <$> enclose '[' ']' (jVal `sepBy` pPunc ',')
+  jObject = JObject <$> enclose '{' '}' (keyval `sepBy` pPunc ',')
+  jString = JString . unString <$> pString
+  jNum = fmap JNum $ fmap unExpr pNumber >>= \case Number n -> return n
+  jKeyword = try $ fmap unExpr pVariable >>= \case
+    Var "true" -> return $ JBool True
+    Var "false" -> return $ JBool False
+    Var "null" -> return $ JNull
+    e -> unexpected $ (unpack $ render e) <> " is not a JSON keyword"
 
 ------------------------------------------------------------
 -----------------------  Primitives  -----------------------
@@ -240,8 +271,8 @@ pAnyIdent = satisfy go >>= return . unbox where
   unbox = \case {TId n -> n; TKeyword n -> n}
 
 -- | Parses the exact symbol requested.
-pExactSym :: Name -> Parser Name
-pExactSym name = satisfy go >>= \case TSymbol n -> return n
+pSymbol :: Name -> Parser Name
+pSymbol name = satisfy go >>= \case TSymbol n -> return n
   where go = \case {TSymbol n | n == name -> True; _ -> False}
 
 -- | Parses any symbol.
@@ -272,7 +303,7 @@ pString = item $ str >>= go where
       is2' <- getIstr is2
       pos <- getPosition
       case parseFrom pos tkns of
-        Left err -> unexpected $ "Error in interpolated string: " <> show err
+        Left err -> unexpected $ "Error in interpolated string: " <> P.show err
         Right (expr, pos') -> do
           setPosition pos'
           return $ InterpShow is1' expr is2'
@@ -289,7 +320,7 @@ pAttribute :: Parser Expr
 pAttribute = pReadRef >>= go where
   go term = option term $ do
     pPunc '\\'
-    ref <- optionMaybe $ pExactSym "!"
+    ref <- optionMaybe $ pSymbol "!"
     name <- pAnyIdent
     let term' = Attribute term name
         epos = Expr (_pos term)
@@ -299,7 +330,7 @@ pAttribute = pReadRef >>= go where
 
 pReadRef :: Parser Expr
 pReadRef = item bangs <|> pTerm where
-  bangs = pExactSym "!" >> Unary "!" <$> pReadRef
+  bangs = pSymbol "!" >> Unary "!" <$> pReadRef
 
 -- | Parses a term, possibly followed by a dot or brackets.
 pChain :: Parser Expr
@@ -309,13 +340,13 @@ pChain = pAttribute >>= go where
       -- If there is an immediate square bracket, it's an object dereference.
       TPunc '[' | not (tHasSpace pt) -> do
         -- Grab the arguments, then recurse.
-        ref <- pPunc '[' *> pExpr <* pPunc ']'
+        ref <- enclose '[' ']' pExpr
         go $ Expr (_pos expr) $ DeRef expr ref
       TPunc '.' -> do
         dotfunc <- pPunc '.' *> pExpr
         go $ Expr (_pos expr) $ Dot expr dotfunc
       TSymbol ":=" -> do
-        pExactSym ":="
+        pSymbol ":="
         Expr (_pos expr) . Assign expr <$> pExpr
       _ -> return expr
 
@@ -331,7 +362,7 @@ pApply = pChain >>= parseRest where
 -- | Parses the negation operator (~)
 pNeg :: Parser Expr
 pNeg = item minus <|> pApply where
-  minus = pExactSym "~" >> Unary "~" <$> pApply
+  minus = pSymbol "~" >> Unary "~" <$> pApply
 
 -- | Parses something in parentheses. This can be a single expression, a
 -- tuple, or a block.
@@ -385,7 +416,7 @@ pUnknownBinary = pLevel0 >>= go where
 -- next-higher-precedence parser to run first.
 pRightBinary :: [Text] -> Parser Expr -> Parser Expr
 pRightBinary ops higher = higher >>= go where
-  go left = option left $ choice (map pExactSym ops) >>= \op -> do
+  go left = option left $ choice (map pSymbol ops) >>= \op -> do
     right <- pLeftBinary ops higher
     go $ Expr (_pos left) $ Binary op left right
 
@@ -393,7 +424,7 @@ pRightBinary ops higher = higher >>= go where
 -- next-higher-precedence parser to run first.
 pLeftBinary :: [Text] -> Parser Expr -> Parser Expr
 pLeftBinary ops higher = chainl1 higher go where
-  go = choice (map pExactSym ops) >>= go'
+  go = choice (map pSymbol ops) >>= go'
   go' op = pure $ \e1 -> Expr (_pos e1) . Binary op e1
 
 ---------------------------------------------------------
@@ -431,12 +462,23 @@ indented p = indent *> p <* outdent where
   indent = satisfy $ \case {Indent -> True; _ -> False}
   outdent = satisfy $ \case {Outdent -> True; _ -> False}
 
+enclose :: Char -> Char -> Parser a -> Parser a
+enclose c1 c2 = between (pPunc c1) (pPunc c2)
+
+unString :: Expr -> Text
+unString e = case unExpr e of
+  String s -> s
+  Number n -> render n
+  Var n -> n
+  Constructor n -> n
+  _ -> error "Not a string"
+
 ----------------------------------------------------------
 -----------------  Running the parser  -------------------
 ----------------------------------------------------------
 
 initState = ParserState {
-  _level0ops       = ["$", "!"]
+  _level0ops       = ["<|", "|>"]
   , _level1ops     = []
   , _level2ops     = ["&&", "||", "|^|"]
   , _level3ops     = [">", "<", "<=", ">=", "==", "!="]
@@ -462,7 +504,7 @@ parse = parseWith pTopLevel
 
 -- see :: String -> IO ()
 seeWith parser input = case parseWith parser input of
-  Left err -> error $ show err
+  Left err -> error $ P.show err
   Right ast -> P.putStrLn $ unpack $ render ast
 
 see = seeWith pTopLevel

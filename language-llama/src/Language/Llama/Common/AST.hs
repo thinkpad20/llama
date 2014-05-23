@@ -77,11 +77,20 @@ data PatAssert expr = IsLiteral !expr !expr
                     deriving (P.Show, Eq, Functor)
 
 
-data Literal expr = ArrayLiteral ![expr]
-                  | ArrayRange   !expr !expr
-                  | DictLiteral  ![(expr, expr)]
-                  | SetLiteral   ![expr]
+data Literal expr = VecLiteral      ![expr]
+                  | VecRange        !expr !expr
+                  | DictLiteral     ![(expr, expr)]
+                  | SetLiteral      ![expr]
+                  | JsonLiteral     !JLiteral
                   deriving (P.Show, Eq, Functor)
+
+data JLiteral = JString Text
+              | JNum Double
+              | JBool Bool
+              | JNull
+              | JArray [JLiteral]
+              | JObject [(Name, JLiteral)]
+              deriving (P.Show, Eq)
 
 data ObjectDec expr = ObjectDec
   { objName :: Name
@@ -105,7 +114,7 @@ data InString e  = Bare Text
 
 instance IsString (InString e) where fromString = Bare . pack
 
-newtype Expr' = Expr' (AbsExpr Expr') deriving (Show, Eq)
+newtype Expr' = Expr' (AbsExpr Expr') deriving (P.Show, Eq)
 
 class IsExpr e where
   unExpr :: e -> AbsExpr e
@@ -154,7 +163,7 @@ instance (IsExpr e, Eq e, Render e) => Render (AbsExpr e) where
     For for e -> case unExpr e of
       Block _ -> render for <> " " <> render e
       _ -> render for <> " do " <> render e
-    _ -> pack $ show e
+    _ -> show e
     where
       _if kw c = kw <> " " <> render c
       _thenelse t f = t' <> f' where

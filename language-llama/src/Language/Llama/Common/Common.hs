@@ -29,11 +29,11 @@ module Language.Llama.Common.Common (
   , module Prelude
   , Render(..), Name
   , ErrorList(..), throwError1, throwErrorC, addError, addError'
-  , mconcatMapM, whenM, unlessM, lift2, print
+  , mconcatMapM, whenM, unlessM, lift2, print, show
   , isInt, isIntTo, trim, indentBy, contains, line, each
   , (!), (<!>), (>>==), (~>)) where
 
-import Prelude (IO, Eq(..), Ord(..), Bool(..), tail, Show(..), Char,
+import Prelude (IO, Eq(..), Ord(..), Bool(..), tail, Char,
                 Double, String, Maybe(..), Int, Monad(..), Integer,
                 ($), (.), floor, map, Functor(..), mapM, fst, snd,
                 (+), (-), Either(..), unwords, flip, head, error,
@@ -79,13 +79,13 @@ instance Render ErrorList
 instance Render ParseError
 instance Render SourcePos
 
-instance Show ErrorList where
+instance P.Show ErrorList where
   show (ErrorList msgs) = P.show msgs
   --show (ErrorList msgs) = msgs ! concatMap ((<> "\n") . indentBy 4 . trim) ! line
 
 type Name = T.Text
 
-class Show a => Render a where
+class P.Show a => Render a where
   render :: a -> T.Text
   render = P.show ~> T.pack
   renderIO :: a -> IO T.Text
@@ -97,7 +97,9 @@ class Show a => Render a where
   renderI :: Int -> a -> T.Text
   renderI i a = snd $ execState (renderI' a) (i, "")
 
-instance Render Double
+instance Render Double where
+  render n | isInt n = render (floor n :: Integer)
+           | True = show n
 instance Render T.Text
 instance Render Int
 instance Render Integer
@@ -178,7 +180,7 @@ each = flip fmap
 mconcatMapM :: (Monad f, Functor f, Monoid t) => (a -> f t) -> [a] -> f t
 mconcatMapM f list = mconcat <$> mapM f list
 
-show :: Show a => a -> T.Text
+show :: P.Show a => a -> T.Text
 show s = T.pack $ P.show s
 
 print :: Render a => a -> IO ()

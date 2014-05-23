@@ -4,6 +4,7 @@ module Language.Llama.Parser.Tokens (
   ) where
 
 import qualified Prelude as P
+import Prelude (Show)
 import Data.Char (toUpper)
 import qualified Data.Text as T
 
@@ -59,11 +60,7 @@ instance Render t => Render (Token t) where
     TLineComment txt  -> "LINE COMMENT: " <> txt
     TBlockComment txt -> "BLOCK COMMENT: " <> txt
 
-addChar :: IStr a -> Char -> IStr a
-addChar (Plain t) c = Plain $ t `snoc` c
-addChar (IStr is t is') c = IStr is t (is' `addChar` c)
-
 keywords :: [Name]
 keywords = ["case","catch","class","else","finally","for","if","in","return",
-            "of","then","try","unless","with","while", "object", "forever",
-            "do","throw","trait","implement"]
+            "of","then","try","unless","with","while","type","forever","do",
+            "trait","implement","before","after","ref","array","hash","json"]

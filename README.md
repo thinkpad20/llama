@@ -12,13 +12,13 @@ Llama aims to be a fun and easy to use scripting language which joins key featur
 * First class functions
   - Although these are commonplace in most modern languages, they are often awkward to use, either syntactically or semantically, and subsequently powerful concepts like currying and closures see less use than they should. Llama prizes functions as much as any functional language, and employs currying extensively.
 * No nulls
-  - There is no `null` type or similar, eliminating a large class of errors. The author is of the opinion that it is generally better to fail a lookup than to return `null`, and in cases where returning nothing is an option, a `Maybe` type or similar should be used.
+  - There is no `null` type or similar, eliminating a large class of errors. The author is of the opinion that most of the cases where `null` is used in most code, it is generally better to either throw an exception, or use an option type (`Maybe` in Llama).
 * Gradual type checking with inference
   - As it embraces both functional and imperative paradigms, Llama embraces both static and dynamic typing disciplines, using gradual typing. Write code dynamically or statically as you want. Type-annotated code will be checked at compile time and guaranteed to be type-safe.
-* Type classes
-  - Called traits in Llama, these are analogous to Haskell's type classes, but with a few extra features, such as the ability to act like Java-style interfaces. They provide a powerful abstraction mechanism and polymorphism in the absence of classes.
+* Traits
+  - Analogous to Haskell's type classes, but with a few extra features, such as the ability to act like Java-style interfaces. They provide a powerful abstraction mechanism and polymorphism in the absence of classes.
 * Immutable variables
-  - By default, all variables are immutable. This forces the programmer to make explicit which variables can be mutated and in what circumstance, promoting safety and ease of understanding. However, mutable variables are well-supported.
+  - By default, all variables are immutable. This forces the programmer to make explicit which variables can be mutated and in what circumstance, promoting safety and ease of understanding. However, mutable variables are well-supported (see below).
 
 #### From the imperative side:
 
@@ -29,55 +29,93 @@ Llama aims to be a fun and easy to use scripting language which joins key featur
 * IO
   * No monads are required to perform IO. It is the author's opinion that, in particular with strict evaluation and in a scripting language, monadic IO has more cost than benefit, and is better as an opt-out than an opt-in.
 * Mutable variables
-  * Llama has a `ref` concept similar to that of SML, allowing mutable structures to be built and allowing the use of loops.
+  * Llama has a `ref` concept similar to that of Standard ML, allowing efficient mutable structures to be built and allowing the use of loops.
 * Loops and imperative control flow
   - Recursion and functional style allows for beautiful expression of certain ideas, but some algorithms are more readily expressed in an imperative style. For-loops, the ability to halt execution early with a `return` or `break`, and a strong exception system provide this.
-* Keyword arguments
-  - Llama allows a python-style keyword argument system, which reduces the need for wrapper functions and allows defaults to be given easily. Keyword arguments can be type-annotated.
 
 #### Other tidbits:
 
-* String interpolation
-* Optionally enforced functional purity
-* Clean, light and readable syntax with various nice sugars
-* Built-in concurrency
+* String interpolation à la CoffeeScript
+* Useful data structure primitives, all with mutable and immutable versions
+  - vectors
+  - maps
+  - sets
+  - JSON blobs
+* Keyword arguments (type safe!)
+* Clean, light, expressive and readable syntax
+* Built-in concurrency (planned)
+* Optionally enforced functional purity (planned)
 
 ### Let me see it!
 
 I have many examples of Llama code in the `./thoughts/` directory, where I've put most of the musings I've collected regarding the language. However, for completeness, here are a few examples:
 
-Hello world:
+##### Hello world:
 
 ```
 println 'Hello world'
 ```
 
-Some factorials
+##### Some factorials
 
 ```
 fact n = if n < 2 then 1 else n * fact1 (n - 1)
-fact = 0, 1 => 1
-     | n => n * fact (n - 1)
-fact n = result after
-  result = mut 1
-  for i in n.range do result *= i
+fact = 0, 1 -> 1
+     | n    -> n * fact (n - 1)
+fact n = !result after
+  result = ref 1
+  for i in n.range do result *= i + 1
 ```
 
-Declaring objects
+##### Declaring objects
 
 ```
-object Maybe a = 
-  Nothing
-  Just a
-object Either a b <: Maybe b = 
+type Maybe a = Nothing; Just a
+type Either a b <: Maybe b = 
   Left a <: Nothing
   Right b <: Just b
 
-foo = Nothing => 'nummat!'
-    | Just a  => a.show
-maybe = Just 'foo'
+foo = Nothing -> 'nummat!'
+    | Just a  -> a.show
+maybe = Just 'foozle'
 either = Right 'foozle'
 assert maybe.foo == either.foo
+```
+
+##### ADTs with shared attributes
+
+```
+type Token = 
+  Word Str
+  Punc Str
+  NewParagraph
+  with line: Int; col: Int
+
+show_token = Word w -> 'Word #{w}'
+           | Punc s -> s
+           | NewParagraph -> 'New Paragraph (#{_\line}, #{_\column})'
+
+tokenize (input: Str): List Token = ...
+toks = tokenize 'This\nis llama!!!'
+assert toks 0 == Word 'This' with line=1; col=1
+assert (toks 1)\line == 2 && (toks 2)\column == 4
+assert toks 3 == Punc '!' with line=2; col=9
+```
+
+##### Keyword args
+
+```
+with_file (loc: FilePath; mode='r') (f: File -> a): a =
+  file = open (loc, mode)
+  f file before file.close
+
+save (file: File) (; location: Str) = 
+  save_to = case location of Nothing -> file\source; Just loc -> loc
+  with_file (save_to, 'w') (.write file\contents)
+
+with_file 'foo.txt' $ f ->
+  f.append 'hey there!'
+  f.save 'bar.txt'
 ```
 
 ### Current status
@@ -97,7 +135,7 @@ Cloning:
 > git clone https://github.com/thinkpad20/llama
 ```
 
-Running the REPL:
+Running the REPL: (NOTE: currently broken)
 
 ```
 > cd llama/src
