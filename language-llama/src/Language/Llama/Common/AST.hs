@@ -12,7 +12,6 @@ import qualified Data.Text as T
 
 import Language.Llama.Common.Common
 
-type Kwargs expr = [(Name, Either Type expr)]
 data AbsExpr expr = Var          !Name
                   | Number       !Double
                   | String       !Text
@@ -30,14 +29,14 @@ data AbsExpr expr = Var          !Name
                   | Lambdas      ![(expr, expr)]
                   | Case         !expr ![(expr, expr)]
                   | MultiCase    !expr ![([expr], expr)]
-                  | Tuple        ![expr] (Kwargs expr)
+                  | Tuple        ![expr] ![Kwarg expr]
                   | Literal      !(Literal expr)
                   | DeRef        !expr !expr
                   | Typed        !expr !Type
                   | If           !expr !expr !(Maybe expr)
                   | Unless       !expr !expr !(Maybe expr)
-                  | PostIf       !expr !expr
-                  | PostUnless   !expr !expr
+                  | PostIf       !expr !expr !(Maybe expr)
+                  | PostUnless   !expr !expr !(Maybe expr)
                   | ForComp      !expr !(ForPattern expr)
                   | For          !(ForPattern expr) !expr
                   | PatternDef   !expr !expr
@@ -62,6 +61,9 @@ data AbsExpr expr = Var          !Name
                   | Continue
                   | WildCard
                   deriving (P.Show, Eq, Functor)
+
+data Kwarg expr = Kwarg Name (Maybe Type) (Maybe expr)
+                deriving (P.Show, Eq, Functor)
 
 data ForPattern e = Forever       -- forever do ...
                   | ForExpr !e    -- for 10.range do ...
@@ -135,6 +137,13 @@ instance Monoid (InString e) where
     (s, Interp is e is') -> Interp (s <> is) e is'
     (Interp is e is', s) -> Interp is e (is' <> s)
 
+instance Render e => Render (Kwarg e) where
+  render (Kwarg name t e) = name <> t' <> e' where
+    t' = case t of Nothing -> ""
+                   Just typ -> ":" <> render typ
+    e' = case e of Nothing -> ""
+                   Just ex -> "=" <> render ex
+
 instance (IsExpr e, Eq e, Render e) => Render (AbsExpr e) where
   render e = case e of
     Var name -> name
@@ -148,11 +157,12 @@ instance (IsExpr e, Eq e, Render e) => Render (AbsExpr e) where
     Apply e1 e2 -> render' e1 <> " " <> render' e2
     Binary op e1 e2 -> render' e1 <> " " <> op <> " " <> render' e2
     Unary op e -> op <> render' e
-    Tuple es kws | kws == mempty -> "(" <> es' <> ")" where
+    Tuple es kws -> "(" <> es' <> kws' <> ")" where
       es' = if length es == 1 then render (head es) <> ","
             else T.intercalate ", " (map render es)
-
-    Lambda a b -> render a <> " => " <> render b
+      kws' = if length kws == 0 then ""
+             else "; " <> T.intercalate ", " (map render kws)
+    Lambda a b -> render' a <> " -> " <> render b
     DeRef e1 e2 -> render e1 <> "[" <> render e2 <> "]"
     InString istr -> render istr
     PatternDef e1 e2 -> render e1 <> " = " <> render e2
@@ -160,27 +170,27 @@ instance (IsExpr e, Eq e, Render e) => Render (AbsExpr e) where
     Attribute e name -> render' e <> "\\" <> name
     If cond t f -> _if "if" cond <> _thenelse t f
     Unless cond t f -> _if "unless" cond <> _thenelse t f
-    PostIf e cond -> render e <> " " <> _if "if" cond
-    PostUnless e cond -> render e <> " " <> _if "unless" cond
+    PostIf e cond els -> render' e <> " " <> _if "if" cond <> _else els
+    PostUnless e cond els -> render' e <> " " <> _if "unless" cond <> _else els
+    Modified m e -> m <> " " <> render e
     For for e -> case unExpr e of
       Block _ -> render for <> " " <> render e
       _ -> render for <> " do " <> render e
     _ -> show e
     where
       _if kw c = kw <> " " <> render c
-      _thenelse t f = t' <> f' where
-        f' = case f of {Nothing -> ""; Just e -> " else " <> render e}
+      _thenelse t f = t' <> _else f where
         t' = case unExpr t of Block _ -> " " <> render t
                               _ -> " then " <> render t
+      _else f = case f of {Nothing -> ""; Just e -> " else " <> render e}
+      -- | Wraps any non-primitive expressions in quotes.
       render' expr = case unExpr expr of
-        Apply _ _ -> parens
-        Dot _ _ -> parens
-        Lambda _ _ -> parens
-        Binary _ _ _ -> parens
-        Unary _ _ -> parens
-        Assign _ _ -> parens
-        _ -> render expr
-        where parens = "(" <> render expr <> ")"
+        Var _ -> render expr
+        Constructor _ -> render expr
+        Number _ -> render expr
+        String _ -> render expr
+        InString _ -> render expr
+        _ -> "(" <> render expr <> ")"
 
 instance Render Expr' where
   render (Expr' e) = render e

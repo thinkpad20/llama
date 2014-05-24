@@ -38,11 +38,7 @@ type Parser = ParsecT [PToken] ParserState Identity
 ------------------------------------------------------------
 
 pTopLevel :: Parser Expr
-pTopLevel = do
-  pos <- many same *> getPosition
-  exprs <- pBlockOf pStatement
-  many same *> eof
-  return $ unblock exprs
+pTopLevel = unblock <$> pBlockOf pStatement <* many same <* eof
 
 -- | The simplest single parsed unit.
 pTerm :: Parser Expr
@@ -66,9 +62,8 @@ pExpr = pIf <|> pUnless <|> pFor <|> pMod where
   extra = choice [ pLambda, pPatternDef, pPostIf, pPostUnless, pPostFor
                  , pAfter]
 
-
 -- | More high-level than expressions. Things like object/trait declarations.
-pStatement = choice [pObjectDec, pExpr]
+pStatement = choice [pObjectDec, pTraitDec, pExpr]
 
 ---------------------------------------------------------
 --------------------  Control flow  ---------------------
@@ -96,13 +91,15 @@ pPostIf :: Parser (Expr -> Expr)
 pPostIf = do
   pKeyword "if"
   cond <- pExpr
-  return $ \expr -> Expr (_pos expr) $ PostIf expr cond
+  els <- optionMaybe $ pKeyword "else" *> pExpr
+  return $ \expr -> Expr (_pos expr) $ PostIf expr cond els
 
 pPostUnless :: Parser (Expr -> Expr)
 pPostUnless = do
   pKeyword "unless"
   cond <- pExpr
-  return $ \expr -> Expr (_pos expr) $ PostUnless expr cond
+  els <- optionMaybe $ pKeyword "else" *> pExpr
+  return $ \expr -> Expr (_pos expr) $ PostUnless expr cond els
 
 pPostFor :: Parser (Expr -> Expr)
 pPostFor = do
@@ -170,6 +167,10 @@ pConstructorDec = do
   return defConstr { constrName = name
                    , constrArgs = args
                    , constrExtends = extends }
+
+-- | Defines a trait.
+pTraitDec :: Parser Expr
+pTraitDec = unexpected "Trait declarations not yet implemented"
 
 ------------------------------------------------------------
 -------------------------  Blocks  -------------------------
@@ -363,19 +364,19 @@ pNeg :: Parser Expr
 pNeg = item minus <|> pApply where
   minus = pSymbol "~" >> Unary "~" <$> pApply
 
--- | Parses something in parentheses. This can be a single expression, a
--- tuple, or a block.
+-- | Parses something in parentheses; a single expression or tuple.
 pParens :: Parser Expr
-pParens = item $ pPunc '(' >> do
-  ex <- pExpr
-  choice [getBlock ex, getTuple ex, return $ unExpr ex] <* pPunc ')'
+pParens = item $ enclose '(' ')' $ do
+  exprs <- pExpr `sepEndBy` pPunc ','
+  kwargs <- option [] $ pPunc ';' *> kwarg `sepBy` pPunc ','
+  case (exprs, kwargs) of
+    ([e], []) -> return $ unExpr e
+    (es, ks) -> return $ Tuple exprs kwargs
   where
-    getBlock ex = (pPunc ';' <|> same) *> do
-      exprs <- pExpr `sepBy` same
-      return . unExpr $ unblock (ex:exprs)
-    getTuple ex = pPunc ',' *> do
-      exprs <- pExpr `sepBy` pPunc ','
-      return $ Tuple (ex:exprs) mempty
+    kwarg = Kwarg <$> var <*> typ <*> expr
+    var = pVarName
+    typ = pure Nothing
+    expr = pSymbol "=" *> optionMaybe pExpr
 
 ---------------------------------------------------
 ---------------  Binary operators  ----------------
