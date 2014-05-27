@@ -39,10 +39,10 @@ import Prelude (IO, Eq(..), Ord(..), Bool(..), tail, Char,
                 (+), (-), Either(..), unwords, flip, head, error,
                 fromIntegral, round, (^), (*), putStrLn, map,
                 otherwise, length, Read(..), read, (&&), FilePath,
-                readFile, not)
+                readFile, not, succ)
 import qualified Prelude as P
 import Control.Applicative
-import Control.Monad ((>=>), when)
+import Control.Monad ((>=>), when, forM, MonadPlus(..))
 import "mtl" Control.Monad.Error (MonadError(..), Error(..), ErrorT(..))
 import "mtl" Control.Monad.Identity (Identity(..))
 import "mtl" Control.Monad.Trans (liftIO)

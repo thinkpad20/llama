@@ -93,7 +93,7 @@ type Token =
 
 show_token = Word w -> 'Word #{w}'
            | Punc s -> s
-           | NewParagraph -> 'New Paragraph (#{_\line}, #{_\column})'
+           | NewParagraph -> 'New Paragraph (#{@\line}, #{@\column})'
 
 tokenize (input: Str): List Token = ...
 toks = tokenize 'This\nis llama!!!'

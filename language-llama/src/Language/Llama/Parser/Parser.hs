@@ -1,7 +1,7 @@
 {-# LANGUAGE ViewPatterns #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
-module Language.Llama.Parser.Parser where
+module Language.Llama.Parser.Parser (parse, Expr) where
 
 import qualified Prelude as P
 import Text.Parsec hiding (satisfy, parse, (<|>), many)
@@ -42,7 +42,7 @@ pTopLevel = unblock <$> pBlockOf pStatement <* many same <* eof
 
 -- | The simplest single parsed unit.
 pTerm :: Parser Expr
-pTerm = choice [pNumber, pVariable, pConstructor, pString, pParens
+pTerm = choice [ pNumber, pVariable, pConstructor, pString, pParens
                , pArray, pDictOrSet, pJson]
 
 -- | A "small expr" is simpler than a lambda or similar.
@@ -51,16 +51,16 @@ pSmallExpr = pBinaryOp
 
 -- | Any expr, which could be a lambda, or definition, etc.
 pExpr :: Parser Expr
-pExpr = pIf <|> pUnless <|> pFor <|> pMod where
+pExpr = pIf <|> pUnless <|> pFor <|> pCase <|> pMod where
   pMod = item mod <|> pExpr'
   mod = do
     m <- choice $ map pKeyword ["ref", "array", "hash"]
     Modified m <$> pMod
   pExpr' = do
     expr <- pSmallExpr
-    option expr $ fmap ($ expr) extra
+    option expr $ fmap (\f -> f expr) extra
   extra = choice [ pLambda, pPatternDef, pPostIf, pPostUnless, pPostFor
-                 , pAfter]
+                 , pAfter, pBefore]
 
 -- | More high-level than expressions. Things like object/trait declarations.
 pStatement = choice [pObjectDec, pTraitDec, pExpr]
@@ -89,15 +89,13 @@ pFor = item $ do
 
 pPostIf :: Parser (Expr -> Expr)
 pPostIf = do
-  pKeyword "if"
-  cond <- pExpr
+  cond <- pKeyword "if" *> pExpr
   els <- optionMaybe $ pKeyword "else" *> pExpr
   return $ \expr -> Expr (_pos expr) $ PostIf expr cond els
 
 pPostUnless :: Parser (Expr -> Expr)
 pPostUnless = do
-  pKeyword "unless"
-  cond <- pExpr
+  cond <- pKeyword "unless" *> pExpr
   els <- optionMaybe $ pKeyword "else" *> pExpr
   return $ \expr -> Expr (_pos expr) $ PostUnless expr cond els
 
@@ -108,16 +106,28 @@ pPostFor = do
 
 pAfter :: Parser (Expr -> Expr)
 pAfter = do
-  pKeyword "after"
-  rest <- pExprOrBlock
+  rest <- pKeyword "after" *> pExprOrBlock
   return $ \expr -> Expr (_pos expr) $ After expr rest
+
+pBefore :: Parser (Expr -> Expr)
+pBefore = do
+  rest <- pKeyword "before" *> pExprOrBlock
+  return $ \expr -> Expr (_pos expr) $ After expr rest
+
+pCase :: Parser Expr
+pCase = item $ MultiCase <$> expr <*> getAlts where
+  expr = pKeyword "case" *> pExpr <* pKeyword "of"
+  getAlts = pAnyBlockOf alt
+  alt = do
+    exprs <- pSmallExpr `sepBy1` pPunc ','
+    result <- pSymbol "->" *> pExprOrBlock
+    return (exprs, result)
 
 pForPattern :: Parser (ForPattern Expr)
 pForPattern = forever <|> for where
   forever = pKeyword "forever" >> return Forever
   for = do
-    pKeyword "for"
-    expr <- pSmallExpr
+    expr <- pKeyword "for" *> pSmallExpr
     let for = do test <- pPunc ';' *> pSmallExpr
                  step <- pPunc ';' *> pSmallExpr
                  return $ For_ expr test step
@@ -348,6 +358,12 @@ pChain = pAttribute >>= go where
       TSymbol ":=" -> do
         pSymbol ":="
         Expr (_pos expr) . Assign expr <$> pExpr
+      TKeyword "with" -> do
+        let attr = do name <- pAnyIdent
+                      val <- pSymbol "=" *> pNeg
+                      return (name, val)
+        attrs <- pKeyword "with" *> attr `sepBy1` pPunc ','
+        go $ Expr (_pos expr) $ With expr attrs
       _ -> return expr
 
 -- | Parses function application. Lower precedence than dot or object ref.

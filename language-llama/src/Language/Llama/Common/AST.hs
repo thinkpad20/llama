@@ -41,7 +41,6 @@ data AbsExpr expr = Var          !Name
                   | For          !(ForPattern expr) !expr
                   | PatternDef   !expr !expr
                   | Define       !Name !expr
-                  | Extend       !Name !expr
                   | Assign       !expr !expr
                   | Return       !expr
                   | Throw        !expr
@@ -143,6 +142,8 @@ instance Render e => Render (Kwarg e) where
                    Just typ -> ":" <> render typ
     e' = case e of Nothing -> ""
                    Just ex -> "=" <> render ex
+
+instance Render e => Render (PatAssert e)
 
 instance (IsExpr e, Eq e, Render e) => Render (AbsExpr e) where
   render e = case e of

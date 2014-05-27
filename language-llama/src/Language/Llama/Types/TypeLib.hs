@@ -4,33 +4,33 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE NoMonomorphismRestriction #-}
 {-# LANGUAGE OverloadedStrings #-}
-module TypeLib (Polytype(..), tTuple, TypeTable, TypeOf, TypeRecord,
-                TypingState(..), Typing, Subs(..), NameSpace(..), Types(..),
-                TypeEnv(..), Kind, pushNameSpace, popNameSpace, arrayOf, listOf,
-                setOf, mapOf, numT, strT, unitT, maybeT, boolT, plain,
-                fullName, (==>), (+:), nsTail, addToEnv, log, log',
-                defaultTypingState, normalize, size, fromList, toList,
-                vals, single, remove, charT, tConst) where
+module Language.Llama.Types.TypeLib (
+  Polytype(..), tTuple, TypeTable, TypeOf, TypeRecord,
+  TypingState(..), Typing, Subs(..), NameSpace(..), Types(..),
+  TypeEnv(..), Kind, pushNameSpace, popNameSpace, arrayOf, listOf,
+  setOf, mapOf, numT, strT, unitT, maybeT, boolT, plain,
+  fullName, (==>), (+:), nsTail, addToEnv, log, log',
+  defaultTypingState, normalize, size, fromList, toList,
+  vals, single, remove, charT, tConst) where
 
-import Prelude hiding (log, show)
 import qualified Data.Map as M
 import qualified Prelude as P
 import qualified Data.Set as S
 import qualified Data.Text as T
-import AST
 
-import Common hiding (fromList, toList)
+import Language.Llama.Common.Common hiding (fromList, toList, delete, size)
+import Language.Llama.Common.AST
 
 type TypeTable = M.Map Name Type
 
 -- | A polytype represents a type with zero or more type variables bound in
 -- its scope. For example, Polytype ["a"] (TApply (TConst "Foo") TVar "a") is
 -- a type @Foo a@, where a is free to be anything within that scope.
-data Polytype = Polytype [Name] Type deriving (Show, Eq, Ord)
+data Polytype = Polytype [Name] Type deriving (P.Show, Eq, Ord)
 instance Render Polytype
 
 type PurityEnv = M.Map Name PurityType
-data PurityType = PTPure | PTLocal | PTImpure deriving (Show, Eq, Ord)
+data PurityType = PTPure | PTLocal | PTImpure deriving (P.Show, Eq, Ord)
 instance Monoid PurityType where
   mempty = PTPure
   a `mappend` b = case (a, b) of
@@ -44,13 +44,14 @@ type Kind = Type
 
 type TypeOf a = a -> Typing (Type, Subs)
 type TypeRecord = (Kind, [(Name, Type)])
-newtype NameSpace = NameSpace [Name] deriving Show
+newtype NameSpace = NameSpace [Name] deriving P.Show
+type Attribute = ()
 data TypingState = TypingState { aliases :: M.Map Name Type
                                , nameSpace :: NameSpace
                                , typeEnv :: TypeEnv
                                , purityEnv :: PurityEnv
                                , knownTypes :: M.Map Name (Kind, [Attribute])
-                               , freshName :: Name } deriving (Show)
+                               , freshName :: Name } deriving (P.Show)
 type Typing = ErrorT ErrorList (StateT TypingState IO)
 
 instance Monoid NameSpace where
@@ -79,7 +80,7 @@ instance Render TypingState where
     line $ mconcat ["Names: ", render env']
 
 instance Render NameSpace where
-  render (NameSpace ns) = T.intercalate "/" $ reverse ns
+  render (NameSpace ns) = T.intercalate "/" $ P.reverse ns
 
 class Types t where
   -- Get the free type variables out of the type.
@@ -125,7 +126,7 @@ instance Types Polytype where
     Polytype vars (apply subs' type_)
 
 data Subs = Subs (M.Map Name Type)
-          deriving (Show, Eq)
+          deriving (P.Show, Eq)
 
 instance Render Subs where
   render (Subs s) = render s
@@ -152,7 +153,7 @@ vals (Subs s) = M.elems s
 single :: Name -> Type -> Subs
 single n t = Subs (M.singleton n t)
 
-newtype TypeEnv = TE (M.Map Name Polytype) deriving (Show)
+newtype TypeEnv = TE (M.Map Name Polytype) deriving (P.Show)
 
 instance Render TypeEnv
 
