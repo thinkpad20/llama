@@ -17,7 +17,7 @@ import Language.Llama.Parser.Tokenizer hiding (item, initState)
 data Expr = Expr {_pos :: SourcePos, _expr :: AbsExpr Expr}
             deriving (P.Show, Eq)
 instance IsExpr Expr where unExpr (Expr _ e) = e
-instance Render Expr where render = render . bareExpr
+instance Render Expr where render = rndr True . bareExpr
 data ParserState = ParserState {
     _level0ops :: [Name]
   , _level1ops :: [Name]
@@ -27,6 +27,7 @@ data ParserState = ParserState {
   , _level5ops :: [Name]
   , _level6ops :: [Name]
   , _level7ops :: [Name]
+  , _assignmentOps :: [Name]
   , _knownSymbols :: Set Name
   , _leftfixities :: Set Name
   , _rightfixities :: Set Name
@@ -355,9 +356,10 @@ pChain = pAttribute >>= go where
       TPunc '.' -> do
         dotfunc <- pPunc '.' *> pExpr
         go $ Expr (_pos expr) $ Dot expr dotfunc
-      TSymbol ":=" -> do
-        pSymbol ":="
-        Expr (_pos expr) . Assign expr <$> pExpr
+      TSymbol _ -> do
+        ops <- _assignmentOps <$> getState
+        op <- choice $ map pSymbol ops
+        Expr (_pos expr) . Binary op expr <$> pExpr
       TKeyword "with" -> do
         let attr = do name <- pAnyIdent
                       val <- pSymbol "=" *> pNeg
@@ -383,16 +385,19 @@ pNeg = item minus <|> pApply where
 -- | Parses something in parentheses; a single expression or tuple.
 pParens :: Parser Expr
 pParens = item $ enclose '(' ')' $ do
-  exprs <- pExpr `sepEndBy` pPunc ','
-  kwargs <- option [] $ pPunc ';' *> kwarg `sepBy` pPunc ','
-  case (exprs, kwargs) of
-    ([e], []) -> return $ unExpr e
-    (es, ks) -> return $ Tuple exprs kwargs
-  where
-    kwarg = Kwarg <$> var <*> typ <*> expr
-    var = pVarName
-    typ = pure Nothing
-    expr = pSymbol "=" *> optionMaybe pExpr
+  lookAhead next >>= \t -> case tToken t of
+    TKeyword "do" -> pKeyword "do" >> unExpr <$> pInlineBlock
+    _ -> do
+      exprs <- pExpr `sepEndBy` pPunc ','
+      kwargs <- option [] $ pPunc ';' *> kwarg `sepBy` pPunc ','
+      case (exprs, kwargs) of
+        ([e], []) -> return $ unExpr e
+        (es, ks) -> return $ Tuple exprs kwargs
+      where
+        kwarg = Kwarg <$> var <*> typ <*> expr
+        var = pVarName
+        typ = pure Nothing
+        expr = pSymbol "=" *> optionMaybe pExpr
 
 ---------------------------------------------------
 ---------------  Binary operators  ----------------
@@ -507,10 +512,11 @@ initState = ParserState {
   , _level5ops     = ["*", "/"]
   , _level6ops     = ["**", "^"]
   , _level7ops     = ["~>", "<~"]
+  , _assignmentOps = [":=", "+=", "*=", "/=", "-=", "<>=", "^="]
   , _knownSymbols  = S.fromList [ "$", "!", "&&", "||", "|^|", ">", ">", "<="
                                 , ">=", "==", "!=", "+", "-", "*", "/", "**"
-                                , "^", "~>", "~>", ":=", "->", "=>", ".."
-                                , "=", "~"]
+                                , "^", "~>", "~>", ":=", "->", "=>", "..", "="
+                                , "~", "+=", "*=", "/=", "-=", "<>=", "^="]
   , _leftfixities  = S.fromList ["!", "+", "-", "*", "/"]
   , _rightfixities = S.fromList ["**", "^", "&&", "||", "|^|"]
   }

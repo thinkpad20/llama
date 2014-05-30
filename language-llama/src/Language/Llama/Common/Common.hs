@@ -39,7 +39,7 @@ import Prelude (IO, Eq(..), Ord(..), Bool(..), tail, Char,
                 (+), (-), Either(..), unwords, flip, head, error,
                 fromIntegral, round, (^), (*), putStrLn, map,
                 otherwise, length, Read(..), read, (&&), FilePath,
-                readFile, not, succ)
+                readFile, not, succ, (=<<))
 import qualified Prelude as P
 import Control.Applicative
 import Control.Monad ((>=>), when, forM, MonadPlus(..))

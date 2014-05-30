@@ -57,6 +57,8 @@ traverse ds e | doTest ds e = doTransform ds e
   Block blk -> Block <$> mapM (recNS "%b") blk
   Dot e1 e2 -> Dot <$> rec e1 <*> rec e2
   Apply e1 e2 -> Apply <$> rec e1 <*> rec e2
+  Binary op e1 e2 -> Binary op <$> rec e1 <*> rec e2
+  Unary op e -> Unary op <$> rec e
   Lambda arg body -> Lambda <$> recNS "%l" arg <*> recNS "%l" body
   Lambdas argsBodies -> Lambdas <$> mapM (recTupNS "%l") argsBodies
   Case expr patsBodies -> Case <$> recNS "%c" expr <*> mapM (recTupNS "%c") patsBodies
@@ -137,14 +139,11 @@ popNS :: Desugar ()
 popNS = modify $ \s -> s { dsNameSpace = nsTail $ dsNameSpace s
                          , dsNamesInUse = tail $ dsNamesInUse s}
 
-{-
 -- | We have a series of desugarers. Each of which has a test
 -- which determines if it should run (essentially, matching on the
 -- constructor type of the expression) and a transforming function
 -- which takes that expression and returns its desugared version.
-dsAfterBefore, dsLambdaDot, dsDot, dsLambdas, dsPrefixLine, dsForIn,
-  dsPatternDef, dsInString, dsForever, dsMultiCase,
-  dsIf', dsCase :: Desugarer -}
+dsAfterBefore :: Desugarer
 dsAfterBefore = ("Before/After", test, ds) where
   test (After _ _) = True
   test (Before _ _) = True
@@ -160,44 +159,55 @@ dsAfterBefore = ("Before/After", test, ds) where
         return $ b' `Then` a'
     a `Before` b -> throwError1 "before isn't done yet"
   rec = traverse ("Before/After", test, ds)
-  --unusedVar = P.undefined
 
-{-
+dsLambdaDot :: Desugarer
 dsLambdaDot = ("LambdaDot", test, ds) where
   test (LambdaDot _) = True
   test (Apply _ _) = True
   test _ = False
-  ds e = case unExpr e of
+  ds e = let mk' ex = DExpr (_orig e) ex in case unExpr e of
     LambdaDot e -> do
       name <- unusedVar "_arg"
-      Lambda (Var name) . Dot (Var name) <$> rec e
+      e' <- rec e
+      let pat = mk' $ Var name
+      return $ mk' $ Lambda pat $ mk' $ Dot pat e'
     Apply _ _ -> do
       name <- unusedVar "_arg"
       let (exprs, root) = unApply e
       exprs' <- mapM rec exprs
-      case root of
+      let apply a b = DExpr (_orig root) $ Apply a b
+      case unExpr root of
         LambdaDot expr -> do
           expr' <- rec expr
-          let body = foldl Apply (Dot (Var name) expr') exprs'
-          return $ Lambda (Var name) body
-        expr -> foldl Apply <$> rec expr <*> pure exprs'
+          let body = foldl apply (mk' $ Dot (mk' $ Var name) expr') exprs'
+          return $ mk' $ Lambda (mk' $ Var name) body
+        expr -> foldl apply <$> rec root <*> pure exprs'
   rec = traverse ("LambdaDot", test, ds)
 
-
+dsPatternDef :: Desugarer
 dsPatternDef = ("Patterned definition", test, ds) where
   rec = traverse ("Patterned definition", test, ds)
   test (PatternDef _ _) = True
   test _ = False
-  ds :: Expr -> Desugar Expr
-  ds (PatternDef pat expr) = go (unApply pat) where
-    go :: ([Expr], Expr) -> Desugar Expr
-    go (exprs, Var name) = do
-      body :: Expr <- rec expr
-      return $ Define name (P.foldr Lambda body exprs)
-    go (_, pat') = rec expr >>= assertsAndDefs pat' >>= \case
-      (Nothing, defs) -> return defs
-      (Just b, defs) -> return $ If (PatAssert b) defs patternMatchError
--}
+  ds :: DExpr -> Desugar DExpr
+  ds d = case unExpr d of
+    PatternDef pat expr -> go (unApply pat) where
+      go :: ([DExpr], DExpr) -> Desugar DExpr
+      go (exprs, root) = case unExpr root of
+        Var name -> do
+          body :: DExpr <- rec expr
+          let lambda e1 e2 = DExpr (_orig d) $ Lambda e1 e2
+              body' = foldr lambda body exprs
+          return $ DExpr (_orig root) $ Define name body'
+        pat' -> rec expr >>= assertsAndDefs root >>= \case
+          (_, Nothing) -> throwErrorC ["Invalid pattern: ", render pat]
+          (Nothing, Just defs) -> return defs
+          (Just b, Just defs) -> return $ mk' $ If cond defs false where
+            mk' e = DExpr (_orig root) e
+            cond = mk' $ PatAssert b
+            false = Just $ mk' $ patternMatchError root
+
+dsDot :: Desugarer
 dsDot = ("Dot", test, ds) where
   test (Dot _ _) = True
   test _ = False
@@ -205,60 +215,17 @@ dsDot = ("Dot", test, ds) where
     Dot a b -> Apply <$> rec b <*> rec a
   rec = traverse ("Dot", test, ds)
 
-
-{-dsLambdas = ("Lambdas", test, ds) where
+dsLambdas :: Desugarer
+dsLambdas = ("Lambdas", test, ds) where
   test (Lambdas _) = True
   test _ = False
   ds e = mk e $ case unExpr e of
     Lambdas argsBodies -> do
       var <- DExpr (_orig e) . Var <$> unusedVar "_arg"
-
       Lambda var <$> rec (DExpr (_orig e) (Case var argsBodies))
   rec = traverse ("Lambdas", test, ds)
--}
-{-
-dsPrefixLine = ("Prefix line", test, ds) where
-  test (Block _) = True
-  test _ = False
-  ds (Block blk) = Block <$> first blk
-  first (Prefix _ _ : _) =
-    throwError1 "The first line in a block may not start with a prefix"
-  first (e:rest) = go (e:rest)
-  go [] = return []
-  go (e:Prefix op e':rest) = do
-    newE <- rec e
-    newE' <- rec e'
-    go (binary op newE newE' : rest)
-  go (e:rest) = doRest e rest
-  doRest e rest = (:) <$> rec e <*> go rest
-  rec = traverse ("Prefix line", test, ds)
 
-dsForIn = ("For in", test, ds) where
-  test (ForIn _ _ _) = True
-  test _ = False
-  ds (ForIn (Var name) cont expr) = do
-    iterName <- unusedVar "_iter"
-    let iter = Var iterName
-    -- _iter = mut cont.iter
-    let init = Define iterName $ Modified Mut (Dot cont (Var "iter"))
-    -- name = _iter.get
-    let stmt = Define name (Dot iter (Var "get"))
-    -- _iter.valid?
-    let cond = Dot iter (Var "valid?")
-    -- _iter.forward!
-    let step = Dot iter (Var "forward!")
-    -- append
-    let blk = case expr of Block b -> Block $ stmt:b
-                           _ -> Block $ [stmt, expr]
-    return $ For init cond step blk
-
-dsForever = ("Forever", test, ds) where
-  test (Forever _) = True
-  test _ = False
-  ds (Forever expr) = For unit true unit <$> rec expr
-  rec = traverse ("Forever", test, ds)
--}
-
+dsInString :: Desugarer
 dsInString = ("Interpolated strings", test, ds) where
   test (InString _) = True
   test _ = False
@@ -281,6 +248,7 @@ dsInString = ("Interpolated strings", test, ds) where
     _ -> DExpr (_orig e1) $ Binary "<>" e1 e2
   rec = traverse ("Interpolated strings", test, ds)
 
+dsMultiCase :: Desugarer
 dsMultiCase = tup where
   tup = ("Multicase", test, ds)
   test (MultiCase _ _) = True
@@ -295,6 +263,7 @@ dsMultiCase = tup where
     go ((e', res'):alts) ((exprs, res'):rest)
   rec = traverse tup
 
+dsCase :: Desugarer
 dsCase = tup where
   tup = ("Case", test, ds)
   test (Case _ _) = True
@@ -305,81 +274,83 @@ dsCase = tup where
     Case e options -> do
       e' <- rec e
       options' <- mapM (\(a,b) -> (,) <$> rec a <*> rec b) options
-      go e' options'
+      name <- unusedVar "_ref"
+      let var = DExpr (_orig e) $ Var name
+      let def = DExpr (_orig e) $ Define name e'
+      Then def . DExpr (_orig e) <$> go var options'
   go :: DExpr -> [(DExpr, DExpr)] -> Desugar (AbsExpr DExpr)
   go e = \case
     [] -> return $ patternMatchError e
     (pat, res):opts -> assertsAndDefs pat e >>= \case
       (Nothing, Nothing) -> return $ unExpr res
       (Nothing, Just defs) -> return $ defs `Then` res
-      (Just cond, Nothing) -> do
-        absdexpr <- go e opts
-        let dexpr = DExpr (_orig pat) absdexpr
+      (Just cond, defs) -> do
+        dexpr <- DExpr (_orig pat) <$> go e opts
         let pa = DExpr (_orig pat) $ PatAssert cond
-        let body = DExpr (_orig pat) (unExpr res)
+        let body = case defs of
+                    Just defs -> DExpr (_orig pat) $ defs `Then` res
+                    Nothing -> res
         return $ If pa body (Just dexpr)
-      (Just cond, Just defs) -> do
-        absdexpr <- go e opts
-        let dexpr = DExpr (_orig pat) absdexpr
-        let pa = DExpr (_orig pat) $ PatAssert cond
-        let body = DExpr (_orig pat) $ defs `Then` res
-        return $ If pa body (Just dexpr)
-  patternMatchError :: DExpr -> AbsExpr DExpr
-  patternMatchError e = do
-    let d = DExpr (_orig e)
-        unit = d $ Tuple [] []
-    Throw $ d (Apply (d $ Constructor "PatternMatchError") unit)
 
+patternMatchError :: DExpr -> AbsExpr DExpr
+patternMatchError e = do
+  let d = DExpr (_orig e)
+      unit = d $ Tuple [] []
+  Throw $ d (Apply (d $ Constructor "PatternMatchError") unit)
+
+-- | Takes a pattern and a result, and converts it into a pattern assertion
+-- and a set of definitions to make. The assertions match the pattern, and
+-- the definitions make assignments of any free variables.
 assertsAndDefs :: DExpr
                -> DExpr
                -> Desugar (Maybe (PatAssert DExpr), Maybe DExpr)
 assertsAndDefs start expr = fst <$> runStateT (go start expr) ("", 0) where
-  unit = DExpr (_orig start) $ Tuple [] []
-  go :: Expr -> Expr
-     -> StateT (Name, Int) Desugar (Maybe (PatAssert DExpr), DExpr)
-  go expr matchWith = case expr of
-    Number n -> return (lit $ Number n, unit)
-    String s -> return (lit $ String s, unit)
-    Var v -> case matchWith of
-      Var v' | v' == v -> return (Nothing, unit)
-      _ -> return (Nothing, Define v matchWith)
+  go :: DExpr -> DExpr
+     -> StateT (Name, Int) Desugar (Maybe (PatAssert DExpr), Maybe DExpr)
+  go expr matchWith = case unExpr expr of
+    Number n -> return (lit expr, Nothing)
+    String s -> return (lit expr, Nothing)
+    Var v -> return (Nothing, Just $ DExpr (_orig expr) $ Define v matchWith)
     Constructor name -> do
       modify (\(_, i) -> (name, i))
-      return (Just $ name `IsConstr` matchWith, unit)
+      return (Just $ name `IsConstr` matchWith, Nothing)
     Tuple exprs _ -> do
       list <- mapM convertWithIndex $ P.zip [0..] exprs
       return (mkBool (P.length exprs) list, mkAssigns list)
-      where convertWithIndex (i, e) = aRef i >>= go e
+      where convertWithIndex (i, e) = go e =<< DExpr (_orig expr) <$> aRef i
     Apply a b -> do
       (bool1, assn1) <- go a matchWith
-      (_, i)   <- get
-      (bool2, assn2) <- aRef i >>= go b
+      (_, i)         <- get
+      (bool2, assn2) <- DExpr (_orig expr) <$> aRef i >>= go b
       modify (\(name, i) -> (name, i + 1))
-      return (bool1 `and` bool2, assn1 <> assn2)
+      return (bool1 `and` bool2, assn1 `combine` assn2)
     _ -> lift $ throwErrorC ["Unhandled case: ", render expr]
     where lit expr = Just $ matchWith `IsLiteral` expr
+          combine Nothing d = d
+          combine d Nothing = d
+          combine (Just d1) (Just d2) = Just $ DExpr (_orig d1) (d1 `Then` d2)
           aRef n = do
             (name, _) <- get
             return $ GetAttrib name n matchWith
-          Just pa1 `and` Just pa2 = Just $ pa1 `And` pa2
-          a `and` b = a `mplus` b
+          and Nothing x = x
+          and x Nothing = x
+          and (Just x) (Just y) = Just (x `And` y)
           -- make an AND of all the a==b expressions in subcompilations
           mkBool len list =
             P.foldl and (Just $ IsTupleOf len matchWith) (fst <$> list)
           -- concatenate all of the assignments from the subcompilations
-          mkAssigns list = mconcat (P.snd <$> list)
+          mkAssigns list = foldl combine Nothing (P.snd <$> list)
 
-{-
+
 -- | @unApply@ "unwinds" a series of applies into a list of
 -- expressions that are on the right side, paired with the
 -- root-level expression. So for example `foo bar baz` which
 -- is `Apply (Apply foo bar) baz` would become `([baz, bar], foo)`.
-unApply :: Expr -> ([Expr], Expr)
+unApply :: DExpr -> ([DExpr], DExpr)
 unApply expr = go [] expr where
-  go exprs (Apply a b) = go (b:exprs) a
-  go exprs root = (exprs, root)
-
-
+  go exprs e = case unExpr e of
+    Apply a b -> go (b:exprs) a
+    _         -> (exprs, e)
 
 -- | TODO: we should probably be able to search *forwards* in
 -- the AST, as well as just looking at current names. This isn't as
@@ -423,18 +394,17 @@ defaultEnv = DesugarerEnv {
 log xs = liftIO $ P.putStrLn $ P.concat $ fmap unpack xs
 
 desugarers :: [Desugarer]
-desugarers = [ dsAfterBefore, dsInString, dsMultiCase]
+desugarers = [ dsAfterBefore
              --, dsLambdaDot
              --, dsPrefixLine
              --, dsLambdas
-             --, dsDot
+             , dsDot
              --, dsForIn
              --, dsForever
-             --, dsPatternDef
-             --, dsInString
-             --, dsMultiCase
-             --, dsIf'
-             --, dsCase]
+             , dsPatternDef
+             , dsInString
+             , dsMultiCase
+             , dsCase]
 
 desugar :: Expr -> Desugar DExpr
 desugar = go desugarers . expr2DExpr where
@@ -471,9 +441,8 @@ testString input = case desugarIt input of
   Left err -> error $ P.show err
   Right dexpr -> putStrLn $ unpack $ render dexpr
 
+desugarIt' = fmap render . desugarIt
 --desugarIt' :: (Desugarer, String) -> Either ErrorList DExpr
 --desugarIt' (ds, input) = case grab input of
 --  Left err -> error $ P.show err
 --  Right expr -> runDesugar' ds expr
-
--}

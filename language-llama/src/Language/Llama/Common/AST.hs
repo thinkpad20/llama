@@ -143,66 +143,146 @@ instance Render e => Render (Kwarg e) where
     e' = case e of Nothing -> ""
                    Just ex -> "=" <> render ex
 
-instance Render e => Render (PatAssert e)
+instance (IsExpr e, Eq e, Render e) => Render (AbsExpr e) -- where
+  --render e = case e of
+  --  Var name -> name
+  --  Constructor name -> name
+  --  Number n | isInt n -> render (floor n :: Int)
+  --  Number n -> render n
+  --  String s -> render s
+  --  InString istr -> render istr
+  --  a `Then` b -> rec a <> "; " <> rec b
+  --  Dot e1 e2 -> rec' e1 <> "." <> rec' e2
+  --  After e1 e2 -> rec e1 <> " after " <> rec e2
+  --  Apply e1 e2 -> rec' e1 <> " " <> rec' e2
+  --  Binary op e1 e2 -> rec' e1 <> " " <> op <> " " <> rec' e2
+  --  Unary op e -> op <> rec' e
+  --  Tuple es kws -> "(" <> es' <> kws' <> ")" where
+  --    es' = if length es == 1 then rec (head es) <> ","
+  --          else T.intercalate ", " (map rec es)
+  --    kws' = if length kws == 0 then ""
+  --           else "; " <> T.intercalate ", " (map render kws)
+  --  Lambda a b -> rec' a <> " -> " <> rec b
+  --  DeRef e1 e2 -> rec e1 <> "[" <> rec e2 <> "]"
+  --  PatternDef e1 e2 -> rec e1 <> " = " <> rec e2
+  --  Define name e -> name <> " = " <> rec e
+  --  Assign e1 e2 -> rec e1 <> " := " <> rec e2
+  --  Attribute e name -> rec' e <> "\\" <> name
+  --  If cond t f -> _if "if" cond <> _thenelse t f
+  --  Unless cond t f -> _if "unless" cond <> _thenelse t f
+  --  PostIf e cond els -> rec' e <> " " <> _if "if" cond <> _else els
+  --  PostUnless e cond els -> rec' e <> " " <> _if "unless" cond <> _else els
+  --  Modified m e -> m <> " " <> rec e
+  --  For for e -> case unExpr e of
+  --    Block _ -> render for <> " " <> rec e
+  --    _ -> render for <> " do " <> rec e
+  --  PatAssert pa -> render pa
+  --  Throw e -> "throw " <> render e
+  --  GetAttrib "" i e -> render e <> "\\" <> render i
+  --  GetAttrib name i e -> render e <> "{" <> name <> "}\\" <> render i
+  --  _ -> show e
+  --  where
+  --    rec = render
+  --    _if kw c = kw <> " " <> rec c
+  --    _thenelse t f = t' <> _else f where
+  --      t' = case unExpr t of Block _ -> " " <> rec t
+  --                            _ -> " then " <> rec t
+  --    _else f = case f of {Nothing -> ""; Just e -> " else " <> rec e}
+  --    -- | Wraps any non-primitive expressions in quotes.
+  --    rec' expr = case unExpr expr of
+  --      Var _ -> rec expr
+  --      Constructor _ -> rec expr
+  --      Number _ -> rec expr
+  --      String _ -> rec expr
+  --      InString _ -> rec expr
+  --      Tuple _ _ -> rec expr
+  --      _ -> "(" <> rec expr <> ")"
 
-instance (IsExpr e, Eq e, Render e) => Render (AbsExpr e) where
-  render e = case e of
-    Var name -> name
-    Constructor name -> name
-    Number n | isInt n -> render (floor n :: Int)
-    Number n -> render n
-    a `Then` b -> render a <> "; " <> render b
-    Block es -> "{" <> T.intercalate "; " (map render es) <> "}"
-    String s -> render s
-    Dot e1 e2 -> render' e1 <> "." <> render' e2
-    Apply e1 e2 -> render' e1 <> " " <> render' e2
-    Binary op e1 e2 -> render' e1 <> " " <> op <> " " <> render' e2
-    Unary op e -> op <> render' e
-    Tuple es kws -> "(" <> es' <> kws' <> ")" where
-      es' = if length es == 1 then render (head es) <> ","
-            else T.intercalate ", " (map render es)
-      kws' = if length kws == 0 then ""
-             else "; " <> T.intercalate ", " (map render kws)
-    Lambda a b -> render' a <> " -> " <> render b
-    DeRef e1 e2 -> render e1 <> "[" <> render e2 <> "]"
-    InString istr -> render istr
-    PatternDef e1 e2 -> render e1 <> " = " <> render e2
-    Assign e1 e2 -> render e1 <> " := " <> render e2
-    Attribute e name -> render' e <> "\\" <> name
-    If cond t f -> _if "if" cond <> _thenelse t f
-    Unless cond t f -> _if "unless" cond <> _thenelse t f
-    PostIf e cond els -> render' e <> " " <> _if "if" cond <> _else els
-    PostUnless e cond els -> render' e <> " " <> _if "unless" cond <> _else els
-    Modified m e -> m <> " " <> render e
-    For for e -> case unExpr e of
-      Block _ -> render for <> " " <> render e
-      _ -> render for <> " do " <> render e
-    _ -> show e
-    where
-      _if kw c = kw <> " " <> render c
-      _thenelse t f = t' <> _else f where
-        t' = case unExpr t of Block _ -> " " <> render t
-                              _ -> " then " <> render t
-      _else f = case f of {Nothing -> ""; Just e -> " else " <> render e}
-      -- | Wraps any non-primitive expressions in quotes.
-      render' expr = case unExpr expr of
-        Var _ -> render expr
-        Constructor _ -> render expr
-        Number _ -> render expr
-        String _ -> render expr
-        InString _ -> render expr
-        _ -> "(" <> render expr <> ")"
+--rndr :: (IsExpr e, Render e) => Bool -> e -> Text
+rndr isBlockStart e = case unExpr e of
+  a `Then` b | isBlockStart -> "{" <> rndr False e
+             | otherwise -> case unExpr b of
+    _ `Then` _ -> rndr True a <> "; " <> rndr False b
+    _ -> rndr True a <> "; " <> rndr False b <> "}"
+  Var name -> name
+  Constructor name -> name
+  Number n | isInt n -> render (floor n :: Int)
+  Number n -> render n
+  String s -> render s
+  InString istr -> render istr
+  Dot e1 e2 -> rec' e1 <> "." <> rec' e2
+  After e1 e2 -> rec e1 <> " after " <> rec e2
+  Apply e1 e2 -> rec' e1 <> " " <> rec' e2
+  Binary op e1 e2 -> rec' e1 <> " " <> op <> " " <> rec' e2
+  Unary op e -> op <> rec' e
+  Tuple es kws -> "(" <> es' <> kws' <> ")" where
+    es' = if length es == 1 then rec (head es) <> ","
+          else T.intercalate ", " (map rec es)
+    kws' = if length kws == 0 then ""
+           else "; " <> T.intercalate ", " (map render kws)
+  Lambda a b -> rec' a <> " -> " <> rec b
+  DeRef e1 e2 -> rec e1 <> "[" <> rec e2 <> "]"
+  PatternDef e1 e2 -> rec e1 <> " = " <> rec e2
+  Define name e -> name <> " = " <> rec e
+  Attribute e name -> rec' e <> "\\" <> name
+  If cond t f -> _if "if" cond <> _thenelse t f
+  Unless cond t f -> _if "unless" cond <> _thenelse t f
+  PostIf e cond els -> rec' e <> " " <> _if "if" cond <> _else els
+  PostUnless e cond els -> rec' e <> " " <> _if "unless" cond <> _else els
+  Modified m e -> m <> " " <> rec e
+  For for e -> case unExpr e of
+    _ `Then` _ -> render for <> " " <> rndr True e
+    _ -> render for <> " do " <> rec e
+  PatAssert pa -> render pa
+  Throw e -> "throw " <> rec e
+  GetAttrib "" i e -> rec e <> "\\" <> render i
+  GetAttrib name i e -> rec e <> "{" <> name <> "}\\" <> render i
+  Case e alts -> "case " <> rec e <> " of " <> rndrOneAlts alts
+  MultiCase e alts -> "case " <> rec e <> " of " <> rndrAlts alts
+  _ -> show e
+  where
+    rec = rndr isBlockStart
+    rndrAlt (pats, res) = do
+      let pats' = T.intercalate ", " $ map (rndr True) pats
+      pats' <> " -> " <> rndr True res
+    rndrOneAlt (pat, res) = rndrAlt ([pat], res)
+    rndrOneAlts alts = T.intercalate "; " $ map rndrOneAlt alts
+    rndrAlts alts = T.intercalate "; " $ map rndrAlt alts
+    _if kw c = kw <> " " <> rec c
+    _thenelse t f = t' <> _else f where
+      t' = case unExpr t of _ `Then` _ -> " " <> rndr True t
+                            _ -> " then " <> rec t
+    _else f = case f of {Nothing -> ""; Just e -> " else " <> rec e}
+    -- | Wraps any non-primitive expressions in quotes.
+    rec' expr = case unExpr expr of
+      Var _ -> rec expr
+      Constructor _ -> rec expr
+      Number _ -> rec expr
+      String _ -> rec expr
+      InString _ -> rec expr
+      Tuple _ _ -> rec expr
+      _ -> "(" <> rec expr <> ")"
+
+
+instance Render e => Render (PatAssert e) where
+  render = \case
+    IsLiteral e1 e2 -> render e1 <> " === " <> render e2
+    IsConstr name e -> "(" <> render e <> ")'s constructor is " <> name
+    IsTupleOf n e -> "(" <> render e <> ") is tuple of length " <> render n
+    IsVectorOf n e -> "(" <> render e <> ") is vector of length " <> render n
+    IsArrayOf n e -> "(" <> render e <> ") is array of length " <> render n
+    pa1 `And` pa2 -> render pa1 <> ", and " <> render pa2
 
 instance Render Expr' where
   render (Expr' e) = render e
 
-instance Render e => Render (ForPattern e) where
+instance (IsExpr e, Render e) => Render (ForPattern e) where
   render = \case
     Forever -> "forever"
-    ForExpr e -> "for " <> render e
-    ForIn e1 e2 -> "for " <> render e1 <> " in " <> render e2
+    ForExpr e -> "for " <> rndr True e
+    ForIn e1 e2 -> "for " <> rndr True e1 <> " in " <> rndr True e2
     For_ e1 e2 e3 -> do
-      let [e1', e2', e3'] = map render [e1, e2, e3]
+      let [e1', e2', e3'] = map (rndr True) [e1, e2, e3]
       "for " <> e1' <> "; " <> e2' <> "; " <> e3'
 
 instance Render e => Render (InString e) where
