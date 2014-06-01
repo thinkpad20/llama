@@ -18,7 +18,6 @@ data AbsExpr expr = Var          !Name
                   | InString     !(InString expr)
                   | Constructor  !Name
                   | !expr `Then` !expr
-                  | Block        ![expr]
                   | Dot          !expr !expr
                   | Apply        !expr !expr
                   | Binary       !Name !expr !expr

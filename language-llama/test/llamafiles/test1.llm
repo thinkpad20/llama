@@ -1,0 +1,4 @@
+foo n = 1 + n
+bar m = n * 3
+baz = foo ~> bar
+println <| baz 10

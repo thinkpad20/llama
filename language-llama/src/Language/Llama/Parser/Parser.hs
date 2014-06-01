@@ -18,20 +18,19 @@ data Expr = Expr {_pos :: SourcePos, _expr :: AbsExpr Expr}
             deriving (P.Show, Eq)
 instance IsExpr Expr where unExpr (Expr _ e) = e
 instance Render Expr where render = rndr True . bareExpr
-data ParserState = ParserState {
-    _level0ops :: [Name]
-  , _level1ops :: [Name]
-  , _level2ops :: [Name]
-  , _level3ops :: [Name]
-  , _level4ops :: [Name]
-  , _level5ops :: [Name]
-  , _level6ops :: [Name]
-  , _level7ops :: [Name]
-  , _assignmentOps :: [Name]
-  , _knownSymbols :: Set Name
-  , _leftfixities :: Set Name
-  , _rightfixities :: Set Name
-  }
+data ParserState = ParserState
+  { _level0ops     :: [Name]
+  , _level1ops     :: [Name]
+  , _level2ops     :: [Name]
+  , _level3ops     :: [Name]
+  , _level4ops     :: [Name]
+  , _level5ops     :: [Name]
+  , _level6ops     :: [Name]
+  , _level7ops     :: [Name]
+  , _level8ops     :: [Name]
+  , _knownSymbols  :: Set Name
+  , _leftfixities  :: Set Name
+  , _rightfixities :: Set Name }
 type Parser = ParsecT [PToken] ParserState Identity
 
 ------------------------------------------------------------
@@ -357,7 +356,7 @@ pChain = pAttribute >>= go where
         dotfunc <- pPunc '.' *> pExpr
         go $ Expr (_pos expr) $ Dot expr dotfunc
       TSymbol _ -> do
-        ops <- _assignmentOps <$> getState
+        ops <- _level8ops <$> getState
         op <- choice $ map pSymbol ops
         Expr (_pos expr) . Binary op expr <$> pExpr
       TKeyword "with" -> do
@@ -512,7 +511,7 @@ initState = ParserState {
   , _level5ops     = ["*", "/"]
   , _level6ops     = ["**", "^"]
   , _level7ops     = ["~>", "<~"]
-  , _assignmentOps = [":=", "+=", "*=", "/=", "-=", "<>=", "^="]
+  , _level8ops = [":=", "+=", "*=", "/=", "-=", "<>=", "^="]
   , _knownSymbols  = S.fromList [ "$", "!", "&&", "||", "|^|", ">", ">", "<="
                                 , ">=", "==", "!=", "+", "-", "*", "/", "**"
                                 , "^", "~>", "~>", ":=", "->", "=>", "..", "="

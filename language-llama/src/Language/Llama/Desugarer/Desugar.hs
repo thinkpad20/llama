@@ -54,7 +54,6 @@ traverse ds e | doTest ds e = doTransform ds e
   Constructor c -> pure $ Constructor c
   Continue -> pure Continue
   TypeDef n t -> pure $ TypeDef n t
-  Block blk -> Block <$> mapM (recNS "%b") blk
   Dot e1 e2 -> Dot <$> rec e1 <*> rec e2
   Apply e1 e2 -> Apply <$> rec e1 <*> rec e2
   Binary op e1 e2 -> Binary op <$> rec e1 <*> rec e2
