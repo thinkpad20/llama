@@ -25,6 +25,29 @@ singleS s = return $ J.Block [s]
 singleE' :: J.Expr -> J.Block
 singleE' e = J.Block [J.Expr e]
 
+-- @compile@ is the top-level compilation function. It's almost identical to
+-- eToBlk except that it does not produce a return on bare expressions or
+-- if statements.
+compile :: DExpr -> JSCompiler J.Block
+compile expr = case unExpr expr of
+  a `Then` b -> do
+    a' <- eToE a
+    J.Block rest <- compile b
+    return $ J.Block (J.Expr a':rest)
+  If c t f -> case f of
+    Nothing -> singleS =<< J.If <$> eToE c <*> compile t <*> pure Nothing
+    Just f -> singleS =<< J.If <$> eToE c <*> compile t <*> (Just <$>compile f)
+  Define name e -> do
+    let name' = if isSymbol name then toString name else name
+    singleS =<< J.DeclareAssign name' <$> eToE e
+  Apply a b -> do
+    a' <- eToE a
+    b' <- eToE b
+    call a' [b']
+  ObjDec dec -> compileObjectDec dec
+  e -> singleE =<< eToE expr
+  where call e es = singleE $ J.Call e es
+
 -- @eToBlk@ compiles an expression to a block; this means that it will always
 -- end with a return statement.
 eToBlk :: CExpr -> JSCompiler J.Block
@@ -39,7 +62,7 @@ eToBlk expr = case unExpr expr of
   Define name e -> do
     let name' = if isSymbol name then toString name else name
     assn <- J.Assign (J.Var name') <$> eToE e
-    return $ J.Block [J.Declare [name'], J.Expr assn]
+    return $ J.Block [J.Declare [name'], J.Return assn]
   Throw expr -> singleS =<< J.Throw <$> eToE expr
   e -> singleS =<< J.Return <$> eToE expr
   where
@@ -119,29 +142,6 @@ iffe exprs = do
   let func = J.Function [] block
   return $ J.Call func []
 
--- compile is the top-level compilation function. It's almost identical to
--- eToBlk except that it does not produce a return on bare expressions or
--- if statements.
-compile :: DExpr -> JSCompiler J.Block
-compile expr = case unExpr expr of
-  a `Then` b -> do
-    a' <- eToE a
-    J.Block rest <- compile b
-    return $ J.Block (J.Expr a':rest)
-  If c t f -> case f of
-    Nothing -> singleS =<< J.If <$> eToE c <*> compile t <*> pure Nothing
-    Just f -> singleS =<< J.If <$> eToE c <*> compile t <*> (Just <$>compile f)
-  Define name e -> do
-    expr <- J.Assign (J.Var name) <$> eToE e
-    return $ J.Block [J.Declare [name], J.Expr expr]
-  Apply a b -> do
-    a' <- eToE a
-    b' <- eToE b
-    call a' [b']
-  ObjDec dec -> compileObjectDec dec
-  e -> singleE =<< eToE expr
-  where call e es = singleE $ J.Call e es
-
 declare _ = return ()
 
 compileObjectDec :: ObjectDec CExpr -> JSCompiler J.Block
@@ -154,7 +154,7 @@ compileObjectDec ObjectDec {objConstrs=constrs,
 compileConstr :: Name -> [Name] -> ConstructorDec CExpr -> JSCompiler J.Block
 compileConstr objName attrs c = do
   parent <- case constrExtends c of
-    Nothing -> return J.Null
+    Nothing -> return $ J.Keyword "null"
     Just e -> eToE e
   args <- forM (constrArgs c) $ \a -> case unExpr a of
     Var n -> return n

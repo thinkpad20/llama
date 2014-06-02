@@ -16,20 +16,21 @@ import Language.Llama.Common.Common
 
 data Block = Block [Statement] deriving (P.Show, Eq)
 
-data Statement =
-  Expr Expr
+data Statement
+  = Expr Expr
   | If Expr Block (Maybe Block)
   | While Expr Block
   | For Statement Statement Statement Block
   | Declare [Name]
+  | DeclareAssign Name Expr
   | Return Expr
   | Return'
   | Throw Expr
   | Break
   deriving (P.Show, Eq)
 
-data Expr =
-  Number Double
+data Expr
+  = Number Double
   | Var Name
   | String Text
   | Array [Expr]
@@ -44,8 +45,6 @@ data Expr =
   | Binary Text Expr Expr
   | Unary Text Expr
   | Ternary Expr Expr Expr
-  | Null
-  | Undefined
   | New Expr
   deriving (P.Show, Eq)
 
@@ -115,7 +114,7 @@ instance Render Statement where
           renderElse (Just (Block [i@(If _ _ _)])) = " " <> render i
           renderElse (Just b2) = "{" <> render b2 <> "}"
       _if <> _then <> _else
-
+    DeclareAssign name e -> "var " <> name <> " = " <> render e
     While e b -> "while(" <> render e <> "){" <> render b <> "}"
     For e1 e2 e3 b -> c ["for(", render e1,";", render e2, ";", render e3,
                              "){", render b, "}"]
@@ -131,6 +130,7 @@ instance Render Statement where
         Nothing -> ""
         Just (Block [i@(If e block1 block2)]) -> " else " <> renderI n i
         Just b2 -> " else {" <> rec b2 <> sp n "}"]
+    DeclareAssign name e -> ["var ", name, " = ", renderI n e]
     While e b -> ["while (", renderI n e, ") {", rec b, sp n "}"]
     For e1 e2 e3 b -> ["for (", renderI n e1, ";", renderI n e2,
                          ";", renderI n e3, ") {", rec b, sp n "}"]

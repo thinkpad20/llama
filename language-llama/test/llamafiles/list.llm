@@ -1,0 +1,45 @@
+object List a = End | Cons a next;
+
+single = flip Cons End;
+
+snoc list elem = list <> single elem;
+
+reverse = End => End
+        | (Cons a next) => (reverse next).snoc a;
+
+print_list = End => ()
+           | (Cons x l) => {println x; print_list l};
+
+lmap f = End => End
+       | (Cons x list) => Cons (f x) (lmap f list);
+
+list1.lappend list2 = case list1 of
+    End => list2
+  | Cons x list => Cons x (list.lappend list2);
+
+list_of_lists.join = case list_of_lists of
+    End => End
+  | Cons list more_lists => list.lappend more_lists.join;
+
+intersperse i list = case list of
+    End, Cons x End => list
+  | Cons x list2 => Cons x (Cons i (list2.intersperse i));
+
+join_by x = intersperse x ~> join;
+
+# reverse (list: [~ a]) = result after
+# { result = ref [~];
+#   for x in list do result := x ~ result };
+
+# lmap (f: a -> b) (list: [~ a]) = reverse acc after
+# { acc = ref [~]
+#   for x in list do acc := f x ~ acc; };
+
+# foldr (step: a -> b -> b) (end: b) (list: lazy [~ a]) = case list of
+#     [~] => end
+#   | x~xs => step x (foldr step end xs);
+
+# foldl (step: b -> a -> b) (start: mut b) (list: [~ a]) = start after
+#   for x in list do start := step start x;
+
+# mconcat: [~ m of Monoid] -> m = foldl mappend mempty;

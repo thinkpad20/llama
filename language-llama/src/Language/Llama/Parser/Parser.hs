@@ -51,7 +51,7 @@ pSmallExpr = pBinaryOp
 
 -- | Any expr, which could be a lambda, or definition, etc.
 pExpr :: Parser Expr
-pExpr = pIf <|> pUnless <|> pFor <|> pCase <|> pMod where
+pExpr = pIf <|> pUnless <|> pFor <|> pCase <|> pMod <|> pLambdaDot where
   pMod = item mod <|> pExpr'
   mod = do
     m <- choice $ map pKeyword ["ref", "array", "hash"]
@@ -119,7 +119,7 @@ pCase = item $ MultiCase <$> expr <*> getAlts where
   expr = pKeyword "case" *> pExpr <* pKeyword "of"
   getAlts = pAnyBlockOf alt
   alt = do
-    exprs <- pSmallExpr `sepBy1` pPunc ','
+    exprs <- commaSep1 pSmallExpr
     result <- pSymbol "->" *> pExprOrBlock
     return (exprs, result)
 
@@ -135,6 +135,9 @@ pForPattern = forever <|> for where
                    return $ ForIn expr cont
     option (ForExpr expr) $ for <|> forIn
 
+pLambdaDot :: Parser Expr
+pLambdaDot = item $ pPunc '.' >> LambdaDot <$> pChain <*> many pChain
+
 ---------------------------------------------------------
 ---------------------  Definitions  ---------------------
 ---------------------------------------------------------
@@ -143,7 +146,20 @@ pLambda :: Parser (Expr -> Expr)
 pLambda = do
   pSymbol "->"
   body <- pAnyBlock
-  return $ \param -> Expr (_pos param) $ Lambda param body
+  let single param = Expr (_pos param) $ Lambdas [(param, body)]
+  option single $ lookAhead next >>= \t -> case tToken t of
+    TSymbol "|" -> do
+      pSymbol "|"
+      bodies <- alt `sepBy1` pSymbol "|"
+      return $ \param -> Expr (_pos param) $ Lambdas ((param, body):bodies)
+    Indent -> do
+      bodies <- indented $ pBlockOf alt
+      return $ \param -> Expr (_pos param) $ Lambdas ((param, body):bodies)
+    _ -> return single
+  where alt = do
+          expr <- pSmallExpr
+          result <- pSymbol "->" *> pExprOrBlock
+          return (expr, result)
 
 pPatternDef :: Parser (Expr -> Expr)
 pPatternDef = do
@@ -155,7 +171,7 @@ pObjectDec :: Parser Expr
 pObjectDec = item $ ObjDec <$> do
   pKeyword "type"
   name <- pConstrName
-  vars <- pVarName `sepBy` pPunc ','
+  vars <- commaSep pVarName
   extends <- optionMaybe $ pSymbol "<:" *> pConstrName
   (constrs, attrs) <- getConstrs
   return $ defObj { objName = name
@@ -196,11 +212,11 @@ pExprOrBlock = pExpr <|> pKeyword "do" *> pAnyBlock
 
 -- | @pAnyBlock@ but generalized to any parser.
 pAnyBlockOf :: Parser a -> Parser [a]
-pAnyBlockOf p = p `sepBy1` pPunc ';' <|> indented (pBlockOf p)
+pAnyBlockOf p = semiSep1 p <|> indented (pBlockOf p)
 
 -- | A block that doesn't start with an indent. Separated with @;@.
 pInlineBlock :: Parser Expr
-pInlineBlock = unblock <$> pExpr `sepBy1` pPunc ';'
+pInlineBlock = unblock <$> semiSep1 pExpr
 
 -- | An indented block, separators are same indentation OR semicolons.
 pIndentedBlock :: Parser Expr
@@ -251,8 +267,8 @@ pJson = item $ Literal . JsonLiteral <$> do
   pKeyword "json" *> jObject where
   jVal = jArray <|> jObject <|> jString <|> jNum <|> jKeyword
   keyval = (,) <$> fmap unString pTerm <*> (pSymbol ":" *> jVal)
-  jArray = JArray <$> enclose '[' ']' (jVal `sepBy` pPunc ',')
-  jObject = JObject <$> enclose '{' '}' (keyval `sepBy` pPunc ',')
+  jArray = JArray <$> enclose '[' ']' (commaSep jVal)
+  jObject = JObject <$> enclose '{' '}' (commaSep keyval)
   jString = JString . unString <$> pString
   jNum = fmap JNum $ fmap unExpr pNumber >>= \case Number n -> return n
   jKeyword = try $ fmap unExpr pVariable >>= \case
@@ -353,9 +369,10 @@ pChain = pAttribute >>= go where
         ref <- enclose '[' ']' pExpr
         go $ Expr (_pos expr) $ DeRef expr ref
       TPunc '.' -> do
-        dotfunc <- pPunc '.' *> pExpr
+        dotfunc <- pPunc '.' *> pTerm
         go $ Expr (_pos expr) $ Dot expr dotfunc
       TSymbol _ -> do
+        -- The level 8 operators are assignment operators (:=, +=, *=, etc).
         ops <- _level8ops <$> getState
         op <- choice $ map pSymbol ops
         Expr (_pos expr) . Binary op expr <$> pExpr
@@ -363,7 +380,7 @@ pChain = pAttribute >>= go where
         let attr = do name <- pAnyIdent
                       val <- pSymbol "=" *> pNeg
                       return (name, val)
-        attrs <- pKeyword "with" *> attr `sepBy1` pPunc ','
+        attrs <- pKeyword "with" *> commaSep1 attr
         go $ Expr (_pos expr) $ With expr attrs
       _ -> return expr
 
@@ -388,7 +405,7 @@ pParens = item $ enclose '(' ')' $ do
     TKeyword "do" -> pKeyword "do" >> unExpr <$> pInlineBlock
     _ -> do
       exprs <- pExpr `sepEndBy` pPunc ','
-      kwargs <- option [] $ pPunc ';' *> kwarg `sepBy` pPunc ','
+      kwargs <- option [] $ pPunc ';' *> commaSep kwarg
       case (exprs, kwargs) of
         ([e], []) -> return $ unExpr e
         (es, ks) -> return $ Tuple exprs kwargs
@@ -408,13 +425,21 @@ pBinaryOp = pUnknownBinary
 
 pLevel0, pLevel1, pLevel2, pLevel3, pLevel4,
   pLevel5, pLevel6, pLevel7 :: Parser Expr
+-- | Piping operators, like <| and |>
 pLevel0 = pLevel _level0ops pLevel1
+-- | No operators by default in level 1.
 pLevel1 = pLevel _level1ops pLevel2
+-- | Logical operators.
 pLevel2 = pLevel _level2ops pLevel3
+-- | Comparison operators.
 pLevel3 = pLevel _level3ops pLevel4
+-- | Additive operators.
 pLevel4 = pLevel _level4ops pLevel5
+-- | Multiplicative operators.
 pLevel5 = pLevel _level5ops pLevel6
+-- | Exponentiation operators.
 pLevel6 = pLevel _level6ops pLevel7
+-- | Function composition operators (~>, <~).
 pLevel7 = pLevel _level7ops pNeg
 
 pLevel:: (ParserState -> [Text]) -> Parser Expr -> Parser Expr
@@ -460,6 +485,7 @@ satisfy f = satisfy' (f . tToken)
 satisfy' :: (PToken -> Bool) -> Parser (Token PToken)
 satisfy' f = grab (\pt -> if f pt then Just (tToken pt) else Nothing)
 
+-- | Grabs the next token regardless of what it is (besides EOF)
 next :: Parser PToken
 next = grab Just
 
@@ -498,6 +524,11 @@ unblock [] = error "Empty block"
 unblock [e] = e
 unblock (e:es) = Expr (_pos e) $ e `Then` unblock es
 
+commaSep, commaSep1, semiSep1 :: Parser a -> Parser [a]
+commaSep p = p `sepBy` pPunc ','
+commaSep1 p = p `sepBy1` pPunc ','
+semiSep1 p = p `sepBy1` pPunc ';'
+
 ----------------------------------------------------------
 -----------------  Running the parser  -------------------
 ----------------------------------------------------------
@@ -515,7 +546,8 @@ initState = ParserState {
   , _knownSymbols  = S.fromList [ "$", "!", "&&", "||", "|^|", ">", ">", "<="
                                 , ">=", "==", "!=", "+", "-", "*", "/", "**"
                                 , "^", "~>", "~>", ":=", "->", "=>", "..", "="
-                                , "~", "+=", "*=", "/=", "-=", "<>=", "^="]
+                                , "~", "+=", "*=", "/=", "-=", "<>=", "^="
+                                , "|"]
   , _leftfixities  = S.fromList ["!", "+", "-", "*", "/"]
   , _rightfixities = S.fromList ["**", "^", "&&", "||", "|^|"]
   }

@@ -24,7 +24,7 @@ data AbsExpr expr = Var          !Name
                   | Unary        !Name !expr
                   | Attribute    !expr !Name
                   | RefAttribute !expr !Name
-                  | Lambda       !expr !expr
+                  | Lambda       !Name !expr
                   | Lambdas      ![(expr, expr)]
                   | Case         !expr ![(expr, expr)]
                   | MultiCase    !expr ![([expr], expr)]
@@ -51,7 +51,7 @@ data AbsExpr expr = Var          !Name
                   | Modified     !Text !expr
                   | TypeDef      !Name !Type
                   | Prefix       !Name !expr
-                  | LambdaDot    !expr
+                  | LambdaDot    !expr ![expr]
                   | AssignOp     !Name !expr !expr
                   | With         !expr ![(Name, expr)]
                   | PatAssert    !(PatAssert expr)
@@ -219,7 +219,9 @@ rndr isBlockStart e = case unExpr e of
           else T.intercalate ", " (map rec es)
     kws' = if length kws == 0 then ""
            else "; " <> T.intercalate ", " (map render kws)
-  Lambda a b -> rec' a <> " -> " <> rec b
+  Lambda n e -> n <> " -> " <> rec e
+  Lambdas alts -> T.intercalate " | " $ map go alts where
+    go (a, b) = rec' a <> " -> " <> rec b
   DeRef e1 e2 -> rec e1 <> "[" <> rec e2 <> "]"
   PatternDef e1 e2 -> rec e1 <> " = " <> rec e2
   Define name e -> name <> " = " <> rec e

@@ -35,7 +35,7 @@ instance P.Show Desugarer where
 instance Render Desugarer where
   render (n, _, _) = "Desugarer '" <> n <> "'"
 instance IsExpr DExpr where unExpr = _dsrd
-instance Render DExpr where render = render . bareExpr
+instance Render DExpr where render = rndr True . bareExpr
 
 -- | Converts an Expr to a DExpr containing the same structure.
 expr2DExpr :: Expr -> DExpr
@@ -58,7 +58,7 @@ traverse ds e | doTest ds e = doTransform ds e
   Apply e1 e2 -> Apply <$> rec e1 <*> rec e2
   Binary op e1 e2 -> Binary op <$> rec e1 <*> rec e2
   Unary op e -> Unary op <$> rec e
-  Lambda arg body -> Lambda <$> recNS "%l" arg <*> recNS "%l" body
+  Lambda arg body -> Lambda arg <$> recNS "%l" body
   Lambdas argsBodies -> Lambdas <$> mapM (recTupNS "%l") argsBodies
   Case expr patsBodies -> Case <$> recNS "%c" expr <*> mapM (recTupNS "%c") patsBodies
   MultiCase expr patsBodies ->
@@ -86,7 +86,7 @@ traverse ds e | doTest ds e = doTransform ds e
   Before e1 e2 -> Before <$> rec e1 <*> rec e2
   ObjDec od -> ObjDec <$> recOd od
   Modified m expr -> Modified m <$> rec expr
-  LambdaDot e' -> LambdaDot <$> recNS "%l" e'
+  LambdaDot e rest -> LambdaDot <$> recNS "%l" e <*> mapM (recNS "%l") rest
   Prefix name e' -> Prefix name <$> rec e'
   WildCard -> return WildCard
   InString is -> InString <$> recIs is
@@ -161,26 +161,14 @@ dsAfterBefore = ("Before/After", test, ds) where
 
 dsLambdaDot :: Desugarer
 dsLambdaDot = ("LambdaDot", test, ds) where
-  test (LambdaDot _) = True
-  test (Apply _ _) = True
+  test (LambdaDot _ _) = True
   test _ = False
   ds e = let mk' ex = DExpr (_orig e) ex in case unExpr e of
-    LambdaDot e -> do
+    LambdaDot e rest -> do
       name <- unusedVar "_arg"
       e' <- rec e
       let pat = mk' $ Var name
-      return $ mk' $ Lambda pat $ mk' $ Dot pat e'
-    Apply _ _ -> do
-      name <- unusedVar "_arg"
-      let (exprs, root) = unApply e
-      exprs' <- mapM rec exprs
-      let apply a b = DExpr (_orig root) $ Apply a b
-      case unExpr root of
-        LambdaDot expr -> do
-          expr' <- rec expr
-          let body = foldl apply (mk' $ Dot (mk' $ Var name) expr') exprs'
-          return $ mk' $ Lambda (mk' $ Var name) body
-        expr -> foldl apply <$> rec root <*> pure exprs'
+      return $ mk' $ Lambda name $ mk' $ Dot pat e'
   rec = traverse ("LambdaDot", test, ds)
 
 dsPatternDef :: Desugarer
@@ -195,7 +183,7 @@ dsPatternDef = ("Patterned definition", test, ds) where
       go (exprs, root) = case unExpr root of
         Var name -> do
           body :: DExpr <- rec expr
-          let lambda e1 e2 = DExpr (_orig d) $ Lambda e1 e2
+          let lambda e1 e2 = DExpr (_orig d) $ Lambdas [(e1, e2)]
               body' = foldr lambda body exprs
           return $ DExpr (_orig root) $ Define name body'
         pat' -> rec expr >>= assertsAndDefs root >>= \case
@@ -220,9 +208,17 @@ dsLambdas = ("Lambdas", test, ds) where
   test _ = False
   ds e = mk e $ case unExpr e of
     Lambdas argsBodies -> do
-      var <- DExpr (_orig e) . Var <$> unusedVar "_arg"
-      Lambda var <$> rec (DExpr (_orig e) (Case var argsBodies))
+      name <- unusedVar "_arg"
+      let var = DExpr (_orig e) $ Var name
+      Lambda name <$> rec (DExpr (_orig e) (Case var argsBodies))
   rec = traverse ("Lambdas", test, ds)
+
+---- | Desugars a Lambda expression into a PlainLambda
+--dsLambda :: Desugarer
+--dsLambda = ("Lambda", test, ds) where
+--  test (Lambda _ _) = True
+--  test _ = False
+--  ds e = mk e $ case unExpr e of
 
 dsInString :: Desugarer
 dsInString = ("Interpolated strings", test, ds) where
@@ -396,12 +392,12 @@ desugarers :: [Desugarer]
 desugarers = [ dsAfterBefore
              --, dsLambdaDot
              --, dsPrefixLine
-             --, dsLambdas
              , dsDot
              --, dsForIn
              --, dsForever
              , dsPatternDef
              , dsInString
+             , dsLambdas
              , dsMultiCase
              , dsCase]
 
