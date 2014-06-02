@@ -368,12 +368,17 @@ pChain = pAttribute >>= go where
         -- Grab the arguments, then recurse.
         ref <- enclose '[' ']' pExpr
         go $ Expr (_pos expr) $ DeRef expr ref
+      -- If there's an immediate parentheses, it's high-precedence application.
+      TPunc '(' | not (tHasSpace pt) -> do
+        arg <- pParens
+        go $ Expr (_pos expr) $ Apply expr arg
       TPunc '.' -> do
         dotfunc <- pPunc '.' *> pTerm
         go $ Expr (_pos expr) $ Dot expr dotfunc
       TSymbol _ -> do
         -- The level 8 operators are assignment operators (:=, +=, *=, etc).
         ops <- _level8ops <$> getState
+        -- Note that if this choice fails we're OK, since we used lookAhead.
         op <- choice $ map pSymbol ops
         Expr (_pos expr) . Binary op expr <$> pExpr
       TKeyword "with" -> do
