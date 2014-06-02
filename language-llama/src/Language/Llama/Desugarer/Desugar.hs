@@ -6,7 +6,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE ScopedTypeVariables #-}
-{-# LANGUAGE PackageImports #-}
+{-# LANGUAGE ViewPatterns #-}
 module Language.Llama.Desugarer.Desugar where
 
 import qualified Prelude as P
@@ -207,6 +207,7 @@ dsLambdas = ("Lambdas", test, ds) where
   test (Lambdas _) = True
   test _ = False
   ds e = mk e $ case unExpr e of
+    Lambdas [(unExpr -> Var name, res)] -> Lambda name <$> rec res
     Lambdas argsBodies -> do
       name <- unusedVar "_arg"
       let var = DExpr (_orig e) $ Var name

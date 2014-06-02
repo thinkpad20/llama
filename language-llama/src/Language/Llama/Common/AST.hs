@@ -197,7 +197,7 @@ instance (IsExpr e, Eq e, Render e) => Render (AbsExpr e) -- where
   --      Tuple _ _ -> rec expr
   --      _ -> "(" <> rec expr <> ")"
 
---rndr :: (IsExpr e, Render e) => Bool -> e -> Text
+rndr :: (IsExpr e, Render e) => Bool -> e -> Text
 rndr isBlockStart e = case unExpr e of
   a `Then` b | isBlockStart -> "{" <> rndr False e
              | otherwise -> case unExpr b of
@@ -252,7 +252,7 @@ rndr isBlockStart e = case unExpr e of
     _if kw c = kw <> " " <> rec c
     _thenelse t f = t' <> _else f where
       t' = case unExpr t of _ `Then` _ -> " " <> rndr True t
-                            _ -> " then " <> rec t
+                            _ -> " then " <> rndr True t
     _else f = case f of {Nothing -> ""; Just e -> " else " <> rec e}
     -- | Wraps any non-primitive expressions in quotes.
     rec' expr = case unExpr expr of
@@ -265,14 +265,15 @@ rndr isBlockStart e = case unExpr e of
       _ -> "(" <> rec expr <> ")"
 
 
-instance Render e => Render (PatAssert e) where
+instance (IsExpr e, Render e) => Render (PatAssert e) where
   render = \case
-    IsLiteral e1 e2 -> render e1 <> " === " <> render e2
-    IsConstr name e -> "(" <> render e <> ")'s constructor is " <> name
-    IsTupleOf n e -> "(" <> render e <> ") is tuple of length " <> render n
-    IsVectorOf n e -> "(" <> render e <> ") is vector of length " <> render n
-    IsArrayOf n e -> "(" <> render e <> ") is array of length " <> render n
+    IsLiteral e1 e2 -> rendr e1 <> " === " <> rendr e2
+    IsConstr name e -> "(" <> rendr e <> ")'s constructor is " <> name
+    IsTupleOf n e -> "(" <> rendr e <> ") is tuple of length " <> render n
+    IsVectorOf n e -> "(" <> rendr e <> ") is vector of length " <> render n
+    IsArrayOf n e -> "(" <> rendr e <> ") is array of length " <> render n
     pa1 `And` pa2 -> render pa1 <> ", and " <> render pa2
+    where rendr = rndr True
 
 instance Render Expr' where
   render (Expr' e) = render e

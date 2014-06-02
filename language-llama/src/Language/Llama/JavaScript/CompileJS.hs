@@ -97,9 +97,7 @@ eToE expr = case unExpr expr of
   Var n -> return $ J.Var $ if isSymbol n then toString n else n
   If c t Nothing -> J.Ternary <$> eToE c <*> eToE t <*> pure noElseError
   If c t (Just f) -> J.Ternary <$> eToE c <*> eToE t <*> eToE f
-  Lambda pat e -> case unExpr pat of
-    Var n -> J.Function [n] <$> eToBlk e
-    _ -> throwErrorC ["Pattern ", render pat, " should have been desugared"]
+  Lambda n e -> J.Function [n] <$> eToBlk e
   Throw e -> _throw <$> eToE e
   Apply a b -> J.Call <$> eToE a <*> (pure <$> eToE b)
   Dot b a -> J.Call <$> eToE a <*> (pure <$> eToE b)
