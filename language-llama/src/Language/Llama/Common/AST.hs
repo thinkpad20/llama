@@ -17,11 +17,11 @@ data AbsExpr expr = Var          !Name
                   | String       !Text
                   | InString     !(InString expr)
                   | Constructor  !Name
-                  | !expr `Then` !expr
+                  | Then         !expr !expr
                   | Dot          !expr !expr
                   | Apply        !expr !expr
                   | Binary       !Name !expr !expr
-                  | Unary        !Name !expr
+                  | Prefix       !Name !expr
                   | Attribute    !expr !Name
                   | RefAttribute !expr !Name
                   | Lambda       !Name !expr
@@ -40,7 +40,6 @@ data AbsExpr expr = Var          !Name
                   | For          !(ForPattern expr) !expr
                   | PatternDef   !expr !expr
                   | Define       !Name !expr
-                  | Assign       !expr !expr
                   | Return       !expr
                   | Throw        !expr
                   | TryCatch     !expr ![(expr, expr)] !(Maybe expr)
@@ -50,9 +49,8 @@ data AbsExpr expr = Var          !Name
                   | ObjDec       !(ObjectDec expr)
                   | Modified     !Text !expr
                   | TypeDef      !Name !Type
-                  | Prefix       !Name !expr
                   | LambdaDot    !expr ![expr]
-                  | AssignOp     !Name !expr !expr
+                  | AssignDot    !expr !expr ![expr]
                   | With         !expr ![(Name, expr)]
                   | PatAssert    !(PatAssert expr)
                   | GetAttrib    !Name !Int !expr
@@ -155,7 +153,7 @@ instance (IsExpr e, Eq e, Render e) => Render (AbsExpr e) -- where
   --  After e1 e2 -> rec e1 <> " after " <> rec e2
   --  Apply e1 e2 -> rec' e1 <> " " <> rec' e2
   --  Binary op e1 e2 -> rec' e1 <> " " <> op <> " " <> rec' e2
-  --  Unary op e -> op <> rec' e
+  --  Prefix op e -> op <> rec' e
   --  Tuple es kws -> "(" <> es' <> kws' <> ")" where
   --    es' = if length es == 1 then rec (head es) <> ","
   --          else T.intercalate ", " (map rec es)
@@ -213,7 +211,7 @@ rndr isBlockStart e = case unExpr e of
   After e1 e2 -> rec e1 <> " after " <> rec e2
   Apply e1 e2 -> rec' e1 <> " " <> rec' e2
   Binary op e1 e2 -> rec' e1 <> " " <> op <> " " <> rec' e2
-  Unary op e -> op <> rec' e
+  Prefix op e -> op <> rec' e
   Tuple es kws -> "(" <> es' <> kws' <> ")" where
     es' = if length es == 1 then rec (head es) <> ","
           else T.intercalate ", " (map rec es)

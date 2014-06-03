@@ -57,7 +57,7 @@ traverse ds e | doTest ds e = doTransform ds e
   Dot e1 e2 -> Dot <$> rec e1 <*> rec e2
   Apply e1 e2 -> Apply <$> rec e1 <*> rec e2
   Binary op e1 e2 -> Binary op <$> rec e1 <*> rec e2
-  Unary op e -> Unary op <$> rec e
+  Prefix op e -> Prefix op <$> rec e
   Lambda arg body -> Lambda arg <$> recNS "%l" body
   Lambdas argsBodies -> Lambdas <$> mapM (recTupNS "%l") argsBodies
   Case expr patsBodies -> Case <$> recNS "%c" expr <*> mapM (recTupNS "%c") patsBodies
@@ -70,24 +70,18 @@ traverse ds e | doTest ds e = doTransform ds e
   Typed expr t -> rec expr >>= \e' -> return $ Typed e' t
   If c t f -> If <$> recNS "%if" c <*> recNS "%if" t <*> recMaybeNS "%if" f
   a `Then` b -> Then <$> rec a <*> rec b
-  --For i c s ex -> For <$> recNS "%f" i <*> recNS "%f" c
-  --                    <*> recNS "%f" s <*> recNS "%f" ex
-  --ForIn e1 e2 e3 -> ForIn <$> recNS "%f" e1 <*> recNS "%f" e2 <*> recNS "%f" e3
   Define name expr -> Define name <$> recNS name expr
   PatternDef pat expr -> PatternDef <$> rec pat <*> rec expr
-  Assign e1 e2 -> Assign <$> rec e1 <*> rec e2
   Return expr -> Return <$> rec expr
   Throw expr -> Throw <$> rec expr
   TryCatch expr options finally ->
-    TryCatch <$> rec expr <*> mapM recTup options
-                          <*> recMaybe finally
+    TryCatch <$> rec expr <*> mapM recTup options <*> recMaybe finally
   Break expr -> Break <$> rec expr
   After e1 e2 -> After <$> rec e1 <*> rec e2
   Before e1 e2 -> Before <$> rec e1 <*> rec e2
   ObjDec od -> ObjDec <$> recOd od
   Modified m expr -> Modified m <$> rec expr
   LambdaDot e rest -> LambdaDot <$> recNS "%l" e <*> mapM (recNS "%l") rest
-  Prefix name e' -> Prefix name <$> rec e'
   WildCard -> return WildCard
   InString is -> InString <$> recIs is
   Attribute expr name -> (\ex -> Attribute ex name) <$> rec expr
@@ -214,13 +208,6 @@ dsLambdas = ("Lambdas", test, ds) where
       Lambda name <$> rec (DExpr (_orig e) (Case var argsBodies))
   rec = traverse ("Lambdas", test, ds)
 
----- | Desugars a Lambda expression into a PlainLambda
---dsLambda :: Desugarer
---dsLambda = ("Lambda", test, ds) where
---  test (Lambda _ _) = True
---  test _ = False
---  ds e = mk e $ case unExpr e of
-
 dsInString :: Desugarer
 dsInString = ("Interpolated strings", test, ds) where
   test (InString _) = True
@@ -244,9 +231,31 @@ dsInString = ("Interpolated strings", test, ds) where
     _ -> DExpr (_orig e1) $ Binary "<>" e1 e2
   rec = traverse ("Interpolated strings", test, ds)
 
+-- | Desugars binary and unary operators into variable applications of their
+-- "readable" forms as given by @toString@.
+dsSymbols :: Desugarer
+dsSymbols = tup where
+  tup = ("Prefix", test, ds)
+  test (Prefix _ _) = True
+  test (Binary _ _ _) = True
+  test (Var n) | isSymbol n = True
+  test (Constructor n) | isSymbol n = True
+  test _ = False
+  rec = traverse tup
+  ds e = mk e $ case unExpr e of
+    Prefix op expr -> Apply (DExpr (_orig e) $ Var $ toString op) <$> rec expr
+    Binary op a b -> do
+      let var = DExpr (_orig e) $ Var $ toString op
+      inner <- DExpr (_orig e) . Apply var <$> rec a
+      Apply inner <$> rec b
+    Var n -> return $ Var $ toString n
+    Constructor n -> return $ Constructor $ toString n
+
+-- | Desugars a MultiCase (with one or more expressions per alternative) into
+-- a Case (with only one expression per alternative).
 dsMultiCase :: Desugarer
 dsMultiCase = tup where
-  tup = ("Multicase", test, ds)
+  tup = ("MultiCase", test, ds)
   test (MultiCase _ _) = True
   test _ = False
   ds e = mk e $ case unExpr e of
@@ -259,6 +268,9 @@ dsMultiCase = tup where
     go ((e', res'):alts) ((exprs, res'):rest)
   rec = traverse tup
 
+-- | Desugars a Case into a series of if/else statements and assignments. If
+-- the last expression in the series is not a variable or wildcard, the last
+-- else will be to throw a @PatternMatchError@.
 dsCase :: Desugarer
 dsCase = tup where
   tup = ("Case", test, ds)
@@ -272,7 +284,7 @@ dsCase = tup where
       options' <- mapM (\(a,b) -> (,) <$> rec a <*> rec b) options
       name <- unusedVar "_ref"
       let var = DExpr (_orig e) $ Var name
-      let def = DExpr (_orig e) $ Define name e'
+          def = DExpr (_orig e) $ Define name e'
       Then def . DExpr (_orig e) <$> go var options'
   go :: DExpr -> [(DExpr, DExpr)] -> Desugar (AbsExpr DExpr)
   go e = \case
@@ -281,12 +293,11 @@ dsCase = tup where
       (Nothing, Nothing) -> return $ unExpr res
       (Nothing, Just defs) -> return $ defs `Then` res
       (Just cond, defs) -> do
-        dexpr <- DExpr (_orig pat) <$> go e opts
         let pa = DExpr (_orig pat) $ PatAssert cond
-        let body = case defs of
+            body = case defs of
                     Just defs -> DExpr (_orig pat) $ defs `Then` res
                     Nothing -> res
-        return $ If pa body (Just dexpr)
+        If pa body . Just . DExpr (_orig pat) <$> go e opts
 
 patternMatchError :: DExpr -> AbsExpr DExpr
 patternMatchError e = do
@@ -337,6 +348,20 @@ assertsAndDefs start expr = fst <$> runStateT (go start expr) ("", 0) where
           -- concatenate all of the assignments from the subcompilations
           mkAssigns list = foldl combine Nothing (P.snd <$> list)
 
+toString :: Text -> Text
+toString = \case
+  { ">" -> "$gt"; "<" -> "$lt"; "==" -> "$eq"; ">=" -> "$geq"; "<=" -> "$leq"
+  ; "~" -> "$neg"; "+" -> "$add"; "-" -> "$sub"; "*" -> "$mult"; "/" -> "$div"
+  ; "&&" -> "$and"; "||" -> "$or"; "^" -> "$pow"; "::" -> "$cons"
+  ; "<>" -> "$append"; "!" -> "$access"; "$" -> "$applyl"; "|>" -> "$applyr"
+  ; "~>" -> "$composer"; "<~" -> "$composel"
+  ; s -> unpack s ! map fromChar ! mconcat ! pack }
+  where
+    fromChar = \case
+      { '>' -> "$gt"; '<' -> "$lt"; '=' -> "$eq"; '~' -> "$tilde"
+      ; '+' -> "$plus"; '-' -> "$minus"; '*' -> "$star"; '/' -> "$fslash"
+      ; '\\' -> "$bslash"; '&' -> "$amp"; '|' -> "$pipe"; '!' -> "$bang"
+      ; '@' -> "$at"; ':' -> "$colon"}
 
 -- | @unApply@ "unwinds" a series of applies into a list of
 -- expressions that are on the right side, paired with the
@@ -359,6 +384,7 @@ addUsedName name = do
   modify $ \s -> s {dsNamesInUse = S.insert name top : rest}
   return name
 
+-- | Creates an unused variable name beginning with @start@.
 unusedVar :: Name -> Desugar Name
 unusedVar start = loop Nothing where
   toName Nothing = start
@@ -371,6 +397,7 @@ unusedVar start = loop Nothing where
         Just n' -> n' + 1
       False -> addUsedName name
 
+-- | Sees if a name is in use.
 isNameInUse :: Name -> Desugar Bool
 isNameInUse name = do
   names <- get <!> dsNamesInUse
@@ -381,12 +408,12 @@ isNameInUse name = do
           False -> loop ns
 
 defaultEnv :: DesugarerEnv
-defaultEnv = DesugarerEnv {
-    dsNameSpace = mempty
+defaultEnv = DesugarerEnv
+  { dsNameSpace    = mempty
   , dsConstructors = mempty
-  , dsNamesInUse = mempty
-  }
+  , dsNamesInUse   = mempty }
 
+log :: [Text] -> Desugar ()
 log xs = liftIO $ P.putStrLn $ P.concat $ fmap unpack xs
 
 desugarers :: [Desugarer]
@@ -396,8 +423,9 @@ desugarers = [ dsAfterBefore
              , dsDot
              --, dsForIn
              --, dsForever
-             , dsPatternDef
              , dsInString
+             , dsSymbols
+             , dsPatternDef
              , dsLambdas
              , dsMultiCase
              , dsCase]
@@ -437,7 +465,6 @@ testString input = case desugarIt input of
   Left err -> error $ P.show err
   Right dexpr -> putStrLn $ unpack $ render dexpr
 
-desugarIt' = fmap render . desugarIt
 --desugarIt' :: (Desugarer, String) -> Either ErrorList DExpr
 --desugarIt' (ds, input) = case grab input of
 --  Left err -> error $ P.show err

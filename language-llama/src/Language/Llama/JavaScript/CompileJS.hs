@@ -37,9 +37,7 @@ compile expr = case unExpr expr of
   If c t f -> case f of
     Nothing -> singleS =<< J.If <$> eToE c <*> compile t <*> pure Nothing
     Just f -> singleS =<< J.If <$> eToE c <*> compile t <*> (Just <$>compile f)
-  Define name e -> do
-    let name' = if isSymbol name then toString name else name
-    singleS =<< J.DeclareAssign name' <$> eToE e
+  Define name e -> singleS =<< J.DeclareAssign name <$> eToE e
   Apply a b -> do
     a' <- eToE a
     b' <- eToE b
@@ -60,9 +58,8 @@ eToBlk expr = case unExpr expr of
     Just f -> singleS =<< J.If <$> eToE c <*> eToBlk t <*> (Just <$> eToBlk f)
     Nothing -> singleS =<< J.If <$> eToE c <*> eToBlk t <*> pure Nothing
   Define name e -> do
-    let name' = if isSymbol name then toString name else name
-    assn <- J.Assign (J.Var name') <$> eToE e
-    return $ J.Block [J.Declare [name'], J.Return assn]
+    assn <- J.Assign (J.Var name) <$> eToE e
+    return $ J.Block [J.Declare [name], J.Return assn]
   Throw expr -> singleS =<< J.Throw <$> eToE expr
   e -> singleS =<< J.Return <$> eToE expr
   where
@@ -82,10 +79,6 @@ eToE expr = case unExpr expr of
   Attribute e name -> do
     e' <- eToE e
     return $ J.Call (J.Dot e' "get") [J.String name]
-  Binary op a b -> do
-    (a', b') <- (,) <$> eToE a <*> eToE b
-    let op' = J.Var $ toString op
-    return $ J.Call (J.Call op' [a']) [b']
   PatAssert pa -> paToE pa
   GetAttrib cName idx e -> do
     e' <- eToE e
@@ -103,7 +96,8 @@ eToE expr = case unExpr expr of
   Dot b a -> J.Call <$> eToE a <*> (pure <$> eToE b)
   Define name e -> declare name >> J.Assign (J.Var name) <$> eToE e
   otherwise -> throwErrorC ["Unhandlable expression: ", render expr]
-  where noElseError = _throwMsg "No else expression"
+  where
+    noElseError = _throwMsg "If-statements as expressions must have an `else`"
 
 _throw :: J.Expr -> J.Expr
 _throw e = J.Call (J.Var "_throw") [e]
@@ -228,10 +222,10 @@ compileIt input = case desugarIt input of
   Left err -> Left $ ErrorList [render err]
   Right expr -> unsafePerformIO $ runCompile expr
 
-compileIt' :: String -> String
+compileIt' :: String -> IO ()
 compileIt' input = case compileIt input of
   Left err -> error $ P.show err
-  Right js -> unpack $ renderI 2 js
+  Right js -> putStrLn $ unpack $ renderI 2 js
 
 compIt = fmap render . compileIt
 
@@ -245,19 +239,5 @@ compileFile path out = do
       case out of
         Nothing ->  putStrLn output
         Just out -> P.writeFile out output
-
-toString :: Text -> Text
-toString = \case
-  { ">" -> "_gt"; "<" -> "_lt"; "==" -> "_eq"; ">=" -> "_geq"; "<=" -> "_leq"
-  ; "~" -> "_neg"; "+" -> "_add"; "-" -> "_sub"; "*" -> "_mult"; "/" -> "_div"
-  ; "&&" -> "_and"; "||" -> "_or"; "^" -> "_pow"; "::" -> "_cons"
-  ; "<>" -> "_append"; "!" -> "_f_apply"; "$" -> "_apply"; "~>" -> "_f_comp"
-  ; "<~" -> "_comp"; s -> unpack s ! map fromChar ! mconcat ! pack }
-  where
-    fromChar = \case
-      { '>' -> "_gt"; '<' -> "_lt"; '=' -> "_eq"; '~' -> "_tilde"
-      ; '+' -> "_plus"; '-' -> "_minus"; '*' -> "_star"; '/' -> "_fslash"
-      ; '\\' -> "_bslash"; '&' -> "_amp"; '|' -> "_pipe"; '!' -> "_bang"
-      ; '@' -> "_at"; ':' -> "_col"}
 
 jsPreamble = "var ConstructorNotFoundError, Exception, Just, LlamaObject, LookupError, NoAttributeError, Nothing, PatternMatchError, is_instance, print, println, show, _divide, _minus, _plus, _throw, _times;\nLlamaObject = require('./llama_core').LlamaObject;\nis_instance = require('./llama_core').is_instance;\nException = require('./llama_core').Exception;\nLookupError = require('./llama_core').LookupError;\nPatternMatchError = require('./llama_core').PatternMatchError;\nConstructorNotFoundError = require('./llama_core').ConstructorNotFoundError;\nNoAttributeError = require('./llama_core').NoAttributeError;\nNothing = require('./llama_core').Nothing;\nJust = require('./llama_core').Just;\n_throw = require('./llama_core')._throw;\nshow = require('./llama_core').show;\nprintln = require('./llama_core').println;\nprint = require('./llama_core').print;\n_plus = require('./llama_core')._plus;\n_minus = require('./llama_core')._minus;\n_times = require('./llama_core')._times;\n_divide = require('./llama_core')._divide;\n_plus = require('./llama_core')._plus;\n\n"

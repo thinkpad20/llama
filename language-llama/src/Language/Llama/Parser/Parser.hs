@@ -352,29 +352,37 @@ pAttribute = pReadRef >>= go where
         epos = Expr (_pos term)
     case ref of
       Nothing -> go $ epos term'
-      Just _ ->  go $ epos $ Unary "!" $ epos term'
+      Just _ ->  go $ epos $ Prefix "!" $ epos term'
 
 pReadRef :: Parser Expr
 pReadRef = item bangs <|> pTerm where
-  bangs = pSymbol "!" >> Unary "!" <$> pReadRef
+  bangs = pSymbol "!" >> Prefix "!" <$> pReadRef
 
--- | Parses a term, possibly followed by a dot or brackets.
+-- | Parses a term, possibly followed by a few things, such as: a dot,
+-- brackets without a space (object deref), parens without a space (high-
+-- precedence application), assignment operators (:=, +=, etc), or a @with@.
 pChain :: Parser Expr
 pChain = pAttribute >>= go where
   go expr = option expr $ do
+    let go' = go . Expr (_pos expr)
     lookAhead next >>= \pt -> case tToken pt of
       -- If there is an immediate square bracket, it's an object dereference.
       TPunc '[' | not (tHasSpace pt) -> do
         -- Grab the arguments, then recurse.
         ref <- enclose '[' ']' pExpr
-        go $ Expr (_pos expr) $ DeRef expr ref
+        go' $ DeRef expr ref
       -- If there's an immediate parentheses, it's high-precedence application.
       TPunc '(' | not (tHasSpace pt) -> do
         arg <- pParens
-        go $ Expr (_pos expr) $ Apply expr arg
+        go' $ Apply expr arg
       TPunc '.' -> do
         dotfunc <- pPunc '.' *> pTerm
-        go $ Expr (_pos expr) $ Dot expr dotfunc
+        go' $ Dot expr dotfunc
+      TSymbol ".=" -> do
+        -- Symbol .= is a special case because it's syntactic sugar, not just
+        -- a function.
+        pSymbol ".="
+        fmap (Expr $ _pos expr) $ AssignDot expr <$> pChain <*> many pChain
       TSymbol _ -> do
         -- The level 8 operators are assignment operators (:=, +=, *=, etc).
         ops <- _level8ops <$> getState
@@ -386,7 +394,7 @@ pChain = pAttribute >>= go where
                       val <- pSymbol "=" *> pNeg
                       return (name, val)
         attrs <- pKeyword "with" *> commaSep1 attr
-        go $ Expr (_pos expr) $ With expr attrs
+        go' $ With expr attrs
       _ -> return expr
 
 -- | Parses function application. Lower precedence than dot or object ref.
@@ -401,7 +409,7 @@ pApply = pChain >>= parseRest where
 -- | Parses the negation operator (~)
 pNeg :: Parser Expr
 pNeg = item minus <|> pApply where
-  minus = pSymbol "~" >> Unary "~" <$> pApply
+  minus = pSymbol "~" >> Prefix "~" <$> pApply
 
 -- | Parses something in parentheses; a single expression or tuple.
 pParens :: Parser Expr

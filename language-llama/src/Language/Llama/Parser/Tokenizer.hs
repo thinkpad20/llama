@@ -302,6 +302,7 @@ tOneToken = lexeme $ item $ choice
   , tKeyword
   , tId
   , tNum
+  , tThisSymbol ".="
   , tThisSymbol "!"
   , tSymbol
   , tThisSymbol ".."
