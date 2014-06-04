@@ -22,6 +22,7 @@ data AbsExpr expr = Var          !Name
                   | Apply        !expr !expr
                   | Binary       !Name !expr !expr
                   | Prefix       !Name !expr
+                  | Postfix      !expr !Name
                   | Attribute    !expr !Name
                   | RefAttribute !expr !Name
                   | Lambda       !Name !expr
@@ -212,6 +213,7 @@ rndr isBlockStart e = case unExpr e of
   Apply e1 e2 -> rec' e1 <> " " <> rec' e2
   Binary op e1 e2 -> rec' e1 <> " " <> op <> " " <> rec' e2
   Prefix op e -> op <> rec' e
+  Postfix e op -> rec' e <> op
   Tuple es kws -> "(" <> es' <> kws' <> ")" where
     es' = if length es == 1 then rec (head es) <> ","
           else T.intercalate ", " (map rec es)

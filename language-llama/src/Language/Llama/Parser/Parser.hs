@@ -343,20 +343,13 @@ pConstrName = var >>= \(TId n) -> return n where
 
 -- | Using the backslash to dereference an attribute off of an object.
 pAttribute :: Parser Expr
-pAttribute = pReadRef >>= go where
+pAttribute = pTerm >>= go where
   go term = option term $ do
     pPunc '\\'
-    ref <- optionMaybe $ pSymbol "!"
     name <- pAnyIdent
     let term' = Attribute term name
         epos = Expr (_pos term)
-    case ref of
-      Nothing -> go $ epos term'
-      Just _ ->  go $ epos $ Prefix "!" $ epos term'
-
-pReadRef :: Parser Expr
-pReadRef = item bangs <|> pTerm where
-  bangs = pSymbol "!" >> Prefix "!" <$> pReadRef
+    go $ epos term'
 
 -- | Parses a term, possibly followed by a few things, such as: a dot,
 -- brackets without a space (object deref), parens without a space (high-
@@ -364,7 +357,10 @@ pReadRef = item bangs <|> pTerm where
 pChain :: Parser Expr
 pChain = pAttribute >>= go where
   go expr = option expr $ do
-    let go' = go . Expr (_pos expr)
+    let go' = go . mk
+        mk = Expr (_pos expr)
+        --objDeref = immediate $ go' =<< DeRef expr <$> enclose '[' ']' pExpr
+        --highApp = immediate $ go' =<< Apply expr <$> pParens
     lookAhead next >>= \pt -> case tToken pt of
       -- If there is an immediate square bracket, it's an object dereference.
       TPunc '[' | not (tHasSpace pt) -> do
@@ -378,6 +374,13 @@ pChain = pAttribute >>= go where
       TPunc '.' -> do
         dotfunc <- pPunc '.' *> pTerm
         go' $ Dot expr dotfunc
+      -- If there's an immediate symbol, it's either a postfix expression, or
+      -- it's a high-precedence binary operation (which would be another
+      -- immediate expression).
+      TSymbol _ | not (tHasSpace pt) -> do
+        op <- pAnySym
+        option (mk $ Postfix expr op) $ do
+          go' =<< Binary op expr <$> immediate pAttribute
       TSymbol ".=" -> do
         -- Symbol .= is a special case because it's syntactic sugar, not just
         -- a function.
@@ -391,7 +394,7 @@ pChain = pAttribute >>= go where
         Expr (_pos expr) . Binary op expr <$> pExpr
       TKeyword "with" -> do
         let attr = do name <- pAnyIdent
-                      val <- pSymbol "=" *> pNeg
+                      val <- pSymbol "=" *> pPrefixOp
                       return (name, val)
         attrs <- pKeyword "with" *> commaSep1 attr
         go' $ With expr attrs
@@ -406,10 +409,10 @@ pApply = pChain >>= parseRest where
     <|> return res   -- at some point the second parse will fail; then
                      -- return what we have so far
 
--- | Parses the negation operator (~)
-pNeg :: Parser Expr
-pNeg = item minus <|> pApply where
-  minus = pSymbol "~" >> Prefix "~" <$> pApply
+-- | Parses unary prefix operators.
+pPrefixOp :: Parser Expr
+pPrefixOp = item unary <|> pApply where
+  unary = try $ Prefix <$> pAnySym <*> immediate pApply
 
 -- | Parses something in parentheses; a single expression or tuple.
 pParens :: Parser Expr
@@ -453,7 +456,7 @@ pLevel5 = pLevel _level5ops pLevel6
 -- | Exponentiation operators.
 pLevel6 = pLevel _level6ops pLevel7
 -- | Function composition operators (~>, <~).
-pLevel7 = pLevel _level7ops pNeg
+pLevel7 = pLevel _level7ops pPrefixOp
 
 pLevel:: (ParserState -> [Text]) -> Parser Expr -> Parser Expr
 pLevel ops higher = do
@@ -497,6 +500,11 @@ satisfy f = satisfy' (f . tToken)
 
 satisfy' :: (PToken -> Bool) -> Parser (Token PToken)
 satisfy' f = grab (\pt -> if f pt then Just (tToken pt) else Nothing)
+
+-- | Satisfies if the parser succeeds AND the first token had no spaces.
+immediate :: Parser a -> Parser a
+immediate p = lookAhead next >>= \pt -> do
+  when (tHasSpace pt) (unexpected "Leading space") >> p
 
 -- | Grabs the next token regardless of what it is (besides EOF)
 next :: Parser PToken

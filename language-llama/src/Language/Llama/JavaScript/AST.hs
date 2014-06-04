@@ -158,3 +158,7 @@ indentation = 2
 
 throwNewError msg = Throw $ New $ Call (Var "Error") [String msg]
 
+str s = Call (Var "$str") [s]
+int i = Call (Var "$int") [i]
+func n f = Call (Var "$func") [n, f]
+throw exc = Call (Var "$throw") [exc]

@@ -58,6 +58,7 @@ traverse ds e | doTest ds e = doTransform ds e
   Apply e1 e2 -> Apply <$> rec e1 <*> rec e2
   Binary op e1 e2 -> Binary op <$> rec e1 <*> rec e2
   Prefix op e -> Prefix op <$> rec e
+  Postfix e op -> flip Postfix op <$> rec e
   Lambda arg body -> Lambda arg <$> recNS "%l" body
   Lambdas argsBodies -> Lambdas <$> mapM (recTupNS "%l") argsBodies
   Case expr patsBodies -> Case <$> recNS "%c" expr <*> mapM (recTupNS "%c") patsBodies
@@ -237,19 +238,23 @@ dsSymbols :: Desugarer
 dsSymbols = tup where
   tup = ("Prefix", test, ds)
   test (Prefix _ _) = True
+  test (Postfix _ _) = True
   test (Binary _ _ _) = True
   test (Var n) | isSymbol n = True
   test (Constructor n) | isSymbol n = True
   test _ = False
   rec = traverse tup
   ds e = mk e $ case unExpr e of
-    Prefix op expr -> Apply (DExpr (_orig e) $ Var $ toString op) <$> rec expr
+    Prefix op expr ->
+      Apply (DExpr (_orig e) $ Var $ toString "pre" op) <$> rec expr
+    Postfix expr op ->
+      Apply (DExpr (_orig e) $ Var $ toString "post" op) <$> rec expr
     Binary op a b -> do
-      let var = DExpr (_orig e) $ Var $ toString op
+      let var = DExpr (_orig e) $ Var $ toString "" op
       inner <- DExpr (_orig e) . Apply var <$> rec a
       Apply inner <$> rec b
-    Var n -> return $ Var $ toString n
-    Constructor n -> return $ Constructor $ toString n
+    Var n -> return $ Var $ toString "" n
+    Constructor n -> return $ Constructor $ toString "" n
 
 -- | Desugars a MultiCase (with one or more expressions per alternative) into
 -- a Case (with only one expression per alternative).
@@ -348,20 +353,23 @@ assertsAndDefs start expr = fst <$> runStateT (go start expr) ("", 0) where
           -- concatenate all of the assignments from the subcompilations
           mkAssigns list = foldl combine Nothing (P.snd <$> list)
 
-toString :: Text -> Text
-toString = \case
-  { ">" -> "$gt"; "<" -> "$lt"; "==" -> "$eq"; ">=" -> "$geq"; "<=" -> "$leq"
-  ; "~" -> "$neg"; "+" -> "$add"; "-" -> "$sub"; "*" -> "$mult"; "/" -> "$div"
-  ; "&&" -> "$and"; "||" -> "$or"; "^" -> "$pow"; "::" -> "$cons"
-  ; "<>" -> "$append"; "!" -> "$access"; "$" -> "$applyl"; "|>" -> "$applyr"
-  ; "~>" -> "$composer"; "<~" -> "$composel"
-  ; s -> unpack s ! map fromChar ! mconcat ! pack }
-  where
-    fromChar = \case
-      { '>' -> "$gt"; '<' -> "$lt"; '=' -> "$eq"; '~' -> "$tilde"
-      ; '+' -> "$plus"; '-' -> "$minus"; '*' -> "$star"; '/' -> "$fslash"
-      ; '\\' -> "$bslash"; '&' -> "$amp"; '|' -> "$pipe"; '!' -> "$bang"
-      ; '@' -> "$at"; ':' -> "$colon"}
+toString :: Text -> Text -> Text
+toString suffix sym = res <> suffix' where
+  suffix' = case suffix of
+    "" -> ""
+    _ -> "$" <> suffix
+  res = case sym of
+    { ">" -> "$gt"; "<" -> "$lt"; "==" -> "$eq"; ">=" -> "$geq"; "<=" -> "$leq"
+    ; "~" -> "$neg"; "+" -> "$add"; "-" -> "$sub"; "*" -> "$mult"
+    ; "/" -> "$div"; "&&" -> "$and"; "||" -> "$or"; "^" -> "$pow"
+    ; "::" -> "$cons"; "<>" -> "$append"; "!" -> "$access"; "$" -> "$applyl"
+    ; "|>" -> "$applyr"; "~>" -> "$composer"; "<~" -> "$composel"
+    ; s -> unpack s ! map fromChar ! mconcat ! pack }
+  fromChar = \case
+    { '>' -> "$gt"; '<' -> "$lt"; '=' -> "$eq"; '~' -> "$tilde"
+    ; '+' -> "$plus"; '-' -> "$minus"; '*' -> "$star"; '/' -> "$fslash"
+    ; '\\' -> "$bslash"; '&' -> "$amp"; '|' -> "$pipe"; '!' -> "$bang"
+    ; '@' -> "$at"; ':' -> "$colon"}
 
 -- | @unApply@ "unwinds" a series of applies into a list of
 -- expressions that are on the right side, paired with the
