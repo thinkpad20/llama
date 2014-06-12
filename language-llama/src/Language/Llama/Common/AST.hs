@@ -244,7 +244,7 @@ rndr isBlockStart e = case unExpr e of
   where
     rec = rndr isBlockStart
     rndrAlt (pats, res) = do
-      let pats' = T.intercalate ", " $ map (rndr True) pats
+      let pats' = T.intercalate " | " $ map (rndr True) pats
       pats' <> " -> " <> rndr True res
     rndrOneAlt (pat, res) = rndrAlt ([pat], res)
     rndrOneAlts alts = T.intercalate "; " $ map rndrOneAlt alts

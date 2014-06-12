@@ -12,6 +12,7 @@ module Language.Llama.Desugarer.Desugar where
 import qualified Prelude as P
 import qualified Data.Map as M
 import qualified Data.Set as S
+import qualified Data.Text as T
 import System.IO.Unsafe
 
 import Language.Llama.Common.Common
@@ -232,10 +233,9 @@ dsInString = ("Interpolated strings", test, ds) where
     _ -> DExpr (_orig e1) $ Binary "<>" e1 e2
   rec = traverse ("Interpolated strings", test, ds)
 
--- | Desugars binary and unary operators into variable applications of their
--- "readable" forms as given by @toString@.
-dsSymbols :: Desugarer
-dsSymbols = tup where
+-- | Desugars binary and unary operators into variable applications
+dsBinary :: Desugarer
+dsBinary = tup where
   tup = ("Prefix", test, ds)
   test (Prefix _ _) = True
   test (Postfix _ _) = True
@@ -246,14 +246,28 @@ dsSymbols = tup where
   rec = traverse tup
   ds e = mk e $ case unExpr e of
     Prefix op expr ->
-      Apply (DExpr (_orig e) $ Var $ toString "pre" op) <$> rec expr
+      Apply (DExpr (_orig e) $ Var $ op <> "_") <$> rec expr
     Postfix expr op ->
-      Apply (DExpr (_orig e) $ Var $ toString "post" op) <$> rec expr
+      Apply (DExpr (_orig e) $ Var $ "_" <> op) <$> rec expr
     Binary op a b -> do
-      let var = DExpr (_orig e) $ Var $ toString "" op
+      let var = DExpr (_orig e) $ Var op
       inner <- DExpr (_orig e) . Apply var <$> rec a
       Apply inner <$> rec b
     Var n -> return $ Var $ toString "" n
+    Constructor n -> return $ Constructor $ toString "" n
+
+-- | Translates symbol variables into their "readable" forms with @toString@.
+dsSymbols :: Desugarer
+dsSymbols = tup where
+  tup = ("Prefix", test, ds)
+  test (Var n) | isSymbol n = True
+  test (Constructor n) | isSymbol n = True
+  test _ = False
+  rec = traverse tup
+  ds e = mk e $ case unExpr e of
+    Var n | T.head n == '_' -> return $ Var $ toString "post" n
+          | T.last n == '_' -> return $ Var $ toString "pre" n
+          | otherwise -> return $ Var $ toString "" n
     Constructor n -> return $ Constructor $ toString "" n
 
 -- | Desugars a MultiCase (with one or more expressions per alternative) into
@@ -432,7 +446,8 @@ desugarers = [ dsAfterBefore
              --, dsForIn
              --, dsForever
              , dsInString
-             , dsSymbols
+             , dsBinary
+             --, dsSymbols
              , dsPatternDef
              , dsLambdas
              , dsMultiCase

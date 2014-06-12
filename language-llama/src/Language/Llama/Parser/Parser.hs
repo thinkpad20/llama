@@ -119,7 +119,7 @@ pCase = item $ MultiCase <$> expr <*> getAlts where
   expr = pKeyword "case" *> pExpr <* pKeyword "of"
   getAlts = pAnyBlockOf alt
   alt = do
-    exprs <- commaSep1 pSmallExpr
+    exprs <- pSmallExpr `sepBy1` pSymbol "|"
     result <- pSymbol "->" *> pExprOrBlock
     return (exprs, result)
 
