@@ -199,6 +199,16 @@ pTraitDec :: Parser Expr
 pTraitDec = unexpected "Trait declarations not yet implemented"
 
 ------------------------------------------------------------
+-------------------------  Types  --------------------------
+------------------------------------------------------------
+
+-- pType :: Parser Type
+-- pType = pTVar
+--
+-- pTVar :: Parser Type
+-- pTVar =
+
+------------------------------------------------------------
 -------------------------  Blocks  -------------------------
 ------------------------------------------------------------
 
@@ -296,6 +306,15 @@ pAnyIdent = satisfy go >>= return . unbox where
   go = \case {TId _ -> True; TKeyword _ -> True; _ -> False}
   unbox = \case {TId n -> n; TKeyword n -> n}
 
+pVarName, pConstrName, pTVarName :: Parser Name
+pVarName = var >>= \(TId n) -> return n where
+  var = satisfy $ \case {TId n | n!T.head!isUpper!not -> True; _ -> False}
+pConstrName = var >>= \(TId n) -> return n where
+  var = satisfy $ \case {TId n | n!T.head!isUpper -> True; _ -> False}
+pTVarName = var >>= \(TId n) -> return n where
+  test n = (n!T.head!isUpper!not) && (n!T.any isDigit!not)
+  var = satisfy $ \case {TId n | test n -> True; _ -> False}
+
 -- | Parses the exact symbol requested.
 pSymbol :: Name -> Parser Name
 pSymbol name = satisfy go >>= \case TSymbol n -> return n
@@ -334,12 +353,6 @@ pString = item $ str >>= go where
           setPosition pos'
           return $ InterpShow is1' expr is2'
   str = satisfy (\case {TStr _ -> True; TIStr _ -> True; _ -> False})
-
-pVarName, pConstrName :: Parser Name
-pVarName = var >>= \(TId n) -> return n where
-  var = satisfy $ \case {TId n | n!T.head!isUpper!not -> True; _ -> False}
-pConstrName = var >>= \(TId n) -> return n where
-  var = satisfy $ \case {TId n | n!T.head!isUpper -> True; _ -> False}
 
 -- | Using the backslash to dereference an attribute off of an object.
 pAttribute :: Parser Expr

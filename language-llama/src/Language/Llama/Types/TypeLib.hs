@@ -46,12 +46,12 @@ type TypeOf a = a -> Typing (Type, Subs)
 type TypeRecord = (Kind, [(Name, Type)])
 newtype NameSpace = NameSpace [Name] deriving P.Show
 type Attribute = ()
-data TypingState = TypingState { aliases :: M.Map Name Type
-                               , nameSpace :: NameSpace
-                               , typeEnv :: TypeEnv
-                               , purityEnv :: PurityEnv
+data TypingState = TypingState { aliases    :: M.Map Name Type
+                               , nameSpace  :: NameSpace
+                               , typeEnv    :: TypeEnv
+                               , purityEnv  :: PurityEnv
                                , knownTypes :: M.Map Name (Kind, [Attribute])
-                               , freshName :: Name } deriving (P.Show)
+                               , freshName  :: Name } deriving (P.Show)
 type Typing = ErrorT ErrorList (StateT TypingState IO)
 
 instance Monoid NameSpace where
@@ -104,20 +104,12 @@ instance Types Type where
   free typ = case typ of
     TVar name -> S.singleton name
     TConst _ -> mempty
-    TMod _ typ' -> free typ'
-    TTuple types _ -> free types
     TApply t1 t2 -> free t1 <> free t2
-    TFunction t1 t2 -> free t1 <> free t2
-    TMultiFunc tset -> free tset
 
   apply subs@(Subs s) typ = case typ of
     TConst _ -> typ
-    TMod mods typ' -> TMod mods $ apply subs typ'
     TVar name -> M.findWithDefault (TVar name) name s
-    TTuple ts kw -> TTuple (apply subs ts) kw
     TApply t1 t2 -> TApply (apply subs t1) (apply subs t2)
-    TFunction t1 t2 -> TFunction (apply subs t1) (apply subs t2)
-    TMultiFunc tset -> TMultiFunc $ apply subs tset
 
 instance Types Polytype where
   free (Polytype vars type_) = free type_ S.\\ (S.fromList vars)
@@ -125,8 +117,7 @@ instance Types Polytype where
     let subs' = foldr delete subs vars in
     Polytype vars (apply subs' type_)
 
-data Subs = Subs (M.Map Name Type)
-          deriving (P.Show, Eq)
+newtype Subs = Subs (M.Map Name Type) deriving (P.Show, Eq)
 
 instance Render Subs where
   render (Subs s) = render s
@@ -167,14 +158,6 @@ remove (TE env) var = TE (M.delete var env)
 addToEnv :: Name -> Polytype -> TypeEnv -> TypeEnv
 addToEnv n p (TE env) = TE (M.insert n p env)
 
-instance Monoid TypeEnv where
-  mempty = TE mempty
-  (TE a) `mappend` (TE b) = TE (a <> b)
-
-instance Monoid Polytype where
-  mempty = Polytype [] mempty
-  Polytype vars t `mappend` Polytype vars' t' = Polytype (vars <> vars') (t <> t')
-
 boolT, numT, strT, charT, unitT :: Type
 arrayOf, listOf, setOf, maybeT :: Type -> Type
 tTuple :: [Type] -> Type
@@ -191,38 +174,40 @@ arrayOf = TApply (TConst "[]")
 listOf = TApply (TConst "[!]")
 setOf = TApply (TConst "{s}")
 maybeT = TApply (TConst "Maybe")
-tTuple ts = TTuple ts mempty
+tTuple ts = do
+  let name = "Tuple(" <> render (length ts) <> ")"
+  foldl' TApply (TConst name) ts
 tConst = TConst
 mapOf (key, val) = TApply (TApply (TConst "{}") key) val
-(==>) = TFunction
+t1 ==> t2 = TApply (TApply (TConst "=>") t1) t2
 infixr 4 ==>
 
 
 builtIns :: TypeEnv
-builtIns =
-  TE $ M.fromList [ ("+", p nnn), ("-", p nnn), ("/", p nnn), ("<>", p sss)
-                  , ("*", p nnn), ("%", p nnn), (">", p nnb), ("<", p nnb)
-                  , (">=", p nnb), ("<=", p nnb), ("==", p nnb), ("!=", p nnb)
-                  , ("<|", pab $ tup ab a b), ("|>", pab $ tup a ab b)
-                  , ("~>", pabc $ tup ab bc ac), ("<~", pabc $ tup bc ab ac)
-                  , ("println", pa $ a ==> unitT)
-                  , ("show", p $ (numT ==> strT) <> (strT ==> strT))
-                  , ("length", pa $ (strT ==> numT) <> (arrayOf a ==> numT))
-                  , ("Just", pa $ a ==> maybeT a)
-                  , ("Nothing", pa $ maybeT a)
-                  , ("@call", p $ nnn <> sss <> vna)
-                  , ("True", p boolT), ("False", p boolT)]
-  where tup x y z = x ==> y ==> z
-        nnn = tup numT numT numT
-        sss = tup strT strT strT
-        vna = tup (arrayOf a) numT a
-        p = Polytype []
-        pa = Polytype ["a"]
-        pab = Polytype ["a", "b"]
-        pabc = Polytype ["a", "b", "c"]
-        nnb = tup numT numT boolT
-        [a, b, c] = TVar <$> ["a", "b", "c"]
-        (ab, bc, ac) = (a ==> b, b ==> c, a ==> c)
+builtIns = P.undefined
+  -- TE $ M.fromList [ ("+", p nnn), ("-", p nnn), ("/", p nnn), ("<>", p sss)
+  --                 , ("*", p nnn), ("%", p nnn), (">", p nnb), ("<", p nnb)
+  --                 , (">=", p nnb), ("<=", p nnb), ("==", p nnb), ("!=", p nnb)
+  --                 , ("<|", pab $ tup ab a b), ("|>", pab $ tup a ab b)
+  --                 , ("~>", pabc $ tup ab bc ac), ("<~", pabc $ tup bc ab ac)
+  --                 , ("println", pa $ a ==> unitT)
+  --                 , ("show", p $ (numT ==> strT) <> (strT ==> strT))
+  --                 , ("length", pa $ (strT ==> numT) <> (arrayOf a ==> numT))
+  --                 , ("Just", pa $ a ==> maybeT a)
+  --                 , ("Nothing", pa $ maybeT a)
+  --                 , ("@call", p $ nnn <> sss <> vna)
+  --                 , ("True", p boolT), ("False", p boolT)]
+  -- where tup x y z = x ==> y ==> z
+  --       nnn = tup numT numT numT
+  --       sss = tup strT strT strT
+  --       vna = tup (arrayOf a) numT a
+  --       p = Polytype []
+  --       pa = Polytype ["a"]
+  --       pab = Polytype ["a", "b"]
+  --       pabc = Polytype ["a", "b", "c"]
+  --       nnb = tup numT numT boolT
+  --       [a, b, c] = TVar <$> ["a", "b", "c"]
+  --       (ab, bc, ac) = (a ==> b, b ==> c, a ==> c)
 
 builtInPurities :: PurityEnv
 builtInPurities = M.fromList [ ("+", PTPure), ("-", PTPure), ("/", PTPure), ("*", PTPure)
@@ -247,13 +232,7 @@ normalize t = evalState (go t) ("a", mempty) where
                       return (TVar name')
         Just n -> return (TVar n)
     TApply a b -> TApply <$> go a <*> go b
-    TFunction a b -> TFunction <$> go a <*> go b
-    TTuple ts _ -> tTuple <$> mapM go ts
     TConst _ -> return type_
-    TMultiFunc set -> do
-      let pairs = M.toList set
-      pairs' <- forM pairs $ \(from, to) -> (,) <$> go from <*> go to
-      return $ TMultiFunc (M.fromList pairs')
   next name = case T.last name of
     c | c < 'z' -> T.init name `T.snoc` succ c
       | True    -> name `T.snoc` 'a'

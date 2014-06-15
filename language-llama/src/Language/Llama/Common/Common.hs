@@ -50,7 +50,7 @@ import "mtl" Control.Monad.State.Strict (MonadState(..), State(..)
                                         , StateT(..), MonadTrans(..)
                                         , modify, execState, evalState, lift)
 import "mtl" Control.Monad.Writer (MonadWriter(..), WriterT(..))
-import Data.Char (isSpace, isUpper)
+import Data.Char (isSpace, isUpper, isDigit)
 import Data.Foldable
 import Data.HashMap.Strict hiding (map, (!), toList, fromList, empty
                                   , filter, foldr, foldl', null, adjust

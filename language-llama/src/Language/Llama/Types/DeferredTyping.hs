@@ -97,3 +97,29 @@ testString input = case typeIt input of
   Right (env, _type) -> do
     let s = render env <> " " <> render _type
     putStrLn $ unpack $ s
+
+-- | Returns if the two types can be unified.
+cbu :: Type -> Type -> TypeChecker Bool
+cbu t1 t2 = (unify t1 t2 >> return True) `catchError` \_ -> return False
+
+-- | Binds a name to a type, as long as it's not an infinite type.
+bind :: Name -> Type -> TypeChecker Subs
+bind name typ = case typ of
+  TVar n | n == name -> return mempty
+  _ -> if name `S.member` free typ then occursCheck
+       else return (Subs $ M.singleton name typ)
+  where occursCheck = throwErrorC ["Occurs check"]
+
+-- findCbu :: Env -> Name ->
+
+unify :: Type -> Type -> TypeChecker Subs
+unify t1 t2 = case (t1, t2) of
+  (TVar name, typ) -> bind name typ
+  (typ, TVar name) -> bind name typ
+  (TConst n, TConst n') | n == n' -> return mempty
+  (TApply a b, TApply a' b') -> do
+    subs1 <- unify a a'
+    subs2 <- unify (apply subs1 b) (apply subs1 b')
+    return (subs1 <> subs2)
+  (type1, type2) -> throwErrorC $ [ "Incompatible types: `", render type1
+                                  , "' and `", render type2, "'"]

@@ -298,45 +298,18 @@ instance Render e => Render (InString e) where
 type TKwargs = [(Name, Type)]
 data Type = TVar       !Name
           | TConst     !Name
-          | TTuple     ![Type] !TKwargs
           | TApply     !Type !Type
-          | TFunction  !Type !Type
-          | TMod       !Text !Type
-          | TMultiFunc !TypeMap
           deriving (P.Show, Eq, Ord)
 
-type TypeMap = M.Map Type Type
-
 instance Render Type where
-   render t = case t of
-     TVar name -> name
-     TConst name -> name
-     TTuple ts _ -> "(" <> T.intercalate ", " (map render ts) <> ")"
-     TApply (TConst "[]") typ -> "[" <> render typ <> "]"
-     TApply (TConst "[!]") typ -> "[!" <> render typ <> "]"
-     TApply a b -> render a <> " " <> render' b
-     TFunction t1 t2 -> render'' t1 <> " -> " <> render t2
-     TMod modi typ -> modi <> " " <> render typ
-     TMultiFunc tset -> "{" <> renderSet tset <> "}"
-     where render' typ = case typ of
-             TApply _ _ -> "(" <> render typ <> ")"
-             _ -> render typ
-           render'' typ = case typ of
-             TFunction _ _ -> "(" <> render typ <> ")"
-             _ -> render typ
-           renderSet tset = do
-             let pairs = M.toList tset
-                 rPair (from, to) = render from <> " -> " <> render to
-             T.intercalate ", " (map rPair pairs)
-
-instance Monoid Type where
-  mempty = TMultiFunc mempty
-  TMultiFunc s `mappend` TMultiFunc s' = TMultiFunc $ M.union s s'
-  TMultiFunc s `mappend` TFunction from to = TMultiFunc $ M.insert from to s
-  TFunction from to `mappend` TMultiFunc s = TMultiFunc $ M.insert from to s
-  TFunction f1 t1 `mappend` TFunction f2 t2 =
-    TMultiFunc $ M.fromList [(f1, t1), (f2, t2)]
-  t1 `mappend` t2 = P.error $ "Invalid <>s: " <> P.show t1 <> ", " <> P.show t2
+  render t = case t of
+    TVar name -> name
+    TConst name -> name
+    TApply (TApply (TConst "->") a) b -> render a <> " -> " <> render b
+    TApply a b -> render a <> " " <> render' b
+    where render' typ = case typ of
+            TApply _ _ -> "(" <> render typ <> ")"
+            _ -> render typ
 
 symChars :: String
 symChars = "><=+-*/^~!%&$:#|?"

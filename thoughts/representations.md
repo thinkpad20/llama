@@ -18,14 +18,22 @@ type PolyValue =
       f: Int -> Int = (+ 1)
   Here `f` contains the values 1 and (x -> x + 1).
   Examples of Stubs:
-      x = 1
-      show
+      x = 2
+
   `x` is a stub because it could be anything which can be written as an int
-  literal. So it could be an int, a float, a nat, etc.
+  literal. So it could be an int, a float, a nat, etc. So the representation of
+  `x` is Stub (t -> fromint 1 : t)
+  `show` is a stub because its representation depends on a type.
+  `show: Int -> Str` is different than
   In either case, we can extract values from PolyValues using `:`.
+      assert (f: Int == 1)
+      assert (f f == 2)
+      assert (x: Int == 2)
+      assert (f x == 3)
   |#
-  ValueSet {Value}
-  Stub (Value -> Value) Value
+  ValueSet {Type=>Value}
+  PolyFunc (Type -> Value -> Value)
+  Stub (Type -> Value)
 
 x = 1 # x is the numeral 1, which is something which implements Intlit
       # so x = {1: Int, 1.0: Float}
