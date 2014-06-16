@@ -9,6 +9,8 @@ module Language.Llama.Common.AST where
 import qualified Prelude as P
 import qualified Data.Map as M
 import qualified Data.Text as T
+import Data.Set (Set, singleton, (\\))
+import qualified Data.Set as S
 
 import Language.Llama.Common.Common
 
@@ -141,60 +143,7 @@ instance Render e => Render (Kwarg e) where
     e' = case e of Nothing -> ""
                    Just ex -> "=" <> render ex
 
-instance (IsExpr e, Eq e, Render e) => Render (AbsExpr e) -- where
-  --render e = case e of
-  --  Var name -> name
-  --  Constructor name -> name
-  --  Number n | isInt n -> render (floor n :: Int)
-  --  Number n -> render n
-  --  String s -> render s
-  --  InString istr -> render istr
-  --  a `Then` b -> rec a <> "; " <> rec b
-  --  Dot e1 e2 -> rec' e1 <> "." <> rec' e2
-  --  After e1 e2 -> rec e1 <> " after " <> rec e2
-  --  Apply e1 e2 -> rec' e1 <> " " <> rec' e2
-  --  Binary op e1 e2 -> rec' e1 <> " " <> op <> " " <> rec' e2
-  --  Prefix op e -> op <> rec' e
-  --  Tuple es kws -> "(" <> es' <> kws' <> ")" where
-  --    es' = if length es == 1 then rec (head es) <> ","
-  --          else T.intercalate ", " (map rec es)
-  --    kws' = if length kws == 0 then ""
-  --           else "; " <> T.intercalate ", " (map render kws)
-  --  Lambda a b -> rec' a <> " -> " <> rec b
-  --  DeRef e1 e2 -> rec e1 <> "[" <> rec e2 <> "]"
-  --  PatternDef e1 e2 -> rec e1 <> " = " <> rec e2
-  --  Define name e -> name <> " = " <> rec e
-  --  Assign e1 e2 -> rec e1 <> " := " <> rec e2
-  --  Attribute e name -> rec' e <> "\\" <> name
-  --  If cond t f -> _if "if" cond <> _thenelse t f
-  --  Unless cond t f -> _if "unless" cond <> _thenelse t f
-  --  PostIf e cond els -> rec' e <> " " <> _if "if" cond <> _else els
-  --  PostUnless e cond els -> rec' e <> " " <> _if "unless" cond <> _else els
-  --  Modified m e -> m <> " " <> rec e
-  --  For for e -> case unExpr e of
-  --    Block _ -> render for <> " " <> rec e
-  --    _ -> render for <> " do " <> rec e
-  --  PatAssert pa -> render pa
-  --  Throw e -> "throw " <> render e
-  --  GetAttrib "" i e -> render e <> "\\" <> render i
-  --  GetAttrib name i e -> render e <> "{" <> name <> "}\\" <> render i
-  --  _ -> show e
-  --  where
-  --    rec = render
-  --    _if kw c = kw <> " " <> rec c
-  --    _thenelse t f = t' <> _else f where
-  --      t' = case unExpr t of Block _ -> " " <> rec t
-  --                            _ -> " then " <> rec t
-  --    _else f = case f of {Nothing -> ""; Just e -> " else " <> rec e}
-  --    -- | Wraps any non-primitive expressions in quotes.
-  --    rec' expr = case unExpr expr of
-  --      Var _ -> rec expr
-  --      Constructor _ -> rec expr
-  --      Number _ -> rec expr
-  --      String _ -> rec expr
-  --      InString _ -> rec expr
-  --      Tuple _ _ -> rec expr
-  --      _ -> "(" <> rec expr <> ")"
+instance (IsExpr e, Eq e, Render e) => Render (AbsExpr e)
 
 rndr :: (IsExpr e, Render e) => Bool -> e -> Text
 rndr isBlockStart e = case unExpr e of
@@ -295,21 +244,48 @@ instance Render e => Render (InString e) where
     let e' = render e
     "\"" <> i1' <> "#{" <> e' <> "}" <> i2' <> "\""
 
-type TKwargs = [(Name, Type)]
-data Type = TVar       !Name
-          | TConst     !Name
-          | TApply     !Type !Type
-          deriving (P.Show, Eq, Ord)
+data BaseType
+  = TVar Name
+  | TConst Name
+  | TApply BaseType BaseType
+  deriving (P.Show, Eq, Ord)
+type Map = HashMap
+data Assertion = Satisfies Name [BaseType] deriving (P.Show, Eq, Ord)
+newtype Context = Context (Set Assertion) deriving (P.Show, Eq)
+data Type = Type Context BaseType deriving (P.Show, Eq)
+data Polytype = Polytype (Set Name) Type deriving (P.Show, Eq)
 
-instance Render Type where
+instance Monoid Context where
+  mempty = Context mempty
+  mappend (Context c1) (Context c2) = Context (mappend c1 c2)
+
+instance IsString BaseType where fromString = TConst . pack
+instance IsString Type where fromString = Type mempty . fromString
+instance IsString Polytype where fromString = Polytype mempty . fromString
+
+instance Render BaseType where
   render t = case t of
     TVar name -> name
+    TApply (TApply "->" t1) t2 -> render'' t1 <> " -> " <> render t2
     TConst name -> name
-    TApply (TApply (TConst "->") a) b -> render a <> " -> " <> render b
-    TApply a b -> render a <> " " <> render' b
-    where render' typ = case typ of
-            TApply _ _ -> "(" <> render typ <> ")"
-            _ -> render typ
+    TApply t1 t2 -> render' t1 <> " " <> render' t2
+    where render' t@(TApply _ _ ) = "(" <> render t <> ")"
+          render' t = render t
+          render'' t@(TApply (TApply "->" t1) t2) = "(" <> render t <> ")"
+          render'' t = render t
+
+instance Render Assertion where
+  render (Satisfies name ts) =
+    name <> " " <> T.intercalate " " (fmap render ts)
+
+instance Render Context where
+  render (Context ctx) | S.size ctx == 1 = rndr
+                       | otherwise = "{" <> rndr <> "}"
+    where rndr = T.intercalate ", " . fmap render . toList $ ctx
+
+instance Render Type where
+  render (Type ctx t) | ctx == mempty = render t
+                      | otherwise = render ctx <> ". " <> render t
 
 symChars :: String
 symChars = "><=+-*/^~!%&$:#|?"

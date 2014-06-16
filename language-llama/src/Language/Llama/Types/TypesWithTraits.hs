@@ -5,58 +5,65 @@ module Language.Llama.Types.TypesWithTraits where
 import qualified Prelude as P
 import Prelude (Show)
 import Data.Set (Set, singleton, (\\))
-import qualified Data.HashMap.Strict as H
 import qualified Data.Set as S
+import qualified Data.HashMap.Strict as H
 import qualified Data.Text as T
 import Language.Llama.Common.Common hiding (singleton)
-data BaseType
-  = TVar Name
-  | TConst Name
-  | TApply BaseType BaseType
-  deriving (Show, Eq, Ord)
-type Map = HashMap
-data Trait = Trait Name [BaseType] deriving (Show, Eq, Ord)
-newtype Context = Context (Set Trait) deriving (Show, Eq)
-data Type = Type Context BaseType deriving (Show, Eq)
-data Polytype = Polytype (Set Name) Type deriving (Show, Eq)
-newtype Substitution = Substitution (Map Name BaseType)
+import Language.Llama.Common.AST
+import Language.Llama.Desugarer.Desugar hiding (testString)
+
 type TypeMap = Map Name Polytype
 type TraitMap = Map Name (Set [BaseType])
 newtype TypeEnv = TypeEnv [(TypeMap, TraitMap)] deriving (Show, Eq)
-
-type TCState = ()
+newtype Substitution = Substitution (Map Name BaseType) deriving (Show)
+data TCState = TCState {_count :: Int, _env :: TypeEnv}
 type TypeChecker = ErrorT ErrorList (State TCState)
 
-instance Monoid Context where
-  mempty = Context mempty
-  mappend (Context c1) (Context c2) = Context (mappend c1 c2)
+class Normalize t where
+  normalize :: t -> t
+  normalize = normalizeWith ("a", mempty)
+  normalizeWith :: (Text, HashMap Name Name) -> t -> t
+
+normalizeLoop :: BaseType -> State (Text, HashMap Name Name) BaseType
+normalizeLoop type_ = case type_ of
+  TVar name -> do
+    (name', mapping) <- get
+    case H.lookup name mapping of
+      Nothing -> do modify (\(n, m) -> (next n, H.insert name name' m))
+                    return (TVar name')
+      Just n -> return (TVar n)
+  TApply a b -> TApply <$> normalizeLoop a <*> normalizeLoop b
+  _ -> return type_
+  where
+    next name = case T.last name of
+      c | c < 'z' -> T.init name `T.snoc` succ c
+        | True    -> name `T.snoc` 'a'
+
+instance Normalize BaseType where
+  normalizeWith state t = evalState (normalizeLoop t) state
+
+instance Normalize Type where
+  normalizeWith state (Type ctx t) = Type ctx' t' where
+    (ctx', state') = runState (go ctx) state
+    t' = normalizeWith state' t
+    go :: Context -> State (Text, HashMap Name Name) Context
+    go (Context ctx) = do
+      let asserts = S.toList ctx
+      asserts' <- forM asserts $ \(Satisfies n ts) ->
+        Satisfies n <$> mapM normalizeLoop ts
+      return (Context $ S.fromList asserts')
 
 instance Monoid Substitution where
   mempty = Substitution mempty
   mappend s@(Substitution s1) (Substitution s2) =
     Substitution (fmap (substitute s) s2 <> s1)
 
-instance IsString BaseType where fromString = TConst . pack
-instance IsString Type where fromString = Type mempty . fromString
-instance IsString Polytype where fromString = Polytype mempty . fromString
-
-instance Render BaseType where
-  render t = case t of
-    TVar name -> name
-    TApply (TApply "->" t1) t2 -> render'' t1 <> " -> " <> render t2
-    TConst name -> name
-    TApply t1 t2 -> render' t1 <> " " <> render' t2
-    where render' t@(TApply _ _ ) = "(" <> render t <> ")"
-          render' t = render t
-          render'' t@(TApply (TApply "->" t1) t2) = "(" <> render t <> ")"
-          render'' t = render t
-
-class IsString a => Apply a where apply :: a -> a -> a
-instance Apply BaseType where
+class CanApply a where apply :: a -> a -> a
+instance CanApply BaseType where
   apply = TApply
-instance Apply Type where
+instance CanApply Type where
   apply (Type ctx1 t1) (Type ctx2 t2) = Type (ctx1 <> ctx2) (apply t1 t2)
-instance Apply Polytype where
+instance CanApply Polytype where
   apply (Polytype vs1 t1) (Polytype vs2 t2) =
     Polytype (vs1 <> vs2) (apply t1 t2)
 
@@ -66,14 +73,16 @@ instance FreeVars BaseType where
     TVar n -> singleton n
     TConst _ -> mempty
     TApply t1 t2 -> freevars t1 <> freevars t2
-instance FreeVars Trait where
-  freevars (Trait _ types) = freevars types
+instance FreeVars Assertion where
+  freevars (Satisfies _ types) = freevars types
 instance FreeVars Context where
   freevars (Context ctx) = freevars $ toList ctx
 instance FreeVars Type where
   freevars (Type ctx t) = freevars ctx <> freevars t
 instance FreeVars Polytype where
   freevars (Polytype vars t) = freevars t \\ vars
+instance FreeVars TypeEnv where
+  freevars (TypeEnv env) = mconcat $ fmap (freevars . H.elems . fst) env
 instance FreeVars a => FreeVars [a] where
   freevars = mconcat . fmap freevars
 
@@ -83,8 +92,8 @@ instance Substitutable BaseType where
     TVar n | member n s -> s H.! n
     TApply t1 t2 -> TApply (substitute subs t1) (substitute subs t2)
     _ -> t
-instance Substitutable Trait where
-  substitute subs (Trait n ts) = Trait n $ fmap (substitute subs) ts
+instance Substitutable Assertion where
+  substitute subs (Satisfies n ts) = Satisfies n $ fmap (substitute subs) ts
 instance Substitutable Context where
   substitute subs (Context ctx) = Context $ S.map (substitute subs) ctx
 instance Substitutable Type where
@@ -92,41 +101,33 @@ instance Substitutable Type where
 instance Substitutable Polytype where
   substitute subs (Polytype vars t) = (Polytype vars (s t)) where
     s = substitute (S.foldr' remove subs vars)
+instance Substitutable TypeEnv where
+  substitute subs (TypeEnv te) = TypeEnv $ fmap go te where
+    go (tymap, trmap) = (fmap (substitute subs) tymap, trmap)
 
-teLookup :: Name -> TypeEnv -> Maybe Polytype
-teLookup name (TypeEnv env) = go (fmap fst env) where
-  go [] = Nothing
-  go (e:rest) = case lookup name e of
-    Nothing -> go rest
-    Just pt -> return pt
+generalize :: Type -> TypeChecker Polytype
+generalize _type@(Type ctx t) = do
+  freeFromEnv <- freevars . _env <$> get
+  return $ Polytype ((freevars t <> freevars ctx) \\ freeFromEnv) _type
 
-lookup1 :: Name -> TypeEnv -> Maybe Polytype
-lookup1 name (TypeEnv []) = Nothing
-lookup1 name (TypeEnv ((e, _):_)) = H.lookup name e
-
-generalize :: Type -> Polytype
-generalize (Type ctx t) = do
-  let freeFromT = freevars t
-      freeFromCtx = freevars ctx
-  Polytype (freeFromT \\ freeFromCtx) (Type ctx t)
+oneSub :: Name -> BaseType -> Substitution
+oneSub n = Substitution . H.singleton n
 
 -- | Takes and returns an integer to denote where to begin renaming from.
-instantiate :: Int -> Polytype -> (Type, Int)
-instantiate n (Polytype vars t) = go nsVars t where
-  nsVars = P.zip [n..] (toList vars)
-  sub var num = Substitution $ H.singleton var (TVar $ "t" <> render num)
-  go [] _ = (t, n)
-  go [(num, var)] type_ = (substitute (sub var num) type_, num + 1)
-  go ((num, var):rest) type_ = do
-    go rest (substitute (sub var num) type_)
+instantiate :: Polytype -> TypeChecker Type
+instantiate (Polytype vars t) = do
+  -- Make a substitution from all variables owned by this polytype
+  sub <- fmap mconcat $ forM (toList vars) $ \v -> oneSub v <$> newvar
+  -- Apply the subtitution to the owned type
+  return $ substitute sub t
 
 remove :: Name -> Substitution -> Substitution
 remove n (Substitution s) = Substitution (delete n s)
 
-(==>) :: Apply a => a -> a -> a
+(==>) :: (IsString a, CanApply a) => a -> a -> a
 t1 ==> t2 = apply (apply "->" t1) t2
 
-tuple :: Apply a => [a] -> a
+tuple :: (IsString a, CanApply a) => [a] -> a
 tuple ts = do
   let name = "Tuple(" <> P.show (length ts) <> ")"
   foldl' apply (fromString name) ts
@@ -142,14 +143,16 @@ unify t1 t2 = case (t1, t2) of
     return (s1 <> s2)
   (_, _) -> throwErrorC ["Can't unify ", render t1, " and ", render t2]
 
-checkContext :: TypeEnv -> Context -> TypeChecker ()
-checkContext (TypeEnv env) (Context ctx) = mapM_ check ctx where
-  check :: Trait -> TypeChecker ()
-  check (Trait name ts) =
+checkContext :: Context -> TypeChecker Context
+checkContext c@(Context ctx) = mapM_ check ctx *> pure c where
+  check :: Assertion -> TypeChecker ()
+  check (Satisfies name ts) =
     -- If there are any free variables, we assume it's valid
     if not (S.null $ freevars ts) then return ()
     -- Otherwise, make sure it's in the TraitMap
-    else search (fmap snd env)
+    else do
+      TypeEnv env <- _env <$> get
+      search (fmap snd env)
     where
       search [] = throwError1 $ "No instance of " <> whatsMissing
       search (tmap:rest) = case lookup name tmap of
@@ -160,3 +163,108 @@ checkContext (TypeEnv env) (Context ctx) = mapM_ check ctx where
         [t] -> name <> " for type " <> render t
         ts -> name <> " for types " <> commaSep ts
       commaSep = T.intercalate ", " . map render
+
+newvar :: TypeChecker BaseType
+newvar = do
+  i <- _count <$> get
+  modify $ \s -> s {_count = i + 1}
+  return $ TVar $ "$t" <> render i
+
+
+
+teLookup :: Name -> TypeChecker (Maybe Polytype)
+teLookup name = do
+  TypeEnv env <- _env <$> get
+  go (fmap fst env) where
+    go [] = return Nothing
+    go (e:rest) = case lookup name e of
+      Nothing -> go rest
+      Just pt -> return $ Just pt
+
+teLookup1 :: Name -> TypeEnv -> Maybe Polytype
+teLookup1 name (TypeEnv []) = Nothing
+teLookup1 name (TypeEnv ((e, _):_)) = H.lookup name e
+
+teStore :: Name -> Polytype -> TypeChecker ()
+teStore name ptype = do
+  TypeEnv ((te, tr):rest) <- _env <$> get
+  modify $ \s -> s {_env = TypeEnv $ (H.insert name ptype te, tr):rest}
+
+substituteEnv :: Substitution -> TypeChecker ()
+substituteEnv subs = do
+  env <- _env <$> get
+  modify $ \s -> s {_env = substitute subs env}
+
+pushTypeMap :: TypeMap -> TypeEnv -> TypeEnv
+pushTypeMap tmap (TypeEnv env) = TypeEnv $ (tmap, mempty) : env
+
+popTE :: TypeEnv -> TypeEnv
+popTE (TypeEnv (_:env)) = TypeEnv env
+
+withContext :: Name -> Type -> TypeChecker a -> TypeChecker a
+withContext name _type action = do
+  let tmap = H.singleton name (Polytype mempty _type)
+  modify $ \s -> s {_env = pushTypeMap tmap $ _env s}
+  result <- action
+  modify $ \s -> s {_env = popTE $ _env s}
+  return result
+
+typeof :: (Render e, IsExpr e) => e -> TypeChecker (Substitution, Type)
+typeof expr = case unExpr expr of
+  Var name -> teLookup name >>= \case
+    Nothing -> throwErrorC ["Unknown identifier '", name, "'"]
+    Just pt -> only =<< instantiate pt
+  Constructor name -> teLookup name >>= \case
+    Nothing -> throwErrorC ["Unknown constructor '", name, "'"]
+    Just pt -> only =<< instantiate pt
+  Define name expr -> do
+    (subs, t) <- typeof expr
+    teStore name =<< generalize (substitute subs t)
+    return (subs, substitute subs t)
+  Number _ -> only "Number"
+  String _ -> only "String"
+  Then e1 e2 -> do
+    (s1, _) <- typeof e1
+    (s2, t2) <- substituteEnv s1 >> typeof e2
+    return (s1 <> s2, t2)
+  Lambda param body -> do
+    paramT <- Type mempty <$> newvar
+    (bodyS, bodyT) <- withContext param paramT $ typeof body
+    return (bodyS, substitute bodyS (paramT ==> bodyT))
+  Apply e1 e2 -> do
+    (subs1, Type ctx1 t1) <- typeof e1
+    (subs2, Type ctx2 t2) <- substituteEnv subs1 >> typeof e2
+    tResult <- newvar
+    subs3 <- unify t1 (t2 ==> tResult)
+    ctx' <- checkContext $ substitute subs3 (ctx1 <> ctx2)
+    return (subs1 <> subs2 <> subs3, Type ctx' $ substitute subs3 tResult)
+  _ -> throwErrorC ["Can't type expression ", render expr]
+  where only t = return $ (mempty, t)
+
+initState :: TCState
+initState = TCState {_count = 0, _env = initTypeEnv} where
+  initTypeMap = H.fromList [("Z", "Nat"), ("S", "Nat" ==> "Nat"),
+                            ("+", "Nat" ==> "Nat" ==> "Nat")]
+  initTraitMap = mempty
+  initTypeEnv = TypeEnv [(initTypeMap, initTraitMap)]
+
+runTyping :: TypeChecker a -> Either ErrorList a
+runTyping = flip evalState initState . runErrorT
+
+typeExpr :: (Render e, IsExpr e) => e -> Either ErrorList (Substitution, Type)
+typeExpr = runTyping . typeof
+
+typeIt' :: String -> Either ErrorList (Substitution, Type)
+typeIt' input = case desugarIt input of
+  Left err -> Left err
+  Right expr -> typeExpr expr
+
+typeIt :: String -> Either ErrorList Type
+typeIt input = case desugarIt input of
+  Left err -> Left err
+  Right expr -> fmap (normalize . snd) $ typeExpr expr
+
+testString :: String -> IO ()
+testString input = case typeIt input of
+  Left err -> error $ P.show err
+  Right _type -> putStrLn $ unpack $ render _type

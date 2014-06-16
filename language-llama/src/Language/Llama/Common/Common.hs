@@ -48,7 +48,8 @@ import "mtl" Control.Monad.Identity (Identity(..))
 import "mtl" Control.Monad.Trans (liftIO)
 import "mtl" Control.Monad.State.Strict (MonadState(..), State(..)
                                         , StateT(..), MonadTrans(..)
-                                        , modify, execState, evalState, lift)
+                                        , modify, execState, evalState
+                                        , runState, lift)
 import "mtl" Control.Monad.Writer (MonadWriter(..), WriterT(..))
 import Data.Char (isSpace, isUpper, isDigit)
 import Data.Foldable

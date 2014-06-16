@@ -17,15 +17,27 @@ import System.IO.Unsafe
 
 import Language.Llama.Common.Common
 import Language.Llama.Common.AST
-import Language.Llama.Types.TypeLib hiding (log, log')
+--import Language.Llama.Types.TypeLib hiding (log, log')
 import Language.Llama.Parser.Parser
 
 data DExpr = DExpr {_orig :: Expr, _dsrd :: AbsExpr DExpr}
            deriving (P.Show, Eq)
 
+newtype NameSpace = NameSpace [Name] deriving P.Show
+
+instance Monoid NameSpace where
+  mempty = NameSpace mempty
+  (NameSpace ns) `mappend` (NameSpace ns') = NameSpace (ns <> ns')
+
+(+:) :: Name -> NameSpace -> NameSpace
+name +: (NameSpace ns) = NameSpace (name : ns)
+
+nsTail :: NameSpace -> NameSpace
+nsTail (NameSpace ns) = NameSpace (tail ns)
+
 data DesugarerEnv = DesugarerEnv
   { dsNameSpace :: NameSpace
-  , dsConstructors :: M.Map Name Type
+  , dsConstructors :: M.Map Name ()
   , dsNamesInUse :: [S.Set Name] }
 
 type Desugar = ErrorT ErrorList (StateT DesugarerEnv IO)
