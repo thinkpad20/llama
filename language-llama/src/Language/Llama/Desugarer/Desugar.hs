@@ -64,6 +64,7 @@ traverse ds e | doTest ds e = doTransform ds e
               | otherwise = mk $ case unExpr e of
   Var n -> pure $ Var n
   Number n -> pure $ Number n
+  Int n -> pure $ Int n
   String s -> pure $ String s
   Constructor c -> pure $ Constructor c
   Continue -> pure Continue
@@ -263,7 +264,7 @@ dsBinary = tup where
     Postfix expr op ->
       Apply (DExpr (_orig e) $ Var $ "_" <> op) <$> rec expr
     Binary op a b -> do
-      let var = DExpr (_orig e) $ Var op
+      let var = DExpr (_orig e) $ Var $ "_" <> op <> "_"
       inner <- DExpr (_orig e) . Apply var <$> rec a
       Apply inner <$> rec b
     Var n -> return $ Var $ toString "" n

@@ -15,6 +15,7 @@ import qualified Data.Set as S
 import Language.Llama.Common.Common
 
 data AbsExpr expr = Var          !Name
+                  | Int          !Integer
                   | Number       !Double
                   | String       !Text
                   | InString     !(InString expr)
@@ -250,7 +251,7 @@ data BaseType
   | TApply BaseType BaseType
   deriving (P.Show, Eq, Ord)
 type Map = HashMap
-data Assertion = Satisfies Name [BaseType] deriving (P.Show, Eq, Ord)
+data Assertion = HasTrait Name [BaseType] deriving (P.Show, Eq, Ord)
 newtype Context = Context (Set Assertion) deriving (P.Show, Eq)
 data Type = Type Context BaseType deriving (P.Show, Eq)
 data Polytype = Polytype (Set Name) Type deriving (P.Show, Eq)
@@ -275,7 +276,7 @@ instance Render BaseType where
           render'' t = render t
 
 instance Render Assertion where
-  render (Satisfies name ts) =
+  render (HasTrait name ts) =
     name <> " " <> T.intercalate " " (fmap render ts)
 
 instance Render Context where
@@ -288,10 +289,19 @@ instance Render Type where
                       | otherwise = render ctx <> ". " <> render t
 
 symChars :: String
-symChars = "><=+-*/^~!%&$:#|?"
+symChars = "><=+-*/^~!%&$:#|?_"
 
 isSymbol :: Text -> Bool
 isSymbol = T.all (`elem` symChars)
+
+isPrefixSymbol :: Text -> Bool
+isPrefixSymbol s = isSymbol s && T.last s == '_' && not (T.head s == '_')
+
+isPostfixSymbol :: Text -> Bool
+isPostfixSymbol s = isSymbol s && T.head s == '_' && not (T.last s == '_')
+
+isInfixSymbol :: Text -> Bool
+isInfixSymbol s = isSymbol s && T.head s == '_' && T.last s == '_'
 
 defConstr :: ConstructorDec e
 defConstr = ConstructorDec

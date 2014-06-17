@@ -2,7 +2,7 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ViewPatterns #-}
-module Language.Llama.Parser.Tokenizer where
+module Language.Llama.Parser.Tokenizer (tokenize, PToken(..)) where
 
 import qualified Prelude as P
 import Prelude (Show)
@@ -22,7 +22,8 @@ data PToken = PToken
 instance Render PToken where
   render pt = do
     let (pos, tok) = (tPosition pt, tToken pt)
-    render pos <> " " <> render tok
+        sps = if tHasSpace pt then "" else " (no spaces)"
+    render pos <> " " <> render tok <> sps
 
 data TokenizerState = TokenizerState
   { tsIndentLevels :: [Int]
@@ -90,7 +91,7 @@ identChars = ['a'..'z'] <> ['A'..'Z'] <> ['0'..'9'] <> "_@$"
 -- | An identifier.
 identifier :: Tokenizer Name
 identifier = do
-  first <- letter <|> char '_' <|> char '@' <|> char '$'
+  first <- letter <|> (char '_' <* notFollowedBy (oneOf symChars))
   rest <- many $ oneOf identChars
   return $ pack (first : rest)
 
@@ -241,13 +242,22 @@ tDent = try $ many tEmptyLine >> (tIndent <|> tNodent <|> tOutdent)
 
 -- | All characters valid to use in symbols.
 symChars :: String
-symChars = "+*-/|&><=?!~:"
+symChars = "+*-/|&><=?!~:_"
 
 -- | Grabs a symbol.
 tSymbol :: Tokenizer (Token a)
-tSymbol = do
+tSymbol = try $ do
   sym <- many1 $ oneOf symChars
-  return $ TSymbol $ pack sym
+  if none sym then return $ TSymbol $ pack sym
+  else if isIdent sym then return $ TId $ pack sym
+  else unexpected $ "Invalid symbol: " <> sym
+  where
+    u = (== '_')
+    none = not . any u
+    isPre s = u (P.last s) && none (P.init s)
+    isPost s = u (head s) && none (P.tail s)
+    isInfix s = u (P.last s) && u (head s) && none (P.tail $ P.init s)
+    isIdent s = isInfix s || isPre s || isPost s
 
 -- | Grabs a specific symbol
 tThisSymbol :: String -> Tokenizer (Token a)
@@ -319,7 +329,7 @@ tOneToken = lexeme $ item $ choice
 initState :: TokenizerState
 initState = TokenizerState
   { tsIndentLevels = [0]
-  , tsHasSpace = False }
+  , tsHasSpace = True }
 
 --
 tokenize :: String -> Either TokenizerError [PToken]

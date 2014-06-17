@@ -18,10 +18,8 @@ data Expr = Expr {_pos :: SourcePos, _expr :: AbsExpr Expr}
             deriving (P.Show, Eq)
 instance IsExpr Expr where unExpr (Expr _ e) = e
 instance Render Expr where render = rndr True . bareExpr
-class IsExpr e => Sourced e where
-  source :: e -> SourcePos
-instance Sourced Expr where
-  source = _pos
+class IsExpr e => Sourced e where source :: e -> SourcePos
+instance Sourced Expr where source = _pos
 data ParserState = ParserState
   { _level0ops     :: [Name]
   , _level1ops     :: [Name]
@@ -332,7 +330,7 @@ pAnySym = satisfy go >>= \case TSymbol n -> return n
 -- | Numbers, variables, strings. Munches interpolated strings as well.
 pNumber, pVariable, pString :: Parser Expr
 pNumber = item $ num >>= \case
-  TInt i -> return $ Number $ fromIntegral i
+  TInt i -> return $ Int i
   TFloat n -> return $ Number n
   where num = satisfy (\case {TInt _ -> True; TFloat _ -> True; _ -> False})
 pVariable = item $ Var <$> pVarName
@@ -552,6 +550,7 @@ enclose c1 c2 = between (pPunc c1) (pPunc c2)
 unString :: Expr -> Text
 unString e = case unExpr e of
   String s -> s
+  Int n -> render n
   Number n -> render n
   Var n -> n
   Constructor n -> n
@@ -598,17 +597,18 @@ parseWith parser input = case tokenize input of
 parse :: String -> Either ParseError Expr
 parse = parseWith pTopLevel
 
--- see :: String -> IO ()
-seeWith parser input = case parseWith parser input of
+testStringWith :: Render a => Parser a -> String -> IO ()
+testStringWith parser input = case parseWith parser input of
   Left err -> error $ P.show err
   Right ast -> P.putStrLn $ unpack $ render ast
 
-see = seeWith pTopLevel
+testString :: String -> IO ()
+testString = testStringWith pTopLevel
 
 -- | Tokenizes from a given starting position. Returns the ending position.
 parseFrom :: SourcePos
           -> [PToken]
-          -> Either TokenizerError (Expr, SourcePos)
+          -> Either ParseError (Expr, SourcePos)
 parseFrom pos = runParserFrom pos pExpr
 
 -- | Runs a tokenizer given a starting source position. Is used when we

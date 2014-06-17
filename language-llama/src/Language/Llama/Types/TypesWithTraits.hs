@@ -51,8 +51,8 @@ instance Normalize Type where
     go :: Context -> State (Text, HashMap Name Name) Context
     go (Context ctx) = do
       let asserts = S.toList ctx
-      asserts' <- forM asserts $ \(Satisfies n ts) ->
-        Satisfies n <$> mapM normalizeLoop ts
+      asserts' <- forM asserts $ \case
+        HasTrait n ts -> HasTrait n <$> mapM normalizeLoop ts
       return (Context $ S.fromList asserts')
 
 instance Monoid Substitution where
@@ -76,7 +76,7 @@ instance FreeVars BaseType where
     TConst _ -> mempty
     TApply t1 t2 -> freevars t1 <> freevars t2
 instance FreeVars Assertion where
-  freevars (Satisfies _ types) = freevars types
+  freevars (HasTrait _ types) = freevars types
 instance FreeVars Context where
   freevars (Context ctx) = freevars $ toList ctx
 instance FreeVars Type where
@@ -95,7 +95,7 @@ instance Substitutable BaseType where
     TApply t1 t2 -> TApply (substitute subs t1) (substitute subs t2)
     _ -> t
 instance Substitutable Assertion where
-  substitute subs (Satisfies n ts) = Satisfies n $ fmap (substitute subs) ts
+  substitute subs (HasTrait n ts) = HasTrait n $ fmap (substitute subs) ts
 instance Substitutable Context where
   substitute subs (Context ctx) = Context $ S.map (substitute subs) ctx
 instance Substitutable Type where
@@ -145,12 +145,12 @@ unify t1 t2 = case (t1, t2) of
     s1 <- unify a1 b1
     s2 <- unify (substitute s1 a2) (substitute s1 b2)
     return (s1 <> s2)
-  (_, _) -> throwErrorC ["Can't unify ", render t1, " and ", render t2]
+  (_, _) -> throwErrorC ["Can't unify types ", render t1, " and ", render t2]
 
 checkContext :: Context -> TypeChecker Context
 checkContext c@(Context ctx) = mapM_ check ctx *> pure c where
   check :: Assertion -> TypeChecker ()
-  check (Satisfies name ts) =
+  check (HasTrait name ts) =
     -- If there are any free variables, we assume it's valid
     if not (S.null $ freevars ts) then return ()
     -- Otherwise, make sure it's in the TraitMap
@@ -173,8 +173,6 @@ newvar = do
   i <- _count <$> get
   modify $ \s -> s {_count = i + 1}
   return $ TVar $ "$t" <> render i
-
-
 
 teLookup :: Name -> TypeChecker (Maybe Polytype)
 teLookup name = do
@@ -225,8 +223,12 @@ typeof expr = case unExpr expr of
     (subs, t) <- typeof expr
     teStore name =<< generalize (substitute subs t)
     return (subs, substitute subs t)
+  Int _ -> do
+    TVar name <- newvar
+    only $ Type (oneTrait "IntLit" [name]) (TVar name)
   Number _ -> only "Number"
   String _ -> only "String"
+  If c t f -> typeofIf c t f
   Then e1 e2 -> do
     (s1, _) <- typeof e1
     (s2, t2) <- substituteEnv s1 >> typeof e2
@@ -239,20 +241,55 @@ typeof expr = case unExpr expr of
     (subs1, Type ctx1 t1) <- typeof e1
     (subs2, Type ctx2 t2) <- substituteEnv subs1 >> typeof e2
     tResult <- newvar
-    subs3 <- unify t1 (t2 ==> tResult)
-    ctx' <- checkContext $ substitute subs3 (ctx1 <> ctx2)
-    return (subs1 <> subs2 <> subs3, Type ctx' $ substitute subs3 tResult)
+    subs3 <- unify t1 (t2 ==> tResult) `catchError` \(ErrorList el) -> err el
+    let allSubs = subs1 <> subs2 <> subs3
+    putt [pack $ P.show allSubs]
+    ctx' <- checkContext $ substitute allSubs (ctx1 <> ctx2)
+    return (allSubs, Type ctx' $ substitute allSubs tResult)
   _ -> err ["Can't type expression ", render expr]
   where only t = return $ (mempty, t)
         err = sourceError expr
 
-sourceError :: Sourced e => e -> [Text] -> TypeChecker a
-sourceError e msgs = throwErrorC $ msgs <> [" " <> render (source e)]
+typeofIf :: (Sourced e, IsExpr e, Render e) =>
+            e -> e -> Maybe e -> TypeChecker (Substitution, Type)
+typeofIf c t f = do
+  (cSubs, Type cCtx cType) <- typeof c
+  uSubs1 <- substituteEnv cSubs >> unify cType "Bool"
+  (tSubs, Type tCtx tType) <- substituteEnv uSubs1 >> typeof t
+  case f of
+    Just f -> do
+      (fSubs, Type fCtx fType) <- substituteEnv tSubs >> typeof f
+      uSubs2 <- substituteEnv fSubs >> unify tType fType
+      let subs = mconcat [cSubs, uSubs1, tSubs, fSubs, uSubs2]
+      ctx <- checkContext $ substitute subs (cCtx <> tCtx <> fCtx)
+      let _type = substitute subs (Type ctx tType)
+      return (subs, _type)
+    Nothing -> do
+      let subs = mconcat [cSubs, uSubs1, tSubs]
+      ctx <- checkContext $ substitute subs (cCtx <> tCtx)
+      let _type = substitute subs (Type ctx (tuple []))
+      return (subs, _type)
+
+sourceError :: (Render e, Sourced e) => e -> [Text] -> TypeChecker a
+sourceError e msgs = throwErrorC $
+  msgs <> [". In expression `", render e, "` ", render (source e)]
+
+hasTrait :: Name -> [Name] -> Assertion
+hasTrait name vars = HasTrait name $ fmap TVar vars
+
+oneTrait :: Name -> [Name] -> Context
+oneTrait name = Context . S.singleton . hasTrait name
 
 initState :: TCState
 initState = TCState {_count = 0, _env = initTypeEnv} where
   initTypeMap = H.fromList [("Z", "Nat"), ("S", "Nat" ==> "Nat"),
-                            ("+", "Nat" ==> "Nat" ==> "Nat")]
+                            ("True", "Bool"), ("False", "Bool"),
+                            ("_+_", poly ["a", "b", "c"] plusT),
+                            ("-_", poly ["a"] negT)]
+  (a, b, c) = (TVar "a", TVar "b", TVar "c")
+  negT = Type (oneTrait "Negate" ["a"]) (a ==> a)
+  plusT = Type (oneTrait "Add" ["a", "b", "c"]) (a ==> b ==> c)
+  poly vars = Polytype (S.fromList vars)
   initTraitMap = mempty
   initTypeEnv = TypeEnv [(initTypeMap, initTraitMap)]
 
