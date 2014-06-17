@@ -17,7 +17,7 @@ import System.IO.Unsafe (unsafePerformIO)
 type TypeMap = Map Name Polytype
 type TraitMap = Map Name (Set [BaseType])
 newtype TypeEnv = TypeEnv [(TypeMap, TraitMap)] deriving (Show, Eq)
-newtype Substitution = Substitution (Map Name BaseType) deriving (Show)
+newtype Substitution = Substitution (Map Name BaseType) deriving (Show, Eq)
 data TCState = TCState {_count :: Int, _env :: TypeEnv}
 type TypeChecker = ErrorT ErrorList (StateT TCState IO)
 
@@ -55,10 +55,15 @@ instance Normalize Type where
         HasTrait n ts -> HasTrait n <$> mapM normalizeLoop ts
       return (Context $ S.fromList asserts')
 
-instance Monoid Substitution where
-  mempty = Substitution mempty
-  mappend s@(Substitution s1) (Substitution s2) =
-    Substitution (fmap (substitute s) s2 <> s1)
+instance Zero Substitution where
+  zero = Substitution mempty
+
+-- | Composes two substitutions. Newer substitution should go second.
+Substitution s1 • Substitution s2 = Substitution (s1' <> s2) where
+  s1' = fmap (substitute $ Substitution s2) s1
+
+compose :: [Substitution] -> Substitution
+compose = foldl' (•) zero
 
 class CanApply a where apply :: a -> a -> a
 instance CanApply BaseType where
@@ -119,7 +124,7 @@ oneSub n = Substitution . H.singleton n
 instantiate :: Polytype -> TypeChecker Type
 instantiate (Polytype vars t) = do
   -- Make a substitution from all variables owned by this polytype
-  sub <- fmap mconcat $ forM (toList vars) $ \v -> oneSub v <$> newvar
+  sub <- fmap compose $ forM (toList vars) $ \v -> oneSub v <$> newvar
   -- Apply the subtitution to the owned type
   return $ substitute sub t
 
@@ -140,11 +145,11 @@ unify :: BaseType -> BaseType -> TypeChecker Substitution
 unify t1 t2 = case (t1, t2) of
   (TVar a, _) -> return (Substitution (H.singleton a t2))
   (_, TVar a) -> return (Substitution (H.singleton a t1))
-  (TConst n1, TConst n2) | n1 == n2 -> return mempty
+  (TConst n1, TConst n2) | n1 == n2 -> return zero
   (TApply a1 a2, TApply b1 b2) -> do
     s1 <- unify a1 b1
     s2 <- unify (substitute s1 a2) (substitute s1 b2)
-    return (s1 <> s2)
+    return (s1 • s2)
   (_, _) -> throwErrorC ["Can't unify types ", render t1, " and ", render t2]
 
 checkContext :: Context -> TypeChecker Context
@@ -192,6 +197,7 @@ teStore name ptype = do
   TypeEnv ((te, tr):rest) <- _env <$> get
   modify $ \s -> s {_env = TypeEnv $ (H.insert name ptype te, tr):rest}
 
+-- | Applies a substitution to the environment in the monad.
 substituteEnv :: Substitution -> TypeChecker ()
 substituteEnv subs = do
   env <- _env <$> get
@@ -232,7 +238,7 @@ typeof expr = case unExpr expr of
   Then e1 e2 -> do
     (s1, _) <- typeof e1
     (s2, t2) <- substituteEnv s1 >> typeof e2
-    return (s1 <> s2, t2)
+    return (s1 • s2, t2)
   Lambda param body -> do
     paramT <- Type mempty <$> newvar
     (bodyS, bodyT) <- withContext param paramT $ typeof body
@@ -242,12 +248,11 @@ typeof expr = case unExpr expr of
     (subs2, Type ctx2 t2) <- substituteEnv subs1 >> typeof e2
     tResult <- newvar
     subs3 <- unify t1 (t2 ==> tResult) `catchError` \(ErrorList el) -> err el
-    let allSubs = subs1 <> subs2 <> subs3
-    putt [pack $ P.show allSubs]
+    let allSubs = subs1 • subs2 • subs3
     ctx' <- checkContext $ substitute allSubs (ctx1 <> ctx2)
     return (allSubs, Type ctx' $ substitute allSubs tResult)
   _ -> err ["Can't type expression ", render expr]
-  where only t = return $ (mempty, t)
+  where only t = return (zero, t)
         err = sourceError expr
 
 typeofIf :: (Sourced e, IsExpr e, Render e) =>
@@ -260,12 +265,12 @@ typeofIf c t f = do
     Just f -> do
       (fSubs, Type fCtx fType) <- substituteEnv tSubs >> typeof f
       uSubs2 <- substituteEnv fSubs >> unify tType fType
-      let subs = mconcat [cSubs, uSubs1, tSubs, fSubs, uSubs2]
+      let subs = compose [cSubs, uSubs1, tSubs, fSubs, uSubs2]
       ctx <- checkContext $ substitute subs (cCtx <> tCtx <> fCtx)
       let _type = substitute subs (Type ctx tType)
       return (subs, _type)
     Nothing -> do
-      let subs = mconcat [cSubs, uSubs1, tSubs]
+      let subs = compose [cSubs, uSubs1, tSubs]
       ctx <- checkContext $ substitute subs (cCtx <> tCtx)
       let _type = substitute subs (Type ctx (tuple []))
       return (subs, _type)
@@ -314,7 +319,7 @@ typeIt input = case desugarIt input of
   Left err -> Left err
   Right expr -> fmap (normalize . snd) $ typeExpr expr
 
-testString :: String -> IO ()
-testString input = case typeIt input of
+test :: String -> IO ()
+test input = case typeIt input of
   Left err -> error $ P.show err
   Right _type -> putStrLn $ unpack $ render _type

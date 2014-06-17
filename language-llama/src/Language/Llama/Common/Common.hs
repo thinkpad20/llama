@@ -27,11 +27,10 @@ module Language.Llama.Common.Common (
   , module Text.Parsec
   , module GHC.Exts
   , module Prelude
-  , Render(..), Name
-  , ErrorList(..), throwError1, throwErrorC, addError, addError'
-  , mconcatMapM, whenM, unlessM, lift2, print, show
-  , isInt, isIntTo, trim, indentBy, contains, line, each
-  , (!), (<!>), (>>==), (~>)) where
+  , Render(..), Name, Zero(..), ErrorList(..)
+  , throwError1, throwErrorC, addError, mconcatMapM, whenM
+  , unlessM, lift2, print, show, isInt, isIntTo, trim, indentBy
+  , contains, line, each, (!), (<!>), (>>==), (~>)) where
 
 import Prelude (IO, Eq(..), Ord(..), Bool(..), tail, Char,
                 Double, String, Maybe(..), Int, Monad(..), Integer,
@@ -120,6 +119,8 @@ instance Render a => Render (M.Map Name a) where
 instance Render a => Render (S.Set a) where
   render set = line $ "{" <> T.intercalate ", " elems <> "}" where
     elems = set ! S.elems ! map render
+
+class Zero a where zero :: a
 
 (!) :: b -> (b -> c) -> c
 (!) = flip ($)

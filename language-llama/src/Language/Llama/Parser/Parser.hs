@@ -597,13 +597,13 @@ parseWith parser input = case tokenize input of
 parse :: String -> Either ParseError Expr
 parse = parseWith pTopLevel
 
-testStringWith :: Render a => Parser a -> String -> IO ()
-testStringWith parser input = case parseWith parser input of
+testWith :: Render a => Parser a -> String -> IO ()
+testWith parser input = case parseWith parser input of
   Left err -> error $ P.show err
   Right ast -> P.putStrLn $ unpack $ render ast
 
-testString :: String -> IO ()
-testString = testStringWith pTopLevel
+test :: String -> IO ()
+test = testWith pTopLevel
 
 -- | Tokenizes from a given starting position. Returns the ending position.
 parseFrom :: SourcePos

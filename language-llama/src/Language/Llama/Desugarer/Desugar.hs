@@ -7,7 +7,7 @@
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE ViewPatterns #-}
-module Language.Llama.Desugarer.Desugar where
+module Language.Llama.Desugarer.Desugar (desugarIt) where
 
 import qualified Prelude as P
 import qualified Data.Map as M
@@ -497,8 +497,8 @@ desugarIt input = case parse input of
   Left err -> Left $ ErrorList [show err]
   Right expr -> runDesugar expr
 
-testString :: String -> IO ()
-testString input = case desugarIt input of
+test :: String -> IO ()
+test input = case desugarIt input of
   Left err -> error $ P.show err
   Right dexpr -> putStrLn $ unpack $ render dexpr
 

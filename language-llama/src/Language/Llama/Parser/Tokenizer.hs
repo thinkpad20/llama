@@ -368,9 +368,9 @@ putt :: Text -> Tokenizer ()
 putt = liftIO . putStrLn . unpack
 
 testFile :: FilePath -> IO ()
-testFile = readFile >=> testString
+testFile = readFile >=> test
 
-testString :: String -> IO ()
-testString s = case tokenize s of
+test :: String -> IO ()
+test s = case tokenize s of
   Right tokens -> mapM_ print tokens
   Left err -> error $ P.show err
