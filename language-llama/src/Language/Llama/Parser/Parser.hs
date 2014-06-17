@@ -1,7 +1,7 @@
 {-# LANGUAGE ViewPatterns #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
-module Language.Llama.Parser.Parser (parse, Expr) where
+module Language.Llama.Parser.Parser (parse, Expr, Sourced(..)) where
 
 import qualified Prelude as P
 import Text.Parsec hiding (satisfy, parse, (<|>), many)
@@ -18,6 +18,10 @@ data Expr = Expr {_pos :: SourcePos, _expr :: AbsExpr Expr}
             deriving (P.Show, Eq)
 instance IsExpr Expr where unExpr (Expr _ e) = e
 instance Render Expr where render = rndr True . bareExpr
+class IsExpr e => Sourced e where
+  source :: e -> SourcePos
+instance Sourced Expr where
+  source = _pos
 data ParserState = ParserState
   { _level0ops     :: [Name]
   , _level1ops     :: [Name]

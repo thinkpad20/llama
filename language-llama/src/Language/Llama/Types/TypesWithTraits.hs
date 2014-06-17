@@ -10,14 +10,16 @@ import qualified Data.HashMap.Strict as H
 import qualified Data.Text as T
 import Language.Llama.Common.Common hiding (singleton)
 import Language.Llama.Common.AST
+import Language.Llama.Parser.Parser (Sourced(..))
 import Language.Llama.Desugarer.Desugar hiding (testString)
+import System.IO.Unsafe (unsafePerformIO)
 
 type TypeMap = Map Name Polytype
 type TraitMap = Map Name (Set [BaseType])
 newtype TypeEnv = TypeEnv [(TypeMap, TraitMap)] deriving (Show, Eq)
 newtype Substitution = Substitution (Map Name BaseType) deriving (Show)
 data TCState = TCState {_count :: Int, _env :: TypeEnv}
-type TypeChecker = ErrorT ErrorList (State TCState)
+type TypeChecker = ErrorT ErrorList (StateT TCState IO)
 
 class Normalize t where
   normalize :: t -> t
@@ -127,6 +129,8 @@ remove n (Substitution s) = Substitution (delete n s)
 (==>) :: (IsString a, CanApply a) => a -> a -> a
 t1 ==> t2 = apply (apply "->" t1) t2
 
+infixr 3 ==>
+
 tuple :: (IsString a, CanApply a) => [a] -> a
 tuple ts = do
   let name = "Tuple(" <> P.show (length ts) <> ")"
@@ -209,13 +213,13 @@ withContext name _type action = do
   modify $ \s -> s {_env = popTE $ _env s}
   return result
 
-typeof :: (Render e, IsExpr e) => e -> TypeChecker (Substitution, Type)
+typeof :: (Render e, Sourced e) => e -> TypeChecker (Substitution, Type)
 typeof expr = case unExpr expr of
   Var name -> teLookup name >>= \case
-    Nothing -> throwErrorC ["Unknown identifier '", name, "'"]
+    Nothing -> err ["Unknown identifier '", name, "'"]
     Just pt -> only =<< instantiate pt
   Constructor name -> teLookup name >>= \case
-    Nothing -> throwErrorC ["Unknown constructor '", name, "'"]
+    Nothing -> err ["Unknown constructor '", name, "'"]
     Just pt -> only =<< instantiate pt
   Define name expr -> do
     (subs, t) <- typeof expr
@@ -238,8 +242,12 @@ typeof expr = case unExpr expr of
     subs3 <- unify t1 (t2 ==> tResult)
     ctx' <- checkContext $ substitute subs3 (ctx1 <> ctx2)
     return (subs1 <> subs2 <> subs3, Type ctx' $ substitute subs3 tResult)
-  _ -> throwErrorC ["Can't type expression ", render expr]
+  _ -> err ["Can't type expression ", render expr]
   where only t = return $ (mempty, t)
+        err = sourceError expr
+
+sourceError :: Sourced e => e -> [Text] -> TypeChecker a
+sourceError e msgs = throwErrorC $ msgs <> [" " <> render (source e)]
 
 initState :: TCState
 initState = TCState {_count = 0, _env = initTypeEnv} where
@@ -248,10 +256,15 @@ initState = TCState {_count = 0, _env = initTypeEnv} where
   initTraitMap = mempty
   initTypeEnv = TypeEnv [(initTypeMap, initTraitMap)]
 
-runTyping :: TypeChecker a -> Either ErrorList a
-runTyping = flip evalState initState . runErrorT
+putt :: [Text] -> TypeChecker ()
+putt = liftIO . putStrLn . unpack . mconcat
 
-typeExpr :: (Render e, IsExpr e) => e -> Either ErrorList (Substitution, Type)
+runTyping :: TypeChecker a -> Either ErrorList a
+runTyping = flip evalStateIO initState . runErrorT where
+  evalStateIO s = fst . unsafePerformIO . runStateT s
+
+typeExpr :: (Render e, IsExpr e, Sourced e)
+         => e -> Either ErrorList (Substitution, Type)
 typeExpr = runTyping . typeof
 
 typeIt' :: String -> Either ErrorList (Substitution, Type)

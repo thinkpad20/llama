@@ -48,6 +48,7 @@ instance P.Show Desugarer where
 instance Render Desugarer where
   render (n, _, _) = "Desugarer '" <> n <> "'"
 instance IsExpr DExpr where unExpr = _dsrd
+instance Sourced DExpr where source = source . _orig
 instance Render DExpr where render = rndr True . bareExpr
 
 -- | Converts an Expr to a DExpr containing the same structure.
