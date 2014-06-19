@@ -16,7 +16,7 @@ import Language.Llama.Common.Common
 
 data AbsExpr expr = Var          !Name
                   | Int          !Integer
-                  | Number       !Double
+                  | Float       !Double
                   | String       !Text
                   | InString     !(InString expr)
                   | Constructor  !Name
@@ -154,8 +154,9 @@ rndr isBlockStart e = case unExpr e of
     _ -> rndr True a <> "; " <> rndr False b <> "}"
   Var name -> name
   Constructor name -> name
-  Number n | isInt n -> render (floor n :: Int)
-  Number n -> render n
+  Int n -> render n
+  Float n | isInt n -> render (floor n :: Int)
+  Float n -> render n
   String s -> render s
   InString istr -> render istr
   Dot e1 e2 -> rec' e1 <> "." <> rec' e2
@@ -164,6 +165,7 @@ rndr isBlockStart e = case unExpr e of
   Binary op e1 e2 -> rec' e1 <> " " <> op <> " " <> rec' e2
   Prefix op e -> op <> rec' e
   Postfix e op -> rec' e <> op
+  Literal l -> render l
   Tuple es kws -> "(" <> es' <> kws' <> ")" where
     es' = if length es == 1 then rec (head es) <> ","
           else T.intercalate ", " (map rec es)
@@ -208,12 +210,24 @@ rndr isBlockStart e = case unExpr e of
     rec' expr = case unExpr expr of
       Var _ -> rec expr
       Constructor _ -> rec expr
-      Number _ -> rec expr
+      Int _ -> rec expr
+      Float _ -> rec expr
       String _ -> rec expr
       InString _ -> rec expr
       Tuple _ _ -> rec expr
+      Literal l -> rec expr
       _ -> "(" <> rec expr <> ")"
 
+instance (IsExpr e, Render e) => Render (Literal e) where
+  render = \case
+    VecLiteral es -> "[" <> T.intercalate ", " (fmap rendr es) <> "]"
+    VecRange e1 e2 -> "[" <> rendr e1 <> " .. " <> rendr e2 <> "]"
+    DictLiteral [] -> "{=>}"
+    DictLiteral es -> "{" <> T.intercalate ", " (fmap rpair es) <> "}"
+    SetLiteral es -> "{" <> T.intercalate ", " (fmap rendr es) <> "}"
+    JsonLiteral jl -> pack $ P.show jl
+    where rpair (e1, e2) = rendr e1 <> " => " <> rendr e2
+          rendr = rndr True
 
 instance (IsExpr e, Render e) => Render (PatAssert e) where
   render = \case

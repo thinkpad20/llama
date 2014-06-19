@@ -63,7 +63,7 @@ traverse :: Desugarer -> DExpr -> Desugar DExpr
 traverse ds e | doTest ds e = doTransform ds e
               | otherwise = mk $ case unExpr e of
   Var n -> pure $ Var n
-  Number n -> pure $ Number n
+  Float n -> pure $ Float n
   Int n -> pure $ Int n
   String s -> pure $ String s
   Constructor c -> pure $ Constructor c
@@ -254,8 +254,6 @@ dsBinary = tup where
   test (Prefix _ _) = True
   test (Postfix _ _) = True
   test (Binary _ _ _) = True
-  test (Var n) | isSymbol n = True
-  test (Constructor n) | isSymbol n = True
   test _ = False
   rec = traverse tup
   ds e = mk e $ case unExpr e of
@@ -267,8 +265,6 @@ dsBinary = tup where
       let var = DExpr (_orig e) $ Var $ "_" <> op <> "_"
       inner <- DExpr (_orig e) . Apply var <$> rec a
       Apply inner <$> rec b
-    Var n -> return $ Var $ toString "" n
-    Constructor n -> return $ Constructor $ toString "" n
 
 -- | Translates symbol variables into their "readable" forms with @toString@.
 dsSymbols :: Desugarer
@@ -348,7 +344,8 @@ assertsAndDefs start expr = fst <$> runStateT (go start expr) ("", 0) where
   go :: DExpr -> DExpr
      -> StateT (Name, Int) Desugar (Maybe (PatAssert DExpr), Maybe DExpr)
   go expr matchWith = case unExpr expr of
-    Number n -> return (lit expr, Nothing)
+    Int n -> return (lit expr, Nothing)
+    Float n -> return (lit expr, Nothing)
     String s -> return (lit expr, Nothing)
     Var v -> return (Nothing, Just $ DExpr (_orig expr) $ Define v matchWith)
     Constructor name -> do

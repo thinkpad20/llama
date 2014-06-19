@@ -282,7 +282,7 @@ pJson = item $ Literal . JsonLiteral <$> do
   jArray = JArray <$> enclose '[' ']' (commaSep jVal)
   jObject = JObject <$> enclose '{' '}' (commaSep keyval)
   jString = JString . unString <$> pString
-  jNum = fmap JNum $ fmap unExpr pNumber >>= \case Number n -> return n
+  jNum = fmap JNum $ fmap unExpr pNumber >>= \case Float n -> return n
   jKeyword = try $ fmap unExpr pVariable >>= \case
     Var "true" -> return $ JBool True
     Var "false" -> return $ JBool False
@@ -331,7 +331,7 @@ pAnySym = satisfy go >>= \case TSymbol n -> return n
 pNumber, pVariable, pString :: Parser Expr
 pNumber = item $ num >>= \case
   TInt i -> return $ Int i
-  TFloat n -> return $ Number n
+  TFloat n -> return $ Float n
   where num = satisfy (\case {TInt _ -> True; TFloat _ -> True; _ -> False})
 pVariable = item $ Var <$> pVarName
 pConstructor = item $ var >>= \(TId n) -> return $ Constructor n
@@ -394,8 +394,8 @@ pChain = pAttribute >>= go where
       -- immediate expression).
       TSymbol _ | not (tHasSpace pt) -> do
         op <- pAnySym
-        option (mk $ Postfix expr op) $ do
-          go' =<< Binary op expr <$> immediate pAttribute
+        let binaryExpr = Binary op expr <$> immediate pAttribute
+        go' =<< binaryExpr <|> pure (Postfix expr op)
       TSymbol ".=" -> do
         -- Symbol .= is a special case because it's syntactic sugar, not just
         -- a function.
@@ -551,7 +551,7 @@ unString :: Expr -> Text
 unString e = case unExpr e of
   String s -> s
   Int n -> render n
-  Number n -> render n
+  Float n -> render n
   Var n -> n
   Constructor n -> n
   _ -> error "Not a string"

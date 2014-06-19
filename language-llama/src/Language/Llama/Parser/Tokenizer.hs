@@ -107,13 +107,15 @@ tId = try $ do
   else return $ TId id
 
 -- | A numeric constant (either Int or Float).
-tNum :: Tokenizer (Token a)
-tNum = do
+tFloat :: Tokenizer (Token a)
+tFloat = try $ do
   first <- many1 digit
-  option (TInt $ read first) $ do
-    dot <- try (char '.' <* notFollowedBy (char '.' <|> oneOf identChars))
-    rest <- many1 digit
-    return $ TFloat $ read $ first <> (dot : rest)
+  char '.'
+  rest <- many1 digit
+  return $ TFloat $ read $ first <> ('.' : rest)
+
+tInt :: Tokenizer (Token a)
+tInt = TInt . read <$> many1 digit
 
 -- | A keyword.
 tKeyword :: Tokenizer (Token a)
@@ -311,7 +313,8 @@ tOneToken = lexeme $ item $ choice
   , tInString
   , tKeyword
   , tId
-  , tNum
+  , tFloat
+  , tInt
   , tThisSymbol ".="
   , tThisSymbol "!"
   , tSymbol
