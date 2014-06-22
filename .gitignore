@@ -5,3 +5,4 @@ src/\#*
 src/Profile
 src/llama
 test_js/node_modules
+.DS_Store
