@@ -17,7 +17,6 @@ import System.IO.Unsafe
 
 import Language.Llama.Common.Common
 import Language.Llama.Common.AST
---import Language.Llama.Types.TypeLib hiding (log, log')
 import Language.Llama.Parser.Parser
 
 data DExpr = DExpr {_orig :: Expr, _dsrd :: AbsExpr DExpr}

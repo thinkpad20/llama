@@ -44,11 +44,11 @@ instance CanApply Polytype where
     Polytype (vs1 <> vs2) (apply t1 t2)
 
 class FromBaseType t where
-  from :: BaseType -> t
+  fromBT :: BaseType -> t
 
-instance FromBaseType BaseType where from bt = bt
-instance FromBaseType Type where from = Type mempty
-instance FromBaseType Polytype where from bt = Polytype (freevars bt) (from bt)
+instance FromBaseType BaseType where fromBT bt = bt
+instance FromBaseType Type where fromBT = Type mempty
+instance FromBaseType Polytype where fromBT bt = Polytype (freevars bt) (fromBT bt)
 
 class FreeVars a where freevars :: a -> Set Name
 instance FreeVars BaseType where
@@ -69,6 +69,8 @@ instance FreeVars TypeEnv where
 instance FreeVars a => FreeVars [a] where
   freevars = mconcat . fmap freevars
 
+isConstant :: FreeVars a => a -> Bool
+isConstant = S.null . freevars
 
 --------------------------------------------------------------------------
 ------------------------ Type normalization functions --------------------
@@ -208,54 +210,63 @@ unify t1 t2 = case (t1, t2) of
     return (s1 • s2)
   (_, _) -> throwErrorC ["Can't unify types ", render t1, " and ", render t2]
 
--- | Produces a substitution which unifies (i.e. makes compatible) the context
--- with the current environment. A context is a set of assertions, which each
--- assert that some trait constraint holds for a tuple of types (e.g. the
--- assertion @Add Int Int Int@ asserts that there is an instance of @Add@ for
--- the tuple @[Int, Int, Int]@). Each of these assertions is either a
--- contradiction or not; this will error if any are.
-unifyContext :: Context -> TypeChecker Substitution
-unifyContext c@(Context cset) = compose <$> mapM check ctx where
-  ctx = S.toList cset
-  -- | Checks a single assertion.
-  check :: Assertion -> TypeChecker Substitution
-  check (HasTrait name ts) = getInstances >>= search where
-    -- Recurses through our stack of trait maps to see if any have a matching
-    -- instance.
-    search :: [TraitMap] -> TypeChecker Substitution
-    search [] = throwError1 $ "No instance of " <> whatsMissing
-    search (tmap:rest) = case lookup name tmap of
-      Just list -> searchList rest list
-      Nothing -> search rest
-    -- Searches through a list of entries to see if any match.
-    searchList :: [TraitMap] -> [Instance] -> TypeChecker Substitution
-    searchList rest = \case
-      [] -> search rest
-      (entry:entries) -> do
-        (context, types) <- instantiateInstance entry
-        unifyAll context zero (P.zip ts types)
-          `catchError` \_ -> searchList rest entries
-    unifyAll :: Context -> Substitution -> [(BaseType, BaseType)]
-             -> TypeChecker Substitution
-    unifyAll context subs = \case
-      -- If we're at the end of the list then we succeeded
-      [] -> return subs
-      ((inputT, storedT):ts) -> do
-        -- Unify the input type with the stored one (might fail).
-        subs' <- unify inputT storedT
-        -- Update the context and check it
-        let context' = subs' •> context
-        subs'' <- fmap (subs' •) $ unifyContext context'
-        -- Apply the substitutions to the rest of the types
-        unifyAll context' subs'' $ subs'' •> ts
+-- | Checks if an assertion is a contradiction in the current environment.
+-- For example, the assertion `HasTrait "Mod" [String]` would be a
+-- contradiction, if there were no instance of `Mod` for the String type.
+validate :: Context -> TypeChecker Context
+validate c@(Context ctx) = do
+  newCtxs <- mapM assertionToContext $ S.toList ctx
+  let noConstants = P.filter (not . isConstant) $ c:newCtxs
+  return (mconcat noConstants)
+
+assertionToContext :: Assertion -> TypeChecker Context
+assertionToContext (HasTrait name types) = do
+  -- for each instance stored for `name`
+    -- for each type in the list of types
+      -- try to generate a new context with `match`
+      -- if this fails, move on
+  -- if no matches, assertion failed; throw an error
+  instanceLists <- getInstancesFor name
+  goILs instanceLists
+  where
+    -- Iterating over a list of instance lists
+    goILs [] = throwError1 $ "No instance of " <> whatsMissing
+    goILs (il:ils) = goIL il `catchError` \_ -> goILs ils
+    -- Iterating over a list of instances
+    goIL [] = throwError1 "Nothing matched in this instance list"
+    goIL ((ctx, types'):is) = goT ctx types `catchError` \_ -> goIL is
+    -- Iterate over a list of types and concatenate results
+    goT :: Context -> [BaseType] -> TypeChecker Context
+    goT ctx types' = fmap mconcat $ mapM (match ctx) $ P.zip types types'
     -- A pretty printer for reporting what caused an error.
-    whatsMissing = case normalize ts of
+    whatsMissing = case normalize types of
       [] -> name
       [t] -> name <> " for type " <> render t
       ts -> name <> " for types " <> commaSep ts
     -- Turns [a, b, c] into "a, b, and c"
     commaSep [t] = "and " <> render t
     commaSep (t:ts) = render t <> ", " <> commaSep ts
+
+match :: Context             -- ^ The instance's context
+      -> (BaseType           -- ^ The stored instance's type
+      ,   BaseType)          -- ^ The type in the assertion
+      -> TypeChecker Context -- ^ The new context
+match ctx (instType, asrtType) = do
+  subs <- unify' instType asrtType
+  validate (subs •> ctx)
+
+-- | Almost the same as @unify@, but only records a substitution if the left
+-- side is a type variable.
+unify' :: BaseType -> BaseType -> TypeChecker Substitution
+unify' t1 t2 = case (t1, t2) of
+  (TVar a, _) -> return $ oneSub a t2
+  (TConst a, TVar _) -> return zero
+  (TConst a, TConst b) | a == b -> return zero
+  (TApply a b, TApply a' b') -> do
+    s1 <- unify' a a'
+    s2 <- unify' (s1 •> b) (s1 •> b')
+    return $ s1 • s2
+  (_, _) -> throwErrorC ["Incompatible: ", render t1, ", ", render t2]
 
 --------------------------------------------------------------------------
 ------------------------ Environment management --------------------------
@@ -302,23 +313,38 @@ getInstances = do
   TypeEnv env <- _env <$> get
   return $ fmap snd env
 
+getInstancesFor :: Name -> TypeChecker [[Instance]]
+getInstancesFor name = do
+  insts <- getInstances
+  return $ catMaybes $ fmap (H.lookup name) insts
+
 -- | The state we start with.
 initState :: TCState
 initState = TCState {_count = 0, _env = initTypeEnv} where
   initTypeMap = H.fromList [("Z", "Nat"), ("S", "Nat" ==> "Nat"),
-                            ("Point", from (a ==> point a)),
+                            ("Point", fromBT (a ==> point a)),
                             ("True", "Bool"), ("False", "Bool"),
                             ("_+_", poly ["a", "b", "c"] plusT),
-                            ("-_", poly ["a", "b"] negT)]
+                            ("-_", poly ["a", "b"] negT),
+                            ("_==_", poly ["a"] eqT)]
   (a, b, c) = (TVar "a", TVar "b", TVar "c")
+  eqT = Type (oneTrait "Eq" ["a"]) (a ==> a ==> "Bool")
   negT = Type (oneTrait "Negate" ["a", "b"]) (a ==> b)
   plusT = Type (oneTrait "Add" ["a", "b", "c"]) (a ==> b ==> c)
   poly vars = Polytype (S.fromList vars)
   point = apply "Point"
-  initTraitMap = H.fromList [("Add",
-    [(mempty, ["Int", "Int", "Int"]),
-     (mempty, ["Nat", "Nat", "Nat"]),
-     (oneTrait "Add" ["a", "a", "a"], [point a, point a, point a])]
+  list = apply "List"
+  initTraitMap = H.fromList [
+     ("Add", [
+      (mempty, ["Int", "Int", "Int"]),
+      (mempty, ["Nat", "Nat", "Nat"]),
+      (oneTrait "Add" ["a", "a", "a"], [point a, point a, point a])
+     ])
+    ,("Eq", [
+     (mempty, ["Int"]),
+     (mempty, ["Nat"]),
+     (oneTrait "Eq" ["a"], [list a])
+     ]
     )]
   initTypeEnv = TypeEnv [(initTypeMap, initTraitMap)]
 
@@ -350,8 +376,10 @@ typeof expr = case unExpr expr of
     ret (s1 • s2) t2
   Lambda param body -> do
     paramT <- Type mempty <$> newvar
-    (bodyS, bodyT) <- withContext param paramT $ typeof body
-    ret bodyS (paramT ==> bodyT)
+    withContext param paramT $ do
+      (s, Type ctx t) <- typeof body
+      ctx' <- validate ctx
+      ret s (paramT ==> Type ctx' t)
   Apply e1 e2 -> do
     (subs1, Type ctx1 t1) <- typeof' e1
     (subs2, Type ctx2 t2) <- typeof e2
@@ -363,6 +391,7 @@ typeof expr = case unExpr expr of
         err = sourceError expr
         ret s t = return (s, s •> t)
 
+-- | Typing an `if` statement is a bit involved so we split it off here.
 typeofIf :: (Valid e) => e -> e -> Maybe e -> TypeChecker (Substitution, Type)
 typeofIf c t f = do
   (cSubs, Type cCtx cType) <- typeof' c
@@ -377,8 +406,7 @@ typeofIf c t f = do
       return (subs, subs •> (Type ctx' tType))
     Nothing -> do
       let subs = compose [cSubs, uSubs1, tSubs]
-      subs' <- (subs •) <$> unifyContext (subs •> (cCtx <> tCtx))
-      return (subs', subs' •> Type (cCtx <> tCtx) (tuple []))
+      return (subs, subs •> Type (cCtx <> tCtx) (tuple []))
 
 -- | Gets the type and applies the substitutions to the environment in one go.
 typeof' :: (Valid e) => e -> TypeChecker (Substitution, Type)
