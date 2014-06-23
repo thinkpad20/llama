@@ -1,7 +1,12 @@
 use std::collections::HashMap;
 use std::num::pow;
+use std::iter::range_step;
+use std::vec;
+use std::fmt;
+
 
 type NumArgs = uint;
+type Offset = uint;
 type Line = uint;
 type Register = uint;
 type Label = String;
@@ -18,17 +23,21 @@ enum Value {
   Bool(bool)
 }
 
+#[deriving(Show, Clone, Copy)]
 enum Location {
   Line(Line),
   Label(Label)
 }
 
+#[deriving(Show, Clone, Copy)]
 enum Instruction {
   Push(Value),
+  PushArg(Offset),
   Pop(Register),
   Goto(Location),
   ElseGoto(Location),
   Call(Location, NumArgs),
+  DeclareLabel(Label),
   Return,
   Add, Sub, Mult, Div, Mod, Exp, Neg, And, Or, Not,
   Lt, Gt, Eq, Leq, Geq, Neq
@@ -36,15 +45,28 @@ enum Instruction {
 
 struct VirtualMachine {
   instruction_list: Vec<Instruction>,
-  initial_list: Vec<Instruction>,
   stack: Vec<Value>,
   registers: [Value, ..NUM_REGISTERS],
   labels: HashMap<Label, Line>,
-  label_list: Vec<Label>,
   return_trace: Vec<Line>,
   pc: Line,
-  instcount: u32,
 }
+
+
+impl fmt::Show for VirtualMachine {
+  fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    let mut result = String::new();
+    for instr in self.instruction_list.iter() {
+      result.append(instr.show())
+    }
+    // write!(f, format!("{}", self.instruction_list));
+    write!(f, "Hi")
+  }
+}
+
+// impl Show for VirtualMachine {
+//   fn show(&self) -> "sldkfj"
+// }
 
 fn add_val(p1: Value, p2: Value) -> Value {
   match (p1, p2) {
@@ -207,12 +229,13 @@ impl VirtualMachine {
   // Executes a single instruction.
   fn execute(&mut self, inst: Instruction) {
     match (inst) {
-      Push(p) => self.stack.push(p),
+      Push(val) => self.stack.push(val),
+      PushArg(offset) => self.stack.push(self.registers[offset].clone()),
       Pop(reg) => self.registers[reg] = self.stack.pop().unwrap(),
       Return => self.pc = self.return_trace.pop().unwrap(),
       Call(loc, num_args) => {
         self.return_trace.push(self.pc + 1);
-        for i in range(0, num_args) {
+        for i in range_step(num_args - 1, 0, -1) {
           self.registers[i] = self.pop()
         }
         self.goto(loc);
@@ -240,7 +263,7 @@ impl VirtualMachine {
   fn goto(&mut self, loc: Location) {
     match loc {
       Label(label) => match self.labels.find(&label) {
-        None => fail!("invalid label"),
+        None => fail!(format!("invalid label {}", label)),
         Some(line) => self.pc = *line
       },
       Line(line) => self.pc = line
@@ -248,23 +271,114 @@ impl VirtualMachine {
   }
 
   fn pop(&mut self) -> Value {
-    self.stack.pop().unwrap()
+    match self.stack.pop() {
+      Some(v) => v,
+      None => fail!("Empty stack")
+    }
   }
 
-  // Applies a unary operator to the top of the stack.
+  // Applies a unary operator to the top of the stack. Increments PC.
   fn op1(&mut self, op: fn(Value)->Value) {
     let top = self.stack.pop().unwrap();
     self.stack.push(op(top));
+    self.pc += 1;
   }
 
   // Applies a binary operator to the two top values of the stack.
+  // Increments program counter.
   fn op2(&mut self, op: fn(Value, Value)->Value) {
     let a = self.stack.pop().unwrap();
     let b = self.stack.pop().unwrap();
     self.stack.push(op(b, a));
+    self.pc += 1;
+  }
+
+  fn run(&mut self, start: Location) {
+    self.goto(start);
+    let mut max_stack : uint = 0;
+    let mut inst_count : uint = 0;
+    while self.pc < self.instruction_list.len() {
+      inst_count += 1;
+      if inst_count > 200000 {
+        fail!("Infinite loop")
+      }
+      let next_instr = self.instruction_list.get(self.pc).clone();
+      self.execute(next_instr);
+      if self.stack.len() > max_stack {max_stack = self.stack.len()}
+    }
+    if self.stack.len() > 0 {
+      println!("Top of stack is {}", self.stack.get(self.stack.len()))
+    } else {
+      fail!("Empty stack after finish")
+    }
   }
 }
 
+// Runs through the list of instructions, removes any labels, and records
+// the line number the labels correspond to.
+// For example, given the list
+// [label foo, push 1, push 2, add, label bar, call foo]
+// this would return
+// [push 1, push 2, add, call 0]
+fn prepare_labels(input_instrs: Vec<Instruction>)
+  -> (Vec<Instruction>, HashMap<Label, Line>) {
+    let mut line_no : uint = 0;
+    let mut output_instrs = Vec::new();
+    let mut label_map = HashMap::new();
+    for inst in input_instrs.iter() {
+      match (*inst).clone() {
+        DeclareLabel(label) => {
+          label_map.insert(label, line_no);
+        },
+        inst => {line_no += 1; output_instrs.push(inst)}
+      }
+    }
+    (output_instrs, label_map)
+  }
+
+fn dec_label(name: &str) -> Instruction {
+  DeclareLabel(String::from_str(name))
+}
+
+fn mk_label(name: &str) -> Location {
+  Label(String::from_str(name))
+}
+
 fn main() {
-  println!("hello\n");
+  let mut instrs : Vec<Instruction> = Vec::new();
+  instrs.push(dec_label("fact.f"));
+  instrs.push(PushArg(0));
+  instrs.push(Push(Int(2)));
+  instrs.push(Lt);
+  instrs.push(ElseGoto(mk_label("fact.f$1")));
+  instrs.push(Push(Int(1)));
+  instrs.push(Return);
+  instrs.push(dec_label("fact.f$1"));
+  instrs.push(PushArg(0));
+  instrs.push(Push(Int(1)));
+  instrs.push(Sub);
+  instrs.push(PushArg(1));
+  instrs.push(PushArg(0));
+  instrs.push(Mult);
+  instrs.push(Pop(1));
+  instrs.push(Pop(0));
+  instrs.push(Goto(mk_label("fact.f")));
+  instrs.push(dec_label("fact"));
+  instrs.push(PushArg(0));
+  instrs.push(Push(Int(1)));
+  instrs.push(Call(mk_label("fact.f"), 2));
+  for i in instrs.iter() {
+    println!("{}", i);
+  }
+  let (new_instrs, label_map) = prepare_labels(instrs);
+  // let vm = VirtualMachine {
+  //   instruction_list: new_instrs,
+  //   stack: Vec::new(),
+  //   registers: [Empty, Empty, Empty, Empty, Empty,
+  //               Empty, Empty, Empty, Empty, Empty],
+  //   labels: label_map,
+  //   return_trace: Vec::new(),
+  //   pc: 0
+  // };
+  // println!("{}", vm);
 }

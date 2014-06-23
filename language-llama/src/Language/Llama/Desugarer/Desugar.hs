@@ -7,7 +7,7 @@
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE ViewPatterns #-}
-module Language.Llama.Desugarer.Desugar (desugarIt) where
+module Language.Llama.Desugarer.Desugar (desugarIt, DExpr) where
 
 import qualified Prelude as P
 import qualified Data.Map as M
