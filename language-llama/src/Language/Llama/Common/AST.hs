@@ -281,26 +281,30 @@ instance IsString Polytype where fromString = Polytype mempty . fromString
 instance Render BaseType where
   render t = case t of
     TVar name -> name
-    TApply (TApply "->" t1) t2 -> render'' t1 <> " -> " <> render t2
+    TApply (TApply "->" t1) t2 -> render' t1 <> " -> " <> render t2
     TConst name -> name
-    TApply t1 t2 -> render' t1 <> " " <> render' t2
-    where render' t@(TApply _ _ ) = "(" <> render t <> ")"
+    TApply t1 t2 -> renderP t1 <> " " <> renderP t2
+    where render' t@(TApply (TApply "->" t1) t2) = renderP t
           render' t = render t
-          render'' t@(TApply (TApply "->" t1) t2) = "(" <> render t <> ")"
-          render'' t = render t
+  renderP t@(TApply _ _ ) = "(" <> render t <> ")"
+  renderP t = render t
+
 
 instance Render Assertion where
   render (HasTrait name ts) =
-    name <> " " <> T.intercalate " " (fmap render ts)
+    name <> " " <> T.intercalate " " (fmap renderP ts)
 
 instance Render Context where
   render (Context ctx) | S.size ctx == 1 = rndr
                        | otherwise = "{" <> rndr <> "}"
-    where rndr = T.intercalate ", " . fmap render . toList $ ctx
+    where rndr = T.intercalate ", " . fmap renderP . toList $ ctx
 
 instance Render Type where
   render (Type ctx t) | ctx == mempty = render t
                       | otherwise = render ctx <> ". " <> render t
+  renderP (Type ctx t)
+    | ctx == mempty = render t
+    | otherwise = "(" <> render ctx <> ". " <> render t <> ")"
 
 symChars :: String
 symChars = "><=+-*/^~!%&$:#|?_"

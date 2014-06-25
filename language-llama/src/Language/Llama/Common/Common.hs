@@ -67,26 +67,19 @@ import qualified Data.Set as S
 import GHC.Exts (sortWith)
 import Text.Parsec (ParseError, SourcePos)
 
-instance Render a => Render (Seq a) where
-  render vec = "[" <> T.intercalate "," (toList $ fmap render vec) <> "]"
+type Name = T.Text
 
 newtype ErrorList = ErrorList [T.Text]
 instance Error ErrorList where
   strMsg = ErrorList . pure . T.pack
 
-instance Render ErrorList
-instance Render ParseError
-instance Render SourcePos
-
-instance P.Show ErrorList where
-  show (ErrorList msgs) = P.show msgs
-  --show (ErrorList msgs) = msgs ! concatMap ((<> "\n") . indentBy 4 . trim) ! line
-
-type Name = T.Text
-
 class P.Show a => Render a where
+  -- Basics: render thing as a text
   render :: a -> T.Text
   render = P.show ~> T.pack
+  -- Render with parentheses: for disambiguation
+  renderP :: a -> T.Text
+  renderP = render
   renderIO :: a -> IO T.Text
   renderIO = return . render
   pretty :: a -> T.Text
@@ -95,6 +88,17 @@ class P.Show a => Render a where
   renderI' _ = return ()
   renderI :: Int -> a -> T.Text
   renderI i a = snd $ execState (renderI' a) (i, "")
+
+instance Render a => Render (Seq a) where
+  render vec = "[" <> T.intercalate "," (toList $ fmap render vec) <> "]"
+
+instance Render ErrorList
+instance Render ParseError
+instance Render SourcePos
+
+instance P.Show ErrorList where
+  show (ErrorList msgs) = P.show msgs
+  --show (ErrorList msgs) = msgs ! concatMap ((<> "\n") . indentBy 4 . trim) ! line
 
 instance Render Double where
   render n | isInt n = render (floor n :: Integer)

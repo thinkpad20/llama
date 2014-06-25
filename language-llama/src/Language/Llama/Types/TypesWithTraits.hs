@@ -29,6 +29,11 @@ data TCState = TCState {_count :: Int, _env :: TypeEnv}
 -- The main type checking monad. Ye olde errorT stateT.
 type TypeChecker = ErrorT ErrorList (StateT TCState IO)
 
+
+instance Render Substitution where
+  render (Substitution s) = "{" <> T.intercalate ", " items <> "}" where
+    items = fmap (\(f,t) -> render f <> "=>" <> render t) $ H.toList s
+
 -- | A wrapper type class, just contains all of the classes we need for things
 -- that can be type checked.
 class (IsExpr e, Render e, Sourced e) => Valid e where -- no methods
@@ -210,57 +215,75 @@ unify t1 t2 = case (t1, t2) of
     return (s1 • s2)
   (_, _) -> throwErrorC ["Can't unify types ", render t1, " and ", render t2]
 
--- | Checks if an assertion is a contradiction in the current environment.
--- For example, the assertion `HasTrait "Mod" [String]` would be a
--- contradiction, if there were no instance of `Mod` for the String type.
-validate :: Context -> TypeChecker Context
-validate c@(Context ctx) = do
-  newCtxs <- mapM assertionToContext $ S.toList ctx
-  let noConstants = P.filter (not . isConstant) $ c:newCtxs
-  return (mconcat noConstants)
+-- | Returns a new context which is a simplified version of this context.
+-- For example, the assertion `{Eq (Maybe a)}` can be simplified into the
+-- assertion `{Eq a}`. The assertion `{Eq Int}` can become the empty context,
+-- since `Int` implements `Eq`. On the other hand, some assertions are
+-- contradictions. For example, the assertion `Eq (Int -> Int)` is (probably)
+-- not true.
+simplify :: Context -> TypeChecker Context
+simplify (Context ctx) = mconcat <$> mapM simplify' (S.toList ctx)
 
-assertionToContext :: Assertion -> TypeChecker Context
-assertionToContext (HasTrait name types) = do
+simplify' :: Assertion -> TypeChecker Context
+simplify' (HasTrait name types) = do
   -- for each instance stored for `name`
     -- for each type in the list of types
       -- try to generate a new context with `match`
       -- if this fails, move on
-  -- if no matches, assertion failed; throw an error
+  -- if no matches
+    -- if any of the types are pure type variables, return the types
+    -- else assertion failed; throw an error
+  putt ["simplifying ", render name, " ", render types]
   instanceLists <- getInstancesFor name
+  putt ["instances: ", render instanceLists]
   goILs instanceLists
   where
     -- Iterating over a list of instance lists
-    goILs [] = throwError1 $ "No instance of " <> whatsMissing
+    goILs [] =
+      if any isTVar types then do
+        putt ["No matches, but it's a var!"]
+        return (oneTrait name types)
+      else throwError1 $ "No instance of " <> whatsMissing
     goILs (il:ils) = goIL il `catchError` \_ -> goILs ils
     -- Iterating over a list of instances
     goIL [] = throwError1 "Nothing matched in this instance list"
-    goIL ((ctx, types'):is) = goT ctx types `catchError` \_ -> goIL is
+    goIL ((ctx, types'):is) = do
+      res <- goT ctx types'
+      putt ["hey, got results ", render res]
+      return res
+      `catchError` \_ -> goIL is
     -- Iterate over a list of types and concatenate results
     goT :: Context -> [BaseType] -> TypeChecker Context
-    goT ctx types' = fmap mconcat $ mapM (match ctx) $ P.zip types types'
+    goT ctx types' = do
+      putt ["trying to match with instance: ", render ctx, " ", render types']
+      fmap mconcat $ mapM (match ctx) $ P.zip types' types
     -- A pretty printer for reporting what caused an error.
     whatsMissing = case normalize types of
       [] -> name
       [t] -> name <> " for type " <> render t
       ts -> name <> " for types " <> commaSep ts
-    -- Turns [a, b, c] into "a, b, and c"
-    commaSep [t] = "and " <> render t
-    commaSep (t:ts) = render t <> ", " <> commaSep ts
+    -- Turns [a, b, c] into "a, b and c"
+    commaSep [t1, t2] =  rndr t1 <> " and " <> rndr t2
+    commaSep (t:ts) = rndr t <> ", " <> commaSep ts
+    rndr x = "`" <> render x <> "`"
+    isTVar (TVar _) = True
+    isTVar _ = False
 
 match :: Context             -- ^ The instance's context
       -> (BaseType           -- ^ The stored instance's type
       ,   BaseType)          -- ^ The type in the assertion
       -> TypeChecker Context -- ^ The new context
 match ctx (instType, asrtType) = do
+  putt ["Trying to match ", render instType, " with ", render asrtType]
   subs <- unify' instType asrtType
-  validate (subs •> ctx)
+  putt ["got subs: ", render subs]
+  simplify (subs •> ctx)
 
 -- | Almost the same as @unify@, but only records a substitution if the left
 -- side is a type variable.
 unify' :: BaseType -> BaseType -> TypeChecker Substitution
 unify' t1 t2 = case (t1, t2) of
   (TVar a, _) -> return $ oneSub a t2
-  (TConst a, TVar _) -> return zero
   (TConst a, TConst b) | a == b -> return zero
   (TApply a b, TApply a' b') -> do
     s1 <- unify' a a'
@@ -323,27 +346,30 @@ initState :: TCState
 initState = TCState {_count = 0, _env = initTypeEnv} where
   initTypeMap = H.fromList [("Z", "Nat"), ("S", "Nat" ==> "Nat"),
                             ("Point", fromBT (a ==> point a)),
+                            ("Just", fromBT (a ==> maybe a)),
+                            ("Nothing", fromBT (maybe a)),
                             ("True", "Bool"), ("False", "Bool"),
                             ("_+_", poly ["a", "b", "c"] plusT),
                             ("-_", poly ["a", "b"] negT),
                             ("_==_", poly ["a"] eqT)]
   (a, b, c) = (TVar "a", TVar "b", TVar "c")
-  eqT = Type (oneTrait "Eq" ["a"]) (a ==> a ==> "Bool")
-  negT = Type (oneTrait "Negate" ["a", "b"]) (a ==> b)
-  plusT = Type (oneTrait "Add" ["a", "b", "c"]) (a ==> b ==> c)
+  eqT = Type (oneTrait' "Eq" ["a", "b"]) (a ==> b ==> "Bool")
+  negT = Type (oneTrait' "Negate" ["a", "b"]) (a ==> b)
+  plusT = Type (oneTrait' "Add" ["a", "b", "c"]) (a ==> b ==> c)
   poly vars = Polytype (S.fromList vars)
   point = apply "Point"
+  maybe = apply "Maybe"
   list = apply "List"
   initTraitMap = H.fromList [
      ("Add", [
       (mempty, ["Int", "Int", "Int"]),
       (mempty, ["Nat", "Nat", "Nat"]),
-      (oneTrait "Add" ["a", "a", "a"], [point a, point a, point a])
+      (oneTrait' "Add" ["a", "a", "a"], [point a, point a, point a])
      ])
     ,("Eq", [
      (mempty, ["Int"]),
      (mempty, ["Nat"]),
-     (oneTrait "Eq" ["a"], [list a])
+     (oneTrait' "Eq" ["a"], [maybe a])
      ]
     )]
   initTypeEnv = TypeEnv [(initTypeMap, initTraitMap)]
@@ -357,8 +383,8 @@ typeof expr = case unExpr expr of
   Int _ -> only "Int"
   Float _ -> only "Float"
   String _ -> do
-    TVar name <- newvar
-    only $ Type (oneTrait "StrLit" [name]) (TVar name)
+    tv <- newvar
+    only $ Type (oneTrait "StrLit" [tv]) tv
   If c t f -> typeofIf c t f
   Var name -> teLookup name >>= \case
     Nothing -> err ["Unknown identifier '", name, "'"]
@@ -378,7 +404,7 @@ typeof expr = case unExpr expr of
     paramT <- Type mempty <$> newvar
     withContext param paramT $ do
       (s, Type ctx t) <- typeof body
-      ctx' <- validate ctx
+      ctx' <- simplify ctx
       ret s (paramT ==> Type ctx' t)
   Apply e1 e2 -> do
     (subs1, Type ctx1 t1) <- typeof' e1
@@ -435,8 +461,11 @@ sourceError e msgs = throwErrorC $
 hasTrait :: Name -> [Name] -> Assertion
 hasTrait name vars = HasTrait name $ fmap TVar vars
 
-oneTrait :: Name -> [Name] -> Context
-oneTrait name = Context . S.singleton . hasTrait name
+oneTrait' :: Name -> [Name] -> Context
+oneTrait' name = Context . S.singleton . hasTrait name
+
+oneTrait :: Name -> [BaseType] -> Context
+oneTrait name = Context . S.singleton . HasTrait name
 
 --------------------------------------------------------------------------
 ---------------------- Running the type checker --------------------------
