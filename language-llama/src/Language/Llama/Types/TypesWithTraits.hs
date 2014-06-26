@@ -1,5 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE NoMonomorphismRestriction #-}
+{-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE LambdaCase #-}
 module Language.Llama.Types.TypesWithTraits where
 import qualified Prelude as P
@@ -20,13 +21,11 @@ type Instance = (Context, [BaseType])
 type TypeMap = Map Name Polytype
 -- | Stores the instances we've made.
 type TraitMap = Map Name [Instance]
--- The environment; a stack of names and instances.
-newtype TypeEnv = TypeEnv [(TypeMap, TraitMap)] deriving (Show, Eq)
--- A mapping from (type variable) names to BaseTypes.
+-- | A mapping from (type variable) names to BaseTypes.
 newtype Substitution = Substitution (Map Name BaseType) deriving (Show, Eq)
--- Our monadic state. The count is for generating new names.
-data TCState = TCState {_count :: Int, _env :: TypeEnv}
--- The main type checking monad. Ye olde errorT stateT.
+-- | Our monadic state. The count is for generating new names.
+data TCState = TCState {_count::Int, _tymaps::[TypeMap], _trmaps::[TraitMap]}
+-- | The main type checking monad. Ye olde errorT stateT.
 type TypeChecker = ErrorT ErrorList (StateT TCState IO)
 
 
@@ -69,8 +68,8 @@ instance FreeVars Type where
   freevars (Type ctx t) = freevars ctx <> freevars t
 instance FreeVars Polytype where
   freevars (Polytype vars t) = freevars t \\ vars
-instance FreeVars TypeEnv where
-  freevars (TypeEnv env) = mconcat $ fmap (freevars . H.elems . fst) env
+instance FreeVars TypeMap where
+  freevars = freevars . H.elems
 instance FreeVars a => FreeVars [a] where
   freevars = mconcat . fmap freevars
 
@@ -135,11 +134,10 @@ instance Substitutable Type where
 instance Substitutable Polytype where
   subs •> (Polytype vars t) = (Polytype vars (s t)) where
     s = (S.foldr' remove subs vars •>)
-instance Substitutable TypeEnv where
-  subs •> (TypeEnv te) = TypeEnv $ fmap go te where
-    go (tymap, trmap) = (fmap (subs •>) tymap, trmap)
 instance (Substitutable a, Substitutable b) => Substitutable (a, b) where
   subs •> (a, b) = (subs •> a, subs •> b)
+instance (Substitutable val) => Substitutable (Map key val) where
+  subs •> m = fmap (subs •>) m
 instance Substitutable a => Substitutable [a] where
   subs •> list = fmap (subs •>) list
 
@@ -189,7 +187,7 @@ instantiate (Polytype vars t) = do
 
 generalize :: Type -> TypeChecker Polytype
 generalize _type@(Type ctx t) = do
-  freeFromEnv <- freevars . _env <$> get
+  freeFromEnv <- freevars . _tymaps <$> get
   return $ Polytype ((freevars t <> freevars ctx) \\ freeFromEnv) _type
 
 instantiateInstance :: Instance -> TypeChecker Instance
@@ -304,37 +302,31 @@ newvar = do
 
 -- | Looks up a variable in the type environment (all available).
 teLookup :: Name -> TypeChecker (Maybe Polytype)
-teLookup name = do
-  TypeEnv env <- _env <$> get
-  go (fmap fst env) where
-    go [] = return Nothing
-    go (e:rest) = case lookup name e of
-      Nothing -> go rest
-      Just pt -> return $ Just pt
+teLookup name = _tymaps <$> get >>= go where
+  go [] = return Nothing
+  go (e:rest) = case lookup name e of
+    Nothing -> go rest
+    Just pt -> return $ Just pt
 
 -- | Looks up a variable in the local type environment only.
-teLookup1 :: Name -> TypeEnv -> Maybe Polytype
-teLookup1 name (TypeEnv []) = Nothing
-teLookup1 name (TypeEnv ((e, _):_)) = H.lookup name e
+teLookup1 :: Name -> [TypeMap] -> Maybe Polytype
+teLookup1 name [] = Nothing
+teLookup1 name (tm:_) = H.lookup name tm
 
 -- | Stores the polytype of a variable.
 teStore :: Name -> Polytype -> TypeChecker ()
 teStore name ptype = do
-  TypeEnv ((te, tr):rest) <- _env <$> get
-  modify $ \s -> s {_env = TypeEnv $ (H.insert name ptype te, tr):rest}
+  tm:rest <- _tymaps <$> get
+  modify $ \s -> s {_tymaps = H.insert name ptype tm:rest}
 
 -- | Applies a substitution to the environment in the monad.
 substituteEnv :: Substitution -> TypeChecker ()
 substituteEnv subs = do
-  env <- _env <$> get
-  modify $ \s -> s {_env = subs •> env}
-
+  modify $ \s -> s {_tymaps = subs •> _tymaps s}
 
 -- | Gets all trait instances we have stored.
-getInstances :: TypeChecker [(TraitMap)]
-getInstances = do
-  TypeEnv env <- _env <$> get
-  return $ fmap snd env
+getInstances :: TypeChecker [TraitMap]
+getInstances = _trmaps <$> get
 
 getInstancesFor :: Name -> TypeChecker [[Instance]]
 getInstancesFor name = do
@@ -343,18 +335,18 @@ getInstancesFor name = do
 
 -- | The state we start with.
 initState :: TCState
-initState = TCState {_count = 0, _env = initTypeEnv} where
+initState = TCState {_count=0, _tymaps=[initTypeMap], _trmaps=[initTraitMap]} where
   initTypeMap = H.fromList [("Z", "Nat"), ("S", "Nat" ==> "Nat"),
                             ("Point", fromBT (a ==> point a)),
                             ("Just", fromBT (a ==> maybe a)),
                             ("Nothing", fromBT (maybe a)),
                             ("True", "Bool"), ("False", "Bool"),
                             ("_+_", poly ["a", "b", "c"] plusT),
-                            ("-_", poly ["a", "b"] negT),
+                            ("-_", poly ["a"] negT),
                             ("_==_", poly ["a"] eqT)]
   (a, b, c) = (TVar "a", TVar "b", TVar "c")
   eqT = Type (oneTrait' "Eq" ["a", "b"]) (a ==> b ==> "Bool")
-  negT = Type (oneTrait' "Negate" ["a", "b"]) (a ==> b)
+  negT = Type (oneTrait' "Negate" ["a"]) (a ==> a)
   plusT = Type (oneTrait' "Add" ["a", "b", "c"]) (a ==> b ==> c)
   poly vars = Polytype (S.fromList vars)
   point = apply "Point"
@@ -372,7 +364,6 @@ initState = TCState {_count = 0, _env = initTypeEnv} where
      (oneTrait' "Eq" ["a"], [maybe a])
      ]
     )]
-  initTypeEnv = TypeEnv [(initTypeMap, initTraitMap)]
 
 --------------------------------------------------------------------------
 ---------------------- Main inferrence functions -------------------------
@@ -438,20 +429,21 @@ typeofIf c t f = do
 typeof' :: (Valid e) => e -> TypeChecker (Substitution, Type)
 typeof' expr = typeof expr >>= \(s, t) -> substituteEnv s >> return (s, t)
 
-pushTypeEnv :: TypeMap -> TypeEnv -> TypeEnv
-pushTypeEnv tmap (TypeEnv env) = TypeEnv $ (tmap, mempty) : env
+push :: TypeChecker ()
+push = modify $ \s -> s{_trmaps=mempty:_trmaps s, _tymaps=mempty:_tymaps s}
 
-popTypeEnv :: TypeEnv -> TypeEnv
-popTypeEnv (TypeEnv (_:env)) = TypeEnv env
+pop :: TypeChecker (TypeMap, TraitMap)
+pop = do
+  tymap <- head . _tymaps <$> get
+  trmap <- head . _trmaps <$> get
+  modify $ \s -> s{_trmaps=tail $ _trmaps s, _tymaps=tail $ _tymaps s}
+  return (tymap, trmap)
 
 -- | Pushes a new environment with a name and type, does an action, pops.
 withContext :: Name -> Type -> TypeChecker a -> TypeChecker a
-withContext name _type action = do
-  let tmap = H.singleton name (Polytype mempty _type)
-  modify $ \s -> s {_env = pushTypeEnv tmap $ _env s}
-  result <- action
-  modify $ \s -> s {_env = popTypeEnv $ _env s}
-  return result
+withContext name _type action = push >> mod >> action <* pop where
+  addit (t:ts) = H.insert name (Polytype mempty _type) t : ts
+  mod = modify $ \s -> s {_tymaps = addit $ _tymaps s}
 
 -- | Adds the source position to an error message.
 sourceError :: (Render e, Sourced e) => e -> [Text] -> TypeChecker a
@@ -473,7 +465,8 @@ oneTrait name = Context . S.singleton . HasTrait name
 
 -- | For debugging print statements while we're type checking.
 putt :: [Text] -> TypeChecker ()
-putt = liftIO . putStrLn . unpack . mconcat
+putt | showLogs = liftIO . putStrLn . unpack . mconcat
+     | otherwise = \_ -> return ()
 
 -- | Unwrapping type checking monads.
 runTyping :: TypeChecker a -> Either ErrorList a
@@ -497,3 +490,5 @@ test :: String -> IO ()
 test input = case typeIt input of
   Left err -> error $ P.show err
   Right _type -> putStrLn $ unpack $ render _type
+
+showLogs = False
