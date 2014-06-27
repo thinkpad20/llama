@@ -2,7 +2,7 @@
 {-# LANGUAGE NoMonomorphismRestriction #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE LambdaCase #-}
-module Language.Llama.Types.TypesWithTraits where
+module Language.Llama.Types.TypeCheck where
 import qualified Prelude as P
 import Prelude (Show)
 import Data.Set (Set, singleton, (\\))
@@ -595,3 +595,11 @@ test input = case fmap snd $ typeIt input of
   Right _type -> putStrLn $ unpack $ render $ normalize _type
 
 showLogs = False
+
+test1 = Type (oneTrait' "IntLiteral" ["a"]) (TVar "b")
+test2 = Type ctx (TVar "b") where
+  ctx = oneTrait' "IntLiteral" ["a"] <> oneTrait' "Add" ["a", "b", "c"]
+
+tst = do
+  subs <- disambiguate test2
+  return $ subs •> test2

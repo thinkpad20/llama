@@ -94,7 +94,7 @@ traverse ds e | doTest ds e = doTransform ds e
   Break expr -> Break <$> rec expr
   After e1 e2 -> After <$> rec e1 <*> rec e2
   Before e1 e2 -> Before <$> rec e1 <*> rec e2
-  ObjDec od -> ObjDec <$> recOd od
+  TypeDec od -> TypeDec <$> recTD od
   Modified m expr -> Modified m <$> rec expr
   LambdaDot e rest -> LambdaDot <$> recNS "%l" e <*> mapM (recNS "%l") rest
   WildCard -> return WildCard
@@ -129,14 +129,13 @@ traverse ds e | doTest ds e = doTransform ds e
           IsTupleOf size e -> IsTupleOf size <$> rec e
           IsVectorOf size e -> IsVectorOf size <$> rec e
           And pa1 pa2 -> And <$> recPA pa1 <*> recPA pa2
-        recCr cr@(ConstructorDec {constrArgs=args, constrExtends=extends}) = do
+        recCr cr@(ConstructorDec {constrArgs=args}) = do
           args' <- mapM rec args
-          extends' <- recMaybe extends
-          return cr {constrArgs=args', constrExtends=extends'}
-        recOd od@(ObjectDec {objConstrs=constrs, objAttrs=attrs}) = do
+          return cr {constrArgs=args'}
+        recTD td@(TDec {typeConstrs=constrs, typeAttrs=attrs}) = do
           constrs' <- mapM recCr constrs
           attrs' <- mapM rec attrs
-          return $ od {objConstrs=constrs', objAttrs=attrs'}
+          return $ td {typeConstrs=constrs', typeAttrs=attrs'}
 
 pushNS :: Name -> Desugar ()
 pushNS name = do
@@ -147,18 +146,18 @@ popNS :: Desugar ()
 popNS = modify $ \s -> s { dsNameSpace = nsTail $ dsNameSpace s
                          , dsNamesInUse = tail $ dsNamesInUse s}
 
--- | We have a series of desugarers. Each of which has a test
--- which determines if it should run (essentially, matching on the
--- constructor type of the expression) and a transforming function
--- which takes that expression and returns its desugared version.
+-- | We have a series of desugarers. Each one has a test which determines 
+-- if it should run (essentially, matching on the constructor type of the
+-- expression) and a transforming function which takes that expression and 
+-- returns its desugared version.
 dsAfterBefore :: Desugarer
 dsAfterBefore = ("Before/After", test, ds) where
   test (After _ _) = True
   test (Before _ _) = True
   test _ = False
   ds :: DExpr -> Desugar DExpr
-  ds e = mk e $ case _dsrd e of
-    a `After` b -> case _dsrd b of
+  ds e = mk e $ case unExpr e of
+    a `After` b -> case unExpr b of
       _b `Then` c -> do
         (a', b', c') <- (,,) <$> rec a <*> rec _b <*> rec c
         return $ b' `Then` (DExpr {_orig=_orig b, _dsrd=c' `Then` a'})

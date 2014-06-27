@@ -50,7 +50,7 @@ data AbsExpr expr = Var          !Name
                   | Break        !expr
                   | After        !expr !expr
                   | Before       !expr !expr
-                  | ObjDec       !(ObjectDec expr)
+                  | TypeDec       !(TypeDec expr)
                   | Modified     !Text !expr
                   | TypeDef      !Name !Type
                   | LambdaDot    !expr ![expr]
@@ -95,18 +95,16 @@ data JLiteral = JString Text
               | JObject [(Name, JLiteral)]
               deriving (P.Show, Eq)
 
-data ObjectDec expr = ObjectDec
-  { objName :: Name
-  , objExtends :: Maybe Name
-  , objVars :: [Name]
-  , objConstrs :: [ConstructorDec expr]
-  , objAttrs :: [expr] }
+data TypeDec expr = TDec
+  { typeName :: Name
+  , typeVars :: [Name]
+  , typeConstrs :: [ConstructorDec expr]
+  , typeAttrs :: [expr] }
   deriving (P.Show, Eq, Functor)
 
 data ConstructorDec expr = ConstructorDec
   { constrName :: Name
-  , constrArgs :: [expr]
-  , constrExtends :: Maybe expr }
+  , constrArgs :: [expr] }
   deriving (P.Show, Eq, Functor)
 
 -- | An interpolated string.
@@ -324,13 +322,11 @@ isInfixSymbol s = isSymbol s && T.head s == '_' && T.last s == '_'
 defConstr :: ConstructorDec e
 defConstr = ConstructorDec
   { constrName = "(some constructor)"
-  , constrArgs = []
-  , constrExtends = Nothing }
+  , constrArgs = [] }
 
-defObj :: ObjectDec e
-defObj = ObjectDec
-  { objName = "(some object)"
-  , objExtends = Nothing
-  , objVars = []
-  , objConstrs = []
-  , objAttrs = [] }
+defType :: TypeDec e
+defType = TDec
+  { typeName = "(some type)"
+  , typeVars = []
+  , typeConstrs = []
+  , typeAttrs = [] }

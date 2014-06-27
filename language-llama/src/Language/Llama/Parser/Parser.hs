@@ -65,7 +65,7 @@ pExpr = pIf <|> pUnless <|> pFor <|> pCase <|> pMod <|> pLambdaDot where
                  , pAfter, pBefore]
 
 -- | More high-level than expressions. Things like object/trait declarations.
-pStatement = choice [pObjectDec, pTraitDec, pExpr]
+pStatement = choice [pTypeDec, pTraitDec, pExpr]
 
 ---------------------------------------------------------
 --------------------  Control flow  ---------------------
@@ -169,18 +169,16 @@ pPatternDef = do
   expr <- pExprOrBlock
   return $ \pat -> Expr (_pos pat) $ PatternDef pat expr
 
-pObjectDec :: Parser Expr
-pObjectDec = item $ ObjDec <$> do
+pTypeDec :: Parser Expr
+pTypeDec = item $ TypeDec <$> do
   pKeyword "type"
   name <- pConstrName
   vars <- commaSep pVarName
-  extends <- optionMaybe $ pSymbol "<:" *> pConstrName
   (constrs, attrs) <- getConstrs
-  return $ defObj { objName = name
-                  , objExtends = extends
-                  , objVars = vars
-                  , objConstrs = constrs
-                  , objAttrs = attrs }
+  return $ defType { typeName = name
+                   , typeVars = vars
+                   , typeConstrs = constrs
+                   , typeAttrs = attrs }
 
 getConstrs :: Parser ([ConstructorDec Expr], [Expr])
 getConstrs = (,) <$> constrs <*> attrs where
@@ -191,10 +189,8 @@ pConstructorDec :: Parser (ConstructorDec Expr)
 pConstructorDec = do
   name <- pConstrName
   args <- many pTerm
-  extends <- optionMaybe (pSymbol "<:" >> pSmallExpr)
   return defConstr { constrName = name
-                   , constrArgs = args
-                   , constrExtends = extends }
+                   , constrArgs = args }
 
 -- | Defines a trait.
 pTraitDec :: Parser Expr
