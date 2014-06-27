@@ -27,7 +27,7 @@ module Language.Llama.Common.Common (
   , module Text.Parsec
   , module GHC.Exts
   , module Prelude
-  , Render(..), Name, Zero(..), ErrorList(..)
+  , Render(..), Name, Zero(..), ErrorList(..), Map
   , throwError1, throwErrorC, addError, mconcatMapM, whenM
   , unlessM, lift2, print, show, isInt, isIntTo, trim, indentBy
   , contains, line, each, (!), (<!>), (>>==), (~>)) where
@@ -58,7 +58,7 @@ import Data.HashMap.Strict hiding (map, (!), toList, fromList, empty
 import Data.List (intercalate)
 import Data.Maybe (catMaybes)
 import Data.Monoid
-import Data.Sequence hiding (replicate, length, empty, zip, filter)
+import Data.Sequence hiding (replicate, length, empty, zip, filter, singleton)
 import Data.String
 import Data.Text (Text(..), pack, unpack, snoc)
 import qualified Data.Text as T
@@ -68,6 +68,7 @@ import GHC.Exts (sortWith)
 import Text.Parsec (ParseError, SourcePos)
 
 type Name = T.Text
+type Map = HashMap
 
 newtype ErrorList = ErrorList [T.Text]
 instance Error ErrorList where

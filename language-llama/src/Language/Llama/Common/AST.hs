@@ -4,7 +4,13 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE DeriveFunctor #-}
 {-# LANGUAGE LambdaCase #-}
-module Language.Llama.Common.AST where
+module Language.Llama.Common.AST (
+    module Language.Llama.Common.Types
+  , AbsExpr(..), ForPattern(..), PatAssert(..), Literal(..), JLiteral(..)
+  , TypeDec(..), ConstructorDec(..), InString(..), IsExpr(..), Kwarg(..)
+  , symChars, isSymbol, isPrefixSymbol, isPostfixSymbol, defConstr, defType
+  , rndr
+  ) where
 
 import qualified Prelude as P
 import qualified Data.Map as M
@@ -13,10 +19,11 @@ import Data.Set (Set, singleton, (\\))
 import qualified Data.Set as S
 
 import Language.Llama.Common.Common
+import Language.Llama.Common.Types
 
 data AbsExpr expr = Var          !Name
                   | Int          !Integer
-                  | Float       !Double
+                  | Float        !Double
                   | String       !Text
                   | InString     !(InString expr)
                   | Constructor  !Name
@@ -190,6 +197,7 @@ rndr isBlockStart e = case unExpr e of
   GetAttrib name i e -> rec e <> "{" <> name <> "}\\" <> render i
   Case e alts -> "case " <> rec e <> " of " <> rndrOneAlts alts
   MultiCase e alts -> "case " <> rec e <> " of " <> rndrAlts alts
+  Typed e t -> rec e <> " : " <> renderP t
   _ -> show e
   where
     rec = rndr isBlockStart
@@ -256,53 +264,6 @@ instance Render e => Render (InString e) where
     let i2' = T.init $ T.tail $ render i2
     let e' = render e
     "\"" <> i1' <> "#{" <> e' <> "}" <> i2' <> "\""
-
-data BaseType
-  = TVar Name
-  | TConst Name
-  | TApply BaseType BaseType
-  deriving (P.Show, Eq, Ord)
-type Map = HashMap
-data Assertion = HasTrait Name [BaseType] deriving (P.Show, Eq, Ord)
-newtype Context = Context (Set Assertion) deriving (P.Show, Eq)
-data Type = Type Context BaseType deriving (P.Show, Eq)
-data Polytype = Polytype (Set Name) Type deriving (P.Show, Eq)
-
-instance Monoid Context where
-  mempty = Context mempty
-  mappend (Context c1) (Context c2) = Context (mappend c1 c2)
-
-instance IsString BaseType where fromString = TConst . pack
-instance IsString Type where fromString = Type mempty . fromString
-instance IsString Polytype where fromString = Polytype mempty . fromString
-
-instance Render BaseType where
-  render t = case t of
-    TVar name -> name
-    TApply (TApply "->" t1) t2 -> render' t1 <> " -> " <> render t2
-    TConst name -> name
-    TApply t1 t2 -> renderP t1 <> " " <> renderP t2
-    where render' t@(TApply (TApply "->" t1) t2) = renderP t
-          render' t = render t
-  renderP t@(TApply _ _ ) = "(" <> render t <> ")"
-  renderP t = render t
-
-
-instance Render Assertion where
-  render (HasTrait name ts) =
-    name <> " " <> T.intercalate " " (fmap renderP ts)
-
-instance Render Context where
-  render (Context ctx) | S.size ctx == 1 = rndr
-                       | otherwise = "{" <> rndr <> "}"
-    where rndr = T.intercalate ", " . fmap renderP . toList $ ctx
-
-instance Render Type where
-  render (Type ctx t) | ctx == mempty = render t
-                      | otherwise = render ctx <> ". " <> render t
-  renderP (Type ctx t)
-    | ctx == mempty = render t
-    | otherwise = "(" <> render ctx <> ". " <> render t <> ")"
 
 symChars :: String
 symChars = "><=+-*/^~!%&$:#|?_"

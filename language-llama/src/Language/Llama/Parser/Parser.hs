@@ -60,7 +60,10 @@ pExpr = pIf <|> pUnless <|> pFor <|> pCase <|> pMod <|> pLambdaDot where
     Modified m <$> pMod
   pExpr' = do
     expr <- pSmallExpr
-    option expr $ fmap (\f -> f expr) extra
+    expr' <- option expr $ do
+      pSymbol ":"
+      item $ Typed expr <$> pType
+    option expr' $ fmap (\f -> f expr') extra
   extra = choice [ pLambda, pPatternDef, pPostIf, pPostUnless, pPostFor
                  , pAfter, pBefore]
 
@@ -200,11 +203,50 @@ pTraitDec = unexpected "Trait declarations not yet implemented"
 -------------------------  Types  --------------------------
 ------------------------------------------------------------
 
--- pType :: Parser Type
--- pType = pTVar
---
--- pTVar :: Parser Type
--- pTVar =
+pBaseType :: Parser BaseType
+pBaseType = pTFunction
+
+pTVar :: Parser BaseType
+pTVar = TVar <$> pVarName
+
+pTConst :: Parser BaseType
+pTConst = TConst <$> pConstrName
+
+pTParens :: Parser BaseType
+pTParens = enclose '(' ')' types' where
+  types = pBaseType `sepBy` pPunc ','
+  types' = types >>= \case
+    [t] -> return t
+    ts -> return $ tuple ts
+
+pTTerm :: Parser BaseType
+pTTerm = choice [pTVar, pTConst, pTParens]
+
+pTFunction :: Parser BaseType
+pTFunction = chainr1 pTApply (pSymbol "->" *> pure (==>))
+
+pTChain :: Parser BaseType
+pTChain = pTTerm >>= go where
+  go t = option t $ do
+    next <- immediate pTTerm
+    go $ TApply t next
+
+pTApply :: Parser BaseType
+pTApply = chainl1 pTChain (pure TApply)
+
+pTContext :: Parser Context
+pTContext = Context . S.fromList <$> asrts where
+  assert = HasTrait <$> pConstrName <*> many pTTerm
+  assert1 = try $ HasTrait <$> pConstrName <*> many1 pTTerm
+  asrts  = fmap pure assert1 <|> enclose '{' '}' (assert `sepBy` pPunc ',') 
+
+-- | A type can optionally declare a context; otherwise it's assumed empty.
+pType :: Parser Type
+pType = do
+  -- Try to parse a context AND a basetype.
+  try $ Type <$> (pTContext <* pPunc '.') <*> pBaseType
+  -- If that fails, parse just a basetype.
+  <|> Type mempty <$> pBaseType
 
 ------------------------------------------------------------
 -------------------------  Blocks  -------------------------
@@ -385,6 +427,11 @@ pChain = pAttribute >>= go where
       TPunc '.' -> do
         dotfunc <- pPunc '.' *> pTerm
         go' $ Dot expr dotfunc
+      -- If there's an immediate colon, it's a typing annotation.
+      TSymbol ":" | not (tHasSpace pt) -> do
+        pSymbol ":"
+        t <- fromBT <$> pTChain
+        go' $ Typed expr t
       -- If there's an immediate symbol, it's either a postfix expression, or
       -- it's a high-precedence binary operation (which would be another
       -- immediate expression).
@@ -521,9 +568,6 @@ immediate p = lookAhead next >>= \pt -> do
 next :: Parser PToken
 next = grab Just
 
-tuple :: SourcePos -> [Expr] -> Expr
-tuple pos exprs = Expr pos $ Tuple exprs mempty
-
 item :: Parser (AbsExpr Expr) -> Parser Expr
 item p = Expr <$> getPosition <*> p
 
@@ -580,7 +624,7 @@ initState = ParserState {
                                 , ">=", "==", "!=", "+", "-", "*", "/", "**"
                                 , "^", "~>", "~>", ":=", "->", "=>", "..", "="
                                 , "~", "+=", "*=", "/=", "-=", "<>=", "^="
-                                , "|"]
+                                , "|", ":"]
   , _leftfixities  = S.fromList ["!", "+", "-", "*", "/"]
   , _rightfixities = S.fromList ["**", "^", "&&", "||", "|^|"]
   }

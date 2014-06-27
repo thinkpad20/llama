@@ -4,143 +4,18 @@
 {-# LANGUAGE LambdaCase #-}
 module Language.Llama.Types.TypeCheck where
 import qualified Prelude as P
-import Prelude (Show)
-import Data.Set (Set, singleton, (\\))
 import qualified Data.Set as S
 import qualified Data.HashMap.Strict as H
 import qualified Data.Text as T
-import Language.Llama.Common.Common hiding (singleton)
-import Language.Llama.Common.AST
-import Language.Llama.Parser.Parser (Sourced(..))
+import Language.Llama.Types.TypeCheckLib
+import qualified Language.Llama.Types.TypeCheckDefaults as Defaults
 import Language.Llama.Desugarer.Desugar hiding (testString)
 import System.IO.Unsafe (unsafePerformIO)
-
--- | A stored trait instance, which might have its own context.
-data Instance = Instance Context [BaseType] deriving (Show)
-data DefaultEntry = Slot BaseType | Fixed BaseType deriving (Show)
-newtype DefaultInstance = DefaultInstance [DefaultEntry]
-  deriving (Show)
--- | Stores names that we've typed
-type TypeMap = Map Name Polytype
--- | Stores the instances we've made.
-type TraitMap = Map Name ([Instance], [DefaultInstance])
--- | A mapping from (type variable) names to BaseTypes.
-newtype Substitution = Substitution (Map Name BaseType) deriving (Show, Eq)
--- | Our monadic state. The count is for generating new names.
-data TCState = TCState {_count::Int, _tymaps::[TypeMap], _trmaps::[TraitMap]}
--- | The main type checking monad. Ye olde errorT stateT.
-type TypeChecker = ErrorT ErrorList (StateT TCState IO)
-
-instance Render Instance where
-  render (Instance ctx ts) = render ctx <> ". " <> T.intercalate " " ts' where
-    ts' = fmap renderP ts
-
-instance Render DefaultInstance where
-  render (DefaultInstance ts) = "default " <> ts' where
-    rndr (Slot t) = "<" <> render t <> ">"
-    rndr (Fixed t) = render t
-    ts' = T.intercalate " " $ fmap rndr ts
-
-instance Render Substitution where
-  render (Substitution s) = "{" <> T.intercalate ", " items <> "}" where
-    items = fmap (\(f,t) -> render f <> "=>" <> render t) $ H.toList s
 
 -- | A wrapper type class, just contains all of the classes we need for things
 -- that can be type checked.
 class (IsExpr e, Render e, Sourced e) => Valid e where -- no methods
 instance Valid DExpr
-
-class CanApply a where apply :: a -> a -> a
-instance CanApply BaseType where
-  apply = TApply
-instance CanApply Type where
-  apply (Type ctx1 t1) (Type ctx2 t2) = Type (ctx1 <> ctx2) (apply t1 t2)
-instance CanApply Polytype where
-  apply (Polytype vs1 t1) (Polytype vs2 t2) =
-    Polytype (vs1 <> vs2) (apply t1 t2)
-
-class FromBaseType t where
-  fromBT :: BaseType -> t
-
-instance FromBaseType BaseType where 
-  fromBT bt = bt
-instance FromBaseType Type where 
-  fromBT = Type mempty
-instance FromBaseType Polytype where 
-  fromBT bt = Polytype (freevars bt) (fromBT bt)
-
-class FreeVars a where freevars :: a -> Set Name
-instance FreeVars BaseType where
-  freevars = \case
-    TVar n -> singleton n
-    TConst _ -> mempty
-    TApply t1 t2 -> freevars t1 <> freevars t2
-instance FreeVars Assertion where
-  freevars (HasTrait _ types) = freevars types
-instance FreeVars Context where
-  freevars (Context ctx) = freevars $ toList ctx
-instance FreeVars Type where
-  freevars (Type ctx t) = freevars ctx <> freevars t
-instance FreeVars Polytype where
-  freevars (Polytype vars t) = freevars t \\ vars
-instance FreeVars TypeMap where
-  freevars = freevars . H.elems
-instance FreeVars a => FreeVars [a] where
-  freevars = mconcat . fmap freevars
-
-isConstant :: FreeVars a => a -> Bool
-isConstant = S.null . freevars
-
-freelist :: FreeVars a => a -> [Name]
-freelist = S.toList . freevars
-
---------------------------------------------------------------------------
------------------------- Type normalization functions --------------------
---------------------------------------------------------------------------
-
--- | Normalizing means replacing obscurely-named type variables with letters.
--- For example, the type @(t$13 -> [t$4]) -> t$13@ would be @(a -> b) -> a@.
--- The best way to do this is with a state monad so that we can track which
--- renamings have been done. So the only method that we need is @normalizeS@ 
--- (@S@ for state monad). This lets us normalize across multiple types.
-class Normalize t where
-  normalizeS :: t -> State (Text, HashMap Name Name) t
-
-normalize :: Normalize a => a -> a
-normalize = normalizeWith ("a", mempty)
-
-normalizeWith :: Normalize a => (Text, Map Name Name) -> a -> a
-normalizeWith state x = evalState (normalizeS x) state
-
-instance Normalize BaseType where
-  normalizeS type_ = case type_ of
-    TVar name -> do
-      (name', mapping) <- get
-      case H.lookup name mapping of
-        Nothing -> do modify (\(n, m) -> (next n, H.insert name name' m))
-                      return (TVar name')
-        Just n -> return (TVar n)
-    TApply a b -> TApply <$> normalizeS a <*> normalizeS b
-    _ -> return type_
-    where
-      next name = case T.last name of
-        c | c < 'z' -> T.init name `T.snoc` succ c
-          | True    -> name `T.snoc` 'a'
-
-instance Normalize Type where
-  normalizeS (Type ctx t) = Type <$> normalizeS ctx <*> normalizeS t
-
-instance Normalize Context where
-  normalizeS (Context ctx) = do
-    let asserts = S.toList ctx
-    asserts' <- forM asserts $ \case
-      HasTrait n ts -> HasTrait n <$> normalizeS ts
-    -- Filter out constant assertions (e.g. {Foo Int}) unless showConstants
-    return $ Context $ S.fromList $
-      if showConstants then asserts' else filter (not . isConstant) asserts'
-
-instance Normalize a => Normalize [a] where
-  normalizeS = mapM normalizeS
 
 --------------------------------------------------------------------------
 -------------------------- Type substitutions ----------------------------
@@ -183,22 +58,6 @@ oneSub n = Substitution . H.singleton n
 
 remove :: Name -> Substitution -> Substitution
 remove n (Substitution s) = Substitution (delete n s)
-
---------------------------------------------------------------------------
----------------------- Type constructor wrappers -------------------------
---------------------------------------------------------------------------
-
--- | The function type, which is actually a rank-2 type applied twice.
-(==>) :: (IsString a, CanApply a) => a -> a -> a
-t1 ==> t2 = apply (apply "->" t1) t2
-
-infixr 3 ==>
-
--- | A tuple type, a rank-N type where N is the length of the tuple.
-tuple :: (IsString a, CanApply a) => [a] -> a
-tuple ts = do
-  let name = "Tuple(" <> P.show (length ts) <> ")"
-  foldl' apply (fromString name) ts
 
 --------------------------------------------------------------------------
 ---------------------- Polytype <-> Type functions -----------------------
@@ -431,68 +290,8 @@ withContext name _type action = push >> mod >> action <* pop where
 
 -- | The state we start with.
 initState :: TCState
-initState = TCState {_count=0, _tymaps=[typeMap], _trmaps=[traitMap]} where
-  typeMap = H.fromList [("Z", "Nat"), ("S", "Nat" ==> "Nat"),
-                        ("Less", "Comparison"), 
-                        ("More", "Comparison"),
-                        ("Equal", "Comparison"),
-                        ("Point", fromBT (a ==> point a)),
-                        ("Just", fromBT (a ==> maybe a)),
-                        ("Nothing", fromBT (maybe a)),
-                        ("True", "Bool"), ("False", "Bool"),
-                        ("_+_", poly ["a", "b", "c"] plusT),
-                        ("_-_", poly ["a", "b", "c"] minusT),
-                        ("_*_", poly ["a", "b", "c"] multT),
-                        ("-_", poly ["a"] negT),
-                        ("_==_", poly ["a"] eqT),
-                        ("_<_", poly ["a"] $ hasComp (a ==> a ==> "Bool")),
-                        ("compare", poly ["a"] compT)]
-  (a, b, c) = (TVar "a", TVar "b", TVar "c")
-  eqT = Type (oneTrait' "Eq" ["a"]) (a ==> a ==> "Bool")
-  hasComp = Type (oneTrait' "Compare" ["a"])
-  compT = hasComp (a ==> a ==> "Comparison")
-  compBool = hasComp (a ==> a ==> "Bool")
-  negT = Type (oneTrait' "Negate" ["a"]) (a ==> a)
-  plusT = Type (oneTrait' "Add" ["a", "b", "c"]) (a ==> b ==> c)
-  minusT = Type (oneTrait' "Subt" ["a", "b", "c"]) (a ==> b ==> c)
-  multT = Type (oneTrait' "Mult" ["a", "b", "c"]) (a ==> b ==> c)
-  poly vars = Polytype (S.fromList vars)
-  point = apply "Point"
-  maybe = apply "Maybe"
-  list = apply "List"
-  addInstances = [ Instance mempty ["Int", "Int", "Int"]
-                 , Instance mempty ["Nat", "Nat", "Nat"]
-                 , Instance (oneTrait' "Add" ["a", "a", "a"]) 
-                            [point a, point a, point a]]
-  addDefaults = [ DefaultInstance [Fixed "Int", Fixed "Int", Slot "Int"]
-                , DefaultInstance [Fixed "Int", Slot "Int", Fixed "Int"]
-                , DefaultInstance [Fixed "Int", Fixed "Float", Slot "Float"]
-                , DefaultInstance [Fixed "Float", Fixed "Int", Slot "Float"]
-                , DefaultInstance [Fixed "Float", Fixed "Float", Slot "Float"]]
-  eqInstances = [ Instance mempty ["Int"]
-                , Instance mempty ["Nat"]
-                , Instance mempty ["Comparison"]
-                , Instance (oneTrait' "Eq" ["a"]) [maybe a]]
-  eqDefaults = [ DefaultInstance [Fixed (TVar "a"), Slot (TVar "a")]
-               , DefaultInstance [Slot (TVar "a"), Fixed (TVar "a")]]
-  intLitInstances = [ Instance mempty ["Int"]
-                    , Instance mempty ["Nat"]
-                    , Instance mempty ["Float"]] 
-  intLitDefaults = [DefaultInstance [Slot "Int"]]
-  strLitInstances = [ Instance mempty ["String"]
-                    , Instance mempty ["Char"]]
-  strLitDefaults = [DefaultInstance [Slot "String"]]
-  compInstances = [Instance mempty ["Int"]]
-  traitMap = H.fromList [
-      ("Add", (addInstances, addDefaults))
-    , ("Mult", (addInstances, addDefaults))
-    , ("Subt", (addInstances, addDefaults))
-    , ("Div", (addInstances, addDefaults))
-    , ("Eq",  (eqInstances, eqDefaults))
-    , ("Compare", (compInstances, mempty))
-    , ("IntLiteral", (intLitInstances, intLitDefaults))
-    , ("StrLiteral", (strLitInstances, strLitDefaults))
-    ]
+initState = TCState
+  { _count=0, _tymaps=[Defaults.typeMap], _trmaps=[Defaults.traitMap]}
 
 --------------------------------------------------------------------------
 ---------------------- Main inferrence functions -------------------------
@@ -500,7 +299,7 @@ initState = TCState {_count=0, _tymaps=[typeMap], _trmaps=[traitMap]} where
 
 typeof :: (Valid e) => e -> TypeChecker (Substitution, Type)
 typeof expr = wrapError expr $ case unExpr expr of
-  Int _ -> only "Int"
+  Int _ -> lit "IntLiteral"
   Float _ -> lit "FloatLiteral"
   String _ -> lit "StrLiteral"
   If c t f -> typeofIf c t f
@@ -510,6 +309,12 @@ typeof expr = wrapError expr $ case unExpr expr of
   Constructor name -> teLookup name >>= \case
     Nothing -> throwErrorC ["Unknown constructor '", name, "'"]
     Just pt -> only =<< instantiate pt
+  Typed e (Type ctx t) -> do
+    when (ctx /= mempty) $
+      throwError1 "Contexts not allowed in type annotations (yet)"
+    (s, Type ctx' t') <- typeof e
+    s' <- unify (s •> t') t
+    ret (s • s') (Type ctx' t')
   Define name expr -> do
     nameT <- newvar
     (subs, Type ctx t) <- withContext name (fromBT nameT) (typeof expr)
@@ -576,14 +381,6 @@ sourceError e msgs = throwErrorC $
 hasTrait :: Name -> [Name] -> Assertion
 hasTrait name = HasTrait name . fmap TVar
 
--- | A singleton context with a trait using only type variables.
-oneTrait' :: Name -> [Name] -> Context
-oneTrait' name = oneTrait name . fmap TVar
-
--- | A singleton context from a name and list of types.
-oneTrait :: Name -> [BaseType] -> Context
-oneTrait name = Context . S.singleton . HasTrait name
-
 -- | Useful when iterating over a list with a possibility of failure. Stops
 -- iterating as soon as it successfully applies the function to an element.
 firstMatch :: (t -> TypeChecker a) -> [t] -> TypeChecker a
@@ -638,7 +435,6 @@ test input = case fmap snd $ typeIt input of
   Right _type -> putStrLn $ unpack $ render $ normalize _type
 
 showLogs = False
-showConstants = False
 
 test1 = Type (oneTrait' "IntLiteral" ["a"]) (TVar "b")
 test2 = Type ctx (TVar "b") where
