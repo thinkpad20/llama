@@ -62,9 +62,12 @@ instance CanApply Polytype where
 class FromBaseType t where
   fromBT :: BaseType -> t
 
-instance FromBaseType BaseType where fromBT bt = bt
-instance FromBaseType Type where fromBT = Type mempty
-instance FromBaseType Polytype where fromBT bt = Polytype (freevars bt) (fromBT bt)
+instance FromBaseType BaseType where 
+  fromBT bt = bt
+instance FromBaseType Type where 
+  fromBT = Type mempty
+instance FromBaseType Polytype where 
+  fromBT bt = Polytype (freevars bt) (fromBT bt)
 
 class FreeVars a where freevars :: a -> Set Name
 instance FreeVars BaseType where
@@ -95,12 +98,19 @@ freelist = S.toList . freevars
 ------------------------ Type normalization functions --------------------
 --------------------------------------------------------------------------
 
+-- | Normalizing means replacing obscurely-named type variables with letters.
+-- For example, the type @(t$13 -> [t$4]) -> t$13@ would be @(a -> b) -> a@.
+-- The best way to do this is with a state monad so that we can track which
+-- renamings have been done. So the only method that we need is @normalizeS@ 
+-- (@S@ for state monad). This lets us normalize across multiple types.
 class Normalize t where
-  normalize :: t -> t
-  normalize = normalizeWith ("a", mempty)
-  normalizeWith :: (Text, HashMap Name Name) -> t -> t
-  normalizeWith state t = evalState (normalizeS t) state
   normalizeS :: t -> State (Text, HashMap Name Name) t
+
+normalize :: Normalize a => a -> a
+normalize = normalizeWith ("a", mempty)
+
+normalizeWith :: Normalize a => (Text, Map Name Name) -> a -> a
+normalizeWith state x = evalState (normalizeS x) state
 
 instance Normalize BaseType where
   normalizeS type_ = case type_ of
@@ -125,7 +135,9 @@ instance Normalize Context where
     let asserts = S.toList ctx
     asserts' <- forM asserts $ \case
       HasTrait n ts -> HasTrait n <$> normalizeS ts
-    return (Context $ S.fromList asserts')
+    -- Filter out constant assertions (e.g. {Foo Int}) unless showConstants
+    return $ Context $ S.fromList $
+      if showConstants then asserts' else filter (not . isConstant) asserts'
 
 instance Normalize a => Normalize [a] where
   normalizeS = mapM normalizeS
@@ -189,10 +201,10 @@ tuple ts = do
   foldl' apply (fromString name) ts
 
 --------------------------------------------------------------------------
------------------------- Polytype-Type functions -------------------------
+---------------------- Polytype <-> Type functions -----------------------
 --------------------------------------------------------------------------
 
--- | Takes and returns an integer to denote where to begin renaming from.
+-- | Replaces all quanified variables in the polytype with fresh variables.
 instantiate :: Polytype -> TypeChecker Type
 instantiate (Polytype vars t) = do
   -- Make a substitution from all variables owned by this polytype
@@ -200,11 +212,16 @@ instantiate (Polytype vars t) = do
   -- Apply the subtitution to the owned type
   return $ sub •> t
 
+-- | Find which variables in the type are completely "owned" by the type 
+-- (i.e., are not found in the surrounding environment) and creates a polytype
+-- with all of those variables quantified.
 generalize :: Type -> TypeChecker Polytype
 generalize _type@(Type ctx t) = do
   freeFromEnv <- freevars . _tymaps <$> get
   return $ Polytype ((freevars t <> freevars ctx) \\ freeFromEnv) _type
 
+-- | Takes an instance and replaces all of its variables with fresh variables,
+-- so that we don't have 
 instantiateInstance :: Instance -> TypeChecker Instance
 instantiateInstance (Instance context _type) = do
   let vars = S.toList $ freevars context <> freevars _type
@@ -228,70 +245,6 @@ unify t1 t2 = case (t1, t2) of
     return (s1 • s2)
   (_, _) -> throwErrorC ["Can't unify types ", render t1, " and ", render t2]
 
--- | Returns a new context which is a simplified version of this context.
--- For example, the assertion `{Eq (Maybe a)}` can be simplified into the
--- assertion `{Eq a}`. The assertion `{Eq Int}` can become the empty context,
--- since `Int` implements `Eq`. On the other hand, some assertions are
--- contradictions. For example, the assertion `Eq (Int -> Int)` is (probably)
--- not true.
-simplify :: Context -> TypeChecker Context
-simplify (Context ctx) = mconcat <$> mapM simplify' (S.toList ctx)
-
-simplify' :: Assertion -> TypeChecker Context
-simplify' (HasTrait name types) = do
-  -- for each instance stored for `name`
-    -- for each type in the list of types
-      -- try to generate a new context with `match`
-      -- if this fails, move on
-  -- if no matches
-    -- if any of the types are pure type variables, return the types
-    -- else assertion failed; throw an error
-  putt ["simplifying ", render name, " ", render types]
-  instanceLists <- getInstancesFor name
-  putt ["instances: ", render instanceLists]
-  goILs instanceLists
-  where
-    -- Iterating over a list of instance lists
-    goILs [] =
-      if any isTVar types then do
-        putt ["No matches, but it's a var!"]
-        return (oneTrait name types)
-      else throwError1 $ "No instance of " <> whatsMissing
-    goILs (il:ils) = goIL il `catchError` \_ -> goILs ils
-    -- Iterating over a list of instances
-    goIL [] = throwError1 "Nothing matched in this instance list"
-    goIL (Instance ctx types':is) = do
-      res <- goT ctx types'
-      putt ["hey, got results ", render res]
-      return res
-      `catchError` \_ -> goIL is
-    -- Iterate over a list of types and concatenate results
-    goT :: Context -> [BaseType] -> TypeChecker Context
-    goT ctx types' = do
-      putt ["trying to match with instance: ", render ctx, " ", render types']
-      fmap mconcat $ mapM (match ctx) $ P.zip types' types
-    -- A pretty printer for reporting what caused an error.
-    whatsMissing = case normalize types of
-      [] -> name
-      [t] -> name <> " for type " <> render t
-      ts -> name <> " for types " <> commaSep ts
-    -- Turns [a, b, c] into "a, b and c"
-    commaSep [t1, t2] =  rndr t1 <> " and " <> rndr t2
-    commaSep (t:ts) = rndr t <> ", " <> commaSep ts
-    rndr x = "`" <> render x <> "`"
-    isTVar (TVar _) = True
-    isTVar _ = False
-
-match :: Context             -- ^ The instance's context
-      -> (BaseType           -- ^ The stored instance's type
-      ,   BaseType)          -- ^ The type in the assertion
-      -> TypeChecker Context -- ^ The new context
-match ctx (instType, asrtType) = do
-  putt ["Trying to match ", render instType, " with ", render asrtType]
-  subs <- unify' instType asrtType
-  putt ["got subs: ", render subs]
-  simplify (subs •> ctx)
-
 -- | Almost the same as @unify@, but only records a substitution if the left
 -- side is a type variable.
 unify' :: BaseType -> BaseType -> TypeChecker Substitution
@@ -304,23 +257,54 @@ unify' t1 t2 = case (t1, t2) of
     return $ s1 • s2
   (_, _) -> throwErrorC ["Incompatible: ", render t1, ", ", render t2]
 
--- | Useful when iterating over a list with a possibility of failure. Stops
--- iterating as soon as it successfully applies the function to an element.
-firstMatch :: (t -> TypeChecker a) -> [t] -> TypeChecker a
-firstMatch _ [] = throwError1 "No match"
-firstMatch func (x:xs) = 
-  func x `catchError` \_ -> firstMatch func xs
+--------------------------------------------------------------------------
+---------------- Trait unification and simplification --------------------
+--------------------------------------------------------------------------
 
--- | Similar to @firstMatch@, except that it returns a default if no match.
-firstMatchOr :: a -> (t -> TypeChecker a) -> [t] ->TypeChecker a
-firstMatchOr def func list = firstMatch func list `catchError` \_ -> return def
+-- | Returns a new context which is a simplified version of this context.
+-- For example, the assertion @{Eq (Maybe a)}@ can be simplified into the
+-- assertion @{Eq a}@. The assertion @{Eq Int}@ can become the empty context,
+-- since @Int@ implements @Eq@. On the other hand, some assertions are
+-- contradictions. For example, the assertion @Eq (Int -> Int)@ is (probably)
+-- not true, and should throw an error.
+simplify :: Context -> TypeChecker Context
+simplify (Context ctx) = mconcat <$> mapM simplify' (S.toList ctx)
+
+simplify' :: Assertion -> TypeChecker Context
+simplify' (HasTrait name types) = do
+  -- for each instance stored for @name@
+    -- for each type in the list of types
+      -- try to generate a new context with @match@
+      -- if this fails, move on
+  -- if no matches
+    -- if any of the types are pure type variables, return the types
+    -- else assertion failed; throw an error
+  putt ["simplifying ", render name, " ", render types]
+  getInstancesFor name >>= goInstanceLists
+  where
+    checkVar = if any isTVar types then return (oneTrait name types)
+               else throwError1 $ "No instance of " <> whatsMissing
+    goInstanceLists = firstMatchOr checkVar goInstanceList
+    goInstanceList = firstMatch goInstance
+    goInstance (Instance ctx types') = concatM (match ctx) $ zip types' types
+    -- A pretty printer for reporting what caused an error.
+    whatsMissing = case normalize types of
+      [] -> name
+      [t] -> name <> " for type `" <> render t <> "`"
+      ts -> name <> " for types " <> commaSep ts
+    isTVar = \case {TVar _ -> True; _ -> False}
+    match ctx (instType, asrtType) = do
+      putt ["Trying to match ", render instType, " with ", render asrtType]
+      subs <- unify' instType asrtType
+      putt ["got subs: ", render subs]
+      simplify (subs •> ctx)
 
 -- | Matches a type vector and a target type variable against a default 
--- instance. For example, if we're trying to find a default for `a` in the
--- vector `Int a`, and we have a default instance `Int <Int>`, then we'd get
--- back `{a => Int}`.
-match1 :: Name -> [BaseType] -> DefaultInstance 
-             -> TypeChecker Substitution
+-- instance. For example, if we're trying to find a default for @a@ in the
+-- vector @Int a@, and we have a default instance @Int <Int>@, then we'd get
+-- back @{a => Int}@. The position of a "slot" in the default instance must
+-- correspond to the position of the target type variable.
+match1 :: Name -> [BaseType] -> DefaultInstance -> TypeChecker Substitution
 match1 target types (DefaultInstance types') = do
   fmap compose $ forM (zip types types') $ \case
     (TVar name, Slot t) | name == target -> return $ oneSub name t
@@ -335,7 +319,7 @@ matchL target types = firstMatch (match1 target types)
 -- | Like @match1@, but operates on a list of lists of default instances.
 -- Returns the first one that matches, or returns an empty substitution.
 matchLs :: Name -> [BaseType] -> [[DefaultInstance]] -> TypeChecker Substitution
-matchLs target types = firstMatchOr zero (matchL target types)
+matchLs target types = firstMatchOr (return zero) $ matchL target types
 
 -- | Takes a trait name and a target type variable, and tries to find a default
 -- instance with a slot which matches that variable. If it finds one, it will
@@ -346,8 +330,9 @@ refineWith trait target types = getDefaults trait >>= matchLs target types
 -- | Given an Assertion and a BaseType, sees if the assertion contains any 
 -- variables which are not found in the type. If there are any, attempt to
 -- find defaults for these variables to disambiguate them.
--- Ex: `{Eq Int a}. b`. Given this, we'd find the default `Eq Int Int`, and 
--- return the substitution `{a => Int}`.
+-- Ex: @{Eq Int a}. b@. The assertion contains @a@, but the base type does not
+-- (it only has @b@). Given this, we'd find the default @Eq Int Int@, and 
+-- return the substitution @{a => Int}@.
 disambiguate1 :: BaseType -> Assertion -> TypeChecker Substitution
 disambiguate1 bt (HasTrait trait types) = go $ freelist types where
   go = fmap compose . mapM getSubs
@@ -355,25 +340,17 @@ disambiguate1 bt (HasTrait trait types) = go $ freelist types where
               | otherwise = refineWith trait var types
 
 -- | Creates a substitution which removes ambiguity from a type using default 
--- trait instances. For example, if the type were `{IntLiteral b}. a -> Int`, 
--- then `b` would be ambiguous: it could be any `IntLiteral` and the exposed 
--- types (`a` and `Int`) do not restrict it in any way. However, we have a 
--- default trait instance for `IntLit`, which is `Int`. So we disambiguate the 
--- type to `{}. a -> Int`, with the substitution `{b => Int}`.
+-- trait instances. For example, if the type were @{IntLiteral b}. a -> Int@, 
+-- then @b@ would be ambiguous: it could be any @IntLiteral@ and the exposed 
+-- types (@a@ and @Int@) do not restrict it in any way. However, we have a 
+-- default trait instance for @IntLit@, which is @Int@. So we disambiguate the 
+-- type to @{}. a -> Int@, with the substitution @{b => Int}@.
 -- Repeats until there are no further disambiguations to be made.
 disambiguate :: Type -> TypeChecker Substitution
 disambiguate _type@(Type (Context ctx) bt) = do
   subs <- fmap compose $ mapM (disambiguate1 bt) $ S.toList ctx
   if subs == zero then return subs
   else disambiguate (subs •> _type) >>= \subs' -> return (subs • subs')
-
--- | Gets a list of lists of default instances for a given trait.
-getDefaults :: Name -> TypeChecker [[DefaultInstance]]
-getDefaults traitName = do
-  trmaps <- _trmaps <$> get
-  let matching = fmap (H.lookupDefault ([], []) traitName) trmaps
-  return $ fmap snd matching
-
 
 --------------------------------------------------------------------------
 ------------------------ Environment management --------------------------
@@ -420,26 +397,65 @@ getInstances = do
   trmaps <- getTraitMaps
   return $ fmap (fmap fst) trmaps  
 
+-- | Get a list of lists of instances for a given trait.
 getInstancesFor :: Name -> TypeChecker [[Instance]]
 getInstancesFor name = do
   insts <- getInstances
   return $ catMaybes $ fmap (H.lookup name) insts
 
+-- | Gets a list of lists of default instances for a given trait.
+getDefaults :: Name -> TypeChecker [[DefaultInstance]]
+getDefaults traitName = do
+  trmaps <- _trmaps <$> get
+  let matching = fmap (H.lookupDefault ([], []) traitName) trmaps
+  return $ fmap snd matching
+
+
+-- | Pushes a new empty environment onto the stack.
+push :: TypeChecker ()
+push = modify $ \s -> s{_trmaps=mempty:_trmaps s, _tymaps=mempty:_tymaps s}
+
+-- | Pops the top environment off the stack.
+pop :: TypeChecker (TypeMap, TraitMap)
+pop = do
+  tymap <- head . _tymaps <$> get
+  trmap <- head . _trmaps <$> get
+  modify $ \s -> s{_trmaps=tail $ _trmaps s, _tymaps=tail $ _tymaps s}
+  return (tymap, trmap)
+
+-- | Pushes a new environment with a name and type, does an action, pops.
+withContext :: Name -> Type -> TypeChecker a -> TypeChecker a
+withContext name _type action = push >> mod >> action <* pop where
+  addit (t:ts) = H.insert name (Polytype mempty _type) t : ts
+  mod = modify $ \s -> s {_tymaps = addit $ _tymaps s}
+
 -- | The state we start with.
 initState :: TCState
 initState = TCState {_count=0, _tymaps=[typeMap], _trmaps=[traitMap]} where
   typeMap = H.fromList [("Z", "Nat"), ("S", "Nat" ==> "Nat"),
+                        ("Less", "Comparison"), 
+                        ("More", "Comparison"),
+                        ("Equal", "Comparison"),
                         ("Point", fromBT (a ==> point a)),
                         ("Just", fromBT (a ==> maybe a)),
                         ("Nothing", fromBT (maybe a)),
                         ("True", "Bool"), ("False", "Bool"),
                         ("_+_", poly ["a", "b", "c"] plusT),
+                        ("_-_", poly ["a", "b", "c"] minusT),
+                        ("_*_", poly ["a", "b", "c"] multT),
                         ("-_", poly ["a"] negT),
-                        ("_==_", poly ["a"] eqT)]
+                        ("_==_", poly ["a"] eqT),
+                        ("_<_", poly ["a"] $ hasComp (a ==> a ==> "Bool")),
+                        ("compare", poly ["a"] compT)]
   (a, b, c) = (TVar "a", TVar "b", TVar "c")
-  eqT = Type (oneTrait' "Eq" ["a", "b"]) (a ==> b ==> "Bool")
+  eqT = Type (oneTrait' "Eq" ["a"]) (a ==> a ==> "Bool")
+  hasComp = Type (oneTrait' "Compare" ["a"])
+  compT = hasComp (a ==> a ==> "Comparison")
+  compBool = hasComp (a ==> a ==> "Bool")
   negT = Type (oneTrait' "Negate" ["a"]) (a ==> a)
   plusT = Type (oneTrait' "Add" ["a", "b", "c"]) (a ==> b ==> c)
+  minusT = Type (oneTrait' "Subt" ["a", "b", "c"]) (a ==> b ==> c)
+  multT = Type (oneTrait' "Mult" ["a", "b", "c"]) (a ==> b ==> c)
   poly vars = Polytype (S.fromList vars)
   point = apply "Point"
   maybe = apply "Maybe"
@@ -449,11 +465,13 @@ initState = TCState {_count=0, _tymaps=[typeMap], _trmaps=[traitMap]} where
                  , Instance (oneTrait' "Add" ["a", "a", "a"]) 
                             [point a, point a, point a]]
   addDefaults = [ DefaultInstance [Fixed "Int", Fixed "Int", Slot "Int"]
+                , DefaultInstance [Fixed "Int", Slot "Int", Fixed "Int"]
                 , DefaultInstance [Fixed "Int", Fixed "Float", Slot "Float"]
                 , DefaultInstance [Fixed "Float", Fixed "Int", Slot "Float"]
                 , DefaultInstance [Fixed "Float", Fixed "Float", Slot "Float"]]
   eqInstances = [ Instance mempty ["Int"]
                 , Instance mempty ["Nat"]
+                , Instance mempty ["Comparison"]
                 , Instance (oneTrait' "Eq" ["a"]) [maybe a]]
   eqDefaults = [ DefaultInstance [Fixed (TVar "a"), Slot (TVar "a")]
                , DefaultInstance [Slot (TVar "a"), Fixed (TVar "a")]]
@@ -464,9 +482,14 @@ initState = TCState {_count=0, _tymaps=[typeMap], _trmaps=[traitMap]} where
   strLitInstances = [ Instance mempty ["String"]
                     , Instance mempty ["Char"]]
   strLitDefaults = [DefaultInstance [Slot "String"]]
+  compInstances = [Instance mempty ["Int"]]
   traitMap = H.fromList [
       ("Add", (addInstances, addDefaults))
+    , ("Mult", (addInstances, addDefaults))
+    , ("Subt", (addInstances, addDefaults))
+    , ("Div", (addInstances, addDefaults))
     , ("Eq",  (eqInstances, eqDefaults))
+    , ("Compare", (compInstances, mempty))
     , ("IntLiteral", (intLitInstances, intLitDefaults))
     , ("StrLiteral", (strLitInstances, strLitDefaults))
     ]
@@ -476,44 +499,47 @@ initState = TCState {_count=0, _tymaps=[typeMap], _trmaps=[traitMap]} where
 --------------------------------------------------------------------------
 
 typeof :: (Valid e) => e -> TypeChecker (Substitution, Type)
-typeof expr = case unExpr expr of
-  Int _ -> lit "IntLiteral"
+typeof expr = wrapError expr $ case unExpr expr of
+  Int _ -> only "Int"
   Float _ -> lit "FloatLiteral"
   String _ -> lit "StrLiteral"
   If c t f -> typeofIf c t f
   Var name -> teLookup name >>= \case
-    Nothing -> err ["Unknown identifier '", name, "'"]
+    Nothing -> throwErrorC ["Unknown identifier '", name, "'"]
     Just pt -> only =<< instantiate pt
   Constructor name -> teLookup name >>= \case
-    Nothing -> err ["Unknown constructor '", name, "'"]
+    Nothing -> throwErrorC ["Unknown constructor '", name, "'"]
     Just pt -> only =<< instantiate pt
   Define name expr -> do
-    (subs, t) <- typeof expr
-    teStore name =<< generalize (subs •> t)
-    ret subs t
+    nameT <- newvar
+    (subs, Type ctx t) <- withContext name (fromBT nameT) (typeof expr)
+    subs' <- unify nameT t
+    teStore name =<< generalize ((subs • subs') •> Type ctx nameT)
+    ret subs (Type ctx t)
   Then e1 e2 -> do
     (s1, _) <- typeof' e1
     (s2, t2) <- typeof e2
     ret (s1 • s2) t2
   Lambda param body -> do
     paramT <- Type mempty <$> newvar
-    withContext param paramT $ do
+    (s, t) <- withContext param paramT $ do
       (s, Type ctx t) <- typeof body
       ctx' <- simplify ctx
       ret s (paramT ==> Type ctx' t)
+    s' <- disambiguate t
+    ret s' t
   Apply e1 e2 -> do
     (subs1, Type ctx1 t1) <- typeof' e1
     (subs2, Type ctx2 t2) <- typeof e2
     tResult <- newvar
-    subs3 <- unify t1 (t2 ==> tResult) `catchError` \(ErrorList el) -> err el
+    subs3 <- unify t1 (t2 ==> tResult)
     ret (compose [subs1, subs2, subs3]) (Type (ctx1 <> ctx2) tResult)
-  _ -> err ["Can't type expression ", render expr]
+  _ -> throwErrorC ["Can't type expression ", render expr]
   where only t = return (zero, t)
-        err = sourceError expr
         ret s t = return (s, s •> t)
         lit name = newvar >>= \tv -> only $ Type (oneTrait name [tv]) tv
 
--- | Typing an `if` statement is a bit involved so we split it off here.
+-- | Typing an @if@ statement is a bit involved so we split it off here.
 typeofIf :: (Valid e) => e -> e -> Maybe e -> TypeChecker (Substitution, Type)
 typeofIf c t f = do
   (cSubs, Type cCtx cType) <- typeof' c
@@ -534,35 +560,52 @@ typeofIf c t f = do
 typeof' :: (Valid e) => e -> TypeChecker (Substitution, Type)
 typeof' expr = typeof expr >>= \(s, t) -> substituteEnv s >> return (s, t)
 
-push :: TypeChecker ()
-push = modify $ \s -> s{_trmaps=mempty:_trmaps s, _tymaps=mempty:_tymaps s}
+--------------------------------------------------------------------------
+------------------------- Misc utility functions -------------------------
+--------------------------------------------------------------------------
 
-pop :: TypeChecker (TypeMap, TraitMap)
-pop = do
-  tymap <- head . _tymaps <$> get
-  trmap <- head . _trmaps <$> get
-  modify $ \s -> s{_trmaps=tail $ _trmaps s, _tymaps=tail $ _tymaps s}
-  return (tymap, trmap)
-
--- | Pushes a new environment with a name and type, does an action, pops.
-withContext :: Name -> Type -> TypeChecker a -> TypeChecker a
-withContext name _type action = push >> mod >> action <* pop where
-  addit (t:ts) = H.insert name (Polytype mempty _type) t : ts
-  mod = modify $ \s -> s {_tymaps = addit $ _tymaps s}
+wrapError :: (Render e, Sourced e) => e -> TypeChecker a -> TypeChecker a
+wrapError e = flip catchError $ \(ErrorList el) -> sourceError e el
 
 -- | Adds the source position to an error message.
 sourceError :: (Render e, Sourced e) => e -> [Text] -> TypeChecker a
 sourceError e msgs = throwErrorC $
   msgs <> [". In expression `", render e, "` ", render (source e)]
 
+-- A singleton assertion using only type variables.
 hasTrait :: Name -> [Name] -> Assertion
-hasTrait name vars = HasTrait name $ fmap TVar vars
+hasTrait name = HasTrait name . fmap TVar
 
+-- | A singleton context with a trait using only type variables.
 oneTrait' :: Name -> [Name] -> Context
-oneTrait' name = Context . S.singleton . hasTrait name
+oneTrait' name = oneTrait name . fmap TVar
 
+-- | A singleton context from a name and list of types.
 oneTrait :: Name -> [BaseType] -> Context
 oneTrait name = Context . S.singleton . HasTrait name
+
+-- | Useful when iterating over a list with a possibility of failure. Stops
+-- iterating as soon as it successfully applies the function to an element.
+firstMatch :: (t -> TypeChecker a) -> [t] -> TypeChecker a
+firstMatch _ [] = throwError1 "No match"
+firstMatch func (x:xs) = 
+  func x `catchError` \_ -> firstMatch func xs
+
+-- | Similar to @firstMatch@, except that it returns a default if no match.
+firstMatchOr :: TypeChecker a -> (t -> TypeChecker a) -> [t] ->TypeChecker a
+firstMatchOr def func list = firstMatch func list `catchError` \_ -> def
+
+-- Turns [a, b, c] into "a, b and c"
+commaSep :: Render a => [a] -> Text
+commaSep = \case
+  [] -> ""
+  [t] -> rndr t
+  [t1, t2] -> rndr t1 <> " and " <> rndr t2
+  (t:ts) -> rndr t <> ", " <> commaSep ts
+  where rndr x = "`" <> render x <> "`"
+
+concatM :: (Monoid a, Functor m, Monad m) => (b -> m a) -> [b] -> m a
+concatM f = fmap mconcat . mapM f
 
 --------------------------------------------------------------------------
 ---------------------- Running the type checker --------------------------
@@ -595,11 +638,15 @@ test input = case fmap snd $ typeIt input of
   Right _type -> putStrLn $ unpack $ render $ normalize _type
 
 showLogs = False
+showConstants = False
 
 test1 = Type (oneTrait' "IntLiteral" ["a"]) (TVar "b")
 test2 = Type ctx (TVar "b") where
   ctx = oneTrait' "IntLiteral" ["a"] <> oneTrait' "Add" ["a", "b", "c"]
+test3 = Type ctx (TVar "tx" ==> "()") where
+  ctx = oneTrait' "IntLiteral" ["a"] <> oneTrait "Add" [TVar "a", TVar "tx", "Int"]
 
-tst = do
-  subs <- disambiguate test2
-  return $ subs •> test2
+tst t = runTyping $ fmap render $ do
+  putt ["input: ", render t]
+  subs <- disambiguate t
+  return $ subs •> t

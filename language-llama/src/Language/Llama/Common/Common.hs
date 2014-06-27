@@ -38,7 +38,7 @@ import Prelude (IO, Eq(..), Ord(..), Bool(..), tail, Char,
                 (+), (-), Either(..), unwords, flip, head, error,
                 fromIntegral, round, (^), (*), putStrLn, map, zip,
                 otherwise, length, Read(..), read, (&&), FilePath,
-                readFile, not, succ, (=<<), (||))
+                readFile, not, succ, (=<<), (||), filter, id)
 import qualified Prelude as P
 import Control.Applicative
 import Control.Monad ((>=>), when, forM, MonadPlus(..))
@@ -58,7 +58,7 @@ import Data.HashMap.Strict hiding (map, (!), toList, fromList, empty
 import Data.List (intercalate)
 import Data.Maybe (catMaybes)
 import Data.Monoid
-import Data.Sequence hiding (replicate, length, empty, zip)
+import Data.Sequence hiding (replicate, length, empty, zip, filter)
 import Data.String
 import Data.Text (Text(..), pack, unpack, snoc)
 import qualified Data.Text as T
