@@ -16,11 +16,14 @@ import Language.Llama.Desugarer.Desugar hiding (testString)
 import System.IO.Unsafe (unsafePerformIO)
 
 -- | A stored trait instance, which might have its own context.
-type Instance = (Context, [BaseType])
+data Instance = Instance Context [BaseType] deriving (Show)
+data DefaultEntry = Slot BaseType | Fixed BaseType deriving (Show)
+newtype DefaultInstance = DefaultInstance [DefaultEntry]
+  deriving (Show)
 -- | Stores names that we've typed
 type TypeMap = Map Name Polytype
 -- | Stores the instances we've made.
-type TraitMap = Map Name [Instance]
+type TraitMap = Map Name ([Instance], [DefaultInstance])
 -- | A mapping from (type variable) names to BaseTypes.
 newtype Substitution = Substitution (Map Name BaseType) deriving (Show, Eq)
 -- | Our monadic state. The count is for generating new names.
@@ -28,6 +31,15 @@ data TCState = TCState {_count::Int, _tymaps::[TypeMap], _trmaps::[TraitMap]}
 -- | The main type checking monad. Ye olde errorT stateT.
 type TypeChecker = ErrorT ErrorList (StateT TCState IO)
 
+instance Render Instance where
+  render (Instance ctx ts) = render ctx <> ". " <> T.intercalate " " ts' where
+    ts' = fmap renderP ts
+
+instance Render DefaultInstance where
+  render (DefaultInstance ts) = "default " <> ts' where
+    rndr (Slot t) = "<" <> render t <> ">"
+    rndr (Fixed t) = render t
+    ts' = T.intercalate " " $ fmap rndr ts
 
 instance Render Substitution where
   render (Substitution s) = "{" <> T.intercalate ", " items <> "}" where
@@ -75,6 +87,9 @@ instance FreeVars a => FreeVars [a] where
 
 isConstant :: FreeVars a => a -> Bool
 isConstant = S.null . freevars
+
+freelist :: FreeVars a => a -> [Name]
+freelist = S.toList . freevars
 
 --------------------------------------------------------------------------
 ------------------------ Type normalization functions --------------------
@@ -191,10 +206,10 @@ generalize _type@(Type ctx t) = do
   return $ Polytype ((freevars t <> freevars ctx) \\ freeFromEnv) _type
 
 instantiateInstance :: Instance -> TypeChecker Instance
-instantiateInstance (context, _type) = do
+instantiateInstance (Instance context _type) = do
   let vars = S.toList $ freevars context <> freevars _type
   subs <- compose <$> mapM (\v -> oneSub v <$> newvar) vars
-  return (subs •> context, subs •> _type)
+  return $ Instance (subs •> context) (subs •> _type)
 
 --------------------------------------------------------------------------
 ---------------------- Type unification functions ------------------------
@@ -245,7 +260,7 @@ simplify' (HasTrait name types) = do
     goILs (il:ils) = goIL il `catchError` \_ -> goILs ils
     -- Iterating over a list of instances
     goIL [] = throwError1 "Nothing matched in this instance list"
-    goIL ((ctx, types'):is) = do
+    goIL (Instance ctx types':is) = do
       res <- goT ctx types'
       putt ["hey, got results ", render res]
       return res
@@ -289,6 +304,77 @@ unify' t1 t2 = case (t1, t2) of
     return $ s1 • s2
   (_, _) -> throwErrorC ["Incompatible: ", render t1, ", ", render t2]
 
+-- | Useful when iterating over a list with a possibility of failure. Stops
+-- iterating as soon as it successfully applies the function to an element.
+firstMatch :: (t -> TypeChecker a) -> [t] -> TypeChecker a
+firstMatch _ [] = throwError1 "No match"
+firstMatch func (x:xs) = 
+  func x `catchError` \_ -> firstMatch func xs
+
+-- | Similar to @firstMatch@, except that it returns a default if no match.
+firstMatchOr :: a -> (t -> TypeChecker a) -> [t] ->TypeChecker a
+firstMatchOr def func list = firstMatch func list `catchError` \_ -> return def
+
+-- | Matches a type vector and a target type variable against a default 
+-- instance. For example, if we're trying to find a default for `a` in the
+-- vector `Int a`, and we have a default instance `Int <Int>`, then we'd get
+-- back `{a => Int}`.
+match1 :: Name -> [BaseType] -> DefaultInstance 
+             -> TypeChecker Substitution
+match1 target types (DefaultInstance types') = do
+  fmap compose $ forM (zip types types') $ \case
+    (TVar name, Slot t) | name == target -> return $ oneSub name t
+    (t, Fixed t') | not (target `S.member` freevars t) -> unify' t' t
+    _ -> throwError1 "No match"
+
+-- | Like @match1@, but operates on a list of default instances. 
+-- Returns the first one that matches, or errors out.
+matchL :: Name -> [BaseType] -> [DefaultInstance] -> TypeChecker Substitution
+matchL target types = firstMatch (match1 target types)
+
+-- | Like @match1@, but operates on a list of lists of default instances.
+-- Returns the first one that matches, or returns an empty substitution.
+matchLs :: Name -> [BaseType] -> [[DefaultInstance]] -> TypeChecker Substitution
+matchLs target types = firstMatchOr zero (matchL target types)
+
+-- | Takes a trait name and a target type variable, and tries to find a default
+-- instance with a slot which matches that variable. If it finds one, it will
+-- return a substitution which reflects that. Otherwise, it will return empty.
+refineWith :: Name -> Name -> [BaseType] -> TypeChecker Substitution
+refineWith trait target types = getDefaults trait >>= matchLs target types
+
+-- | Given an Assertion and a BaseType, sees if the assertion contains any 
+-- variables which are not found in the type. If there are any, attempt to
+-- find defaults for these variables to disambiguate them.
+-- Ex: `{Eq Int a}. b`. Given this, we'd find the default `Eq Int Int`, and 
+-- return the substitution `{a => Int}`.
+disambiguate1 :: BaseType -> Assertion -> TypeChecker Substitution
+disambiguate1 bt (HasTrait trait types) = go $ freelist types where
+  go = fmap compose . mapM getSubs
+  getSubs var | var `S.member` freevars bt = return zero
+              | otherwise = refineWith trait var types
+
+-- | Creates a substitution which removes ambiguity from a type using default 
+-- trait instances. For example, if the type were `{IntLiteral b}. a -> Int`, 
+-- then `b` would be ambiguous: it could be any `IntLiteral` and the exposed 
+-- types (`a` and `Int`) do not restrict it in any way. However, we have a 
+-- default trait instance for `IntLit`, which is `Int`. So we disambiguate the 
+-- type to `{}. a -> Int`, with the substitution `{b => Int}`.
+-- Repeats until there are no further disambiguations to be made.
+disambiguate :: Type -> TypeChecker Substitution
+disambiguate _type@(Type (Context ctx) bt) = do
+  subs <- fmap compose $ mapM (disambiguate1 bt) $ S.toList ctx
+  if subs == zero then return subs
+  else disambiguate (subs •> _type) >>= \subs' -> return (subs • subs')
+
+-- | Gets a list of lists of default instances for a given trait.
+getDefaults :: Name -> TypeChecker [[DefaultInstance]]
+getDefaults traitName = do
+  trmaps <- _trmaps <$> get
+  let matching = fmap (H.lookupDefault ([], []) traitName) trmaps
+  return $ fmap snd matching
+
+
 --------------------------------------------------------------------------
 ------------------------ Environment management --------------------------
 --------------------------------------------------------------------------
@@ -325,8 +411,14 @@ substituteEnv subs = do
   modify $ \s -> s {_tymaps = subs •> _tymaps s}
 
 -- | Gets all trait instances we have stored.
-getInstances :: TypeChecker [TraitMap]
-getInstances = _trmaps <$> get
+getTraitMaps :: TypeChecker [TraitMap]
+getTraitMaps = _trmaps <$> get
+
+-- | Gets all trait instances we have stored.
+getInstances :: TypeChecker [Map Name [Instance]]
+getInstances = do
+  trmaps <- getTraitMaps
+  return $ fmap (fmap fst) trmaps  
 
 getInstancesFor :: Name -> TypeChecker [[Instance]]
 getInstancesFor name = do
@@ -335,15 +427,15 @@ getInstancesFor name = do
 
 -- | The state we start with.
 initState :: TCState
-initState = TCState {_count=0, _tymaps=[initTypeMap], _trmaps=[initTraitMap]} where
-  initTypeMap = H.fromList [("Z", "Nat"), ("S", "Nat" ==> "Nat"),
-                            ("Point", fromBT (a ==> point a)),
-                            ("Just", fromBT (a ==> maybe a)),
-                            ("Nothing", fromBT (maybe a)),
-                            ("True", "Bool"), ("False", "Bool"),
-                            ("_+_", poly ["a", "b", "c"] plusT),
-                            ("-_", poly ["a"] negT),
-                            ("_==_", poly ["a"] eqT)]
+initState = TCState {_count=0, _tymaps=[typeMap], _trmaps=[traitMap]} where
+  typeMap = H.fromList [("Z", "Nat"), ("S", "Nat" ==> "Nat"),
+                        ("Point", fromBT (a ==> point a)),
+                        ("Just", fromBT (a ==> maybe a)),
+                        ("Nothing", fromBT (maybe a)),
+                        ("True", "Bool"), ("False", "Bool"),
+                        ("_+_", poly ["a", "b", "c"] plusT),
+                        ("-_", poly ["a"] negT),
+                        ("_==_", poly ["a"] eqT)]
   (a, b, c) = (TVar "a", TVar "b", TVar "c")
   eqT = Type (oneTrait' "Eq" ["a", "b"]) (a ==> b ==> "Bool")
   negT = Type (oneTrait' "Negate" ["a"]) (a ==> a)
@@ -352,18 +444,32 @@ initState = TCState {_count=0, _tymaps=[initTypeMap], _trmaps=[initTraitMap]} wh
   point = apply "Point"
   maybe = apply "Maybe"
   list = apply "List"
-  initTraitMap = H.fromList [
-     ("Add", [
-      (mempty, ["Int", "Int", "Int"]),
-      (mempty, ["Nat", "Nat", "Nat"]),
-      (oneTrait' "Add" ["a", "a", "a"], [point a, point a, point a])
-     ])
-    ,("Eq", [
-     (mempty, ["Int"]),
-     (mempty, ["Nat"]),
-     (oneTrait' "Eq" ["a"], [maybe a])
-     ]
-    )]
+  addInstances = [ Instance mempty ["Int", "Int", "Int"]
+                 , Instance mempty ["Nat", "Nat", "Nat"]
+                 , Instance (oneTrait' "Add" ["a", "a", "a"]) 
+                            [point a, point a, point a]]
+  addDefaults = [ DefaultInstance [Fixed "Int", Fixed "Int", Slot "Int"]
+                , DefaultInstance [Fixed "Int", Fixed "Float", Slot "Float"]
+                , DefaultInstance [Fixed "Float", Fixed "Int", Slot "Float"]
+                , DefaultInstance [Fixed "Float", Fixed "Float", Slot "Float"]]
+  eqInstances = [ Instance mempty ["Int"]
+                , Instance mempty ["Nat"]
+                , Instance (oneTrait' "Eq" ["a"]) [maybe a]]
+  eqDefaults = [ DefaultInstance [Fixed (TVar "a"), Slot (TVar "a")]
+               , DefaultInstance [Slot (TVar "a"), Fixed (TVar "a")]]
+  intLitInstances = [ Instance mempty ["Int"]
+                    , Instance mempty ["Nat"]
+                    , Instance mempty ["Float"]] 
+  intLitDefaults = [DefaultInstance [Slot "Int"]]
+  strLitInstances = [ Instance mempty ["String"]
+                    , Instance mempty ["Char"]]
+  strLitDefaults = [DefaultInstance [Slot "String"]]
+  traitMap = H.fromList [
+      ("Add", (addInstances, addDefaults))
+    , ("Eq",  (eqInstances, eqDefaults))
+    , ("IntLiteral", (intLitInstances, intLitDefaults))
+    , ("StrLiteral", (strLitInstances, strLitDefaults))
+    ]
 
 --------------------------------------------------------------------------
 ---------------------- Main inferrence functions -------------------------
@@ -371,11 +477,9 @@ initState = TCState {_count=0, _tymaps=[initTypeMap], _trmaps=[initTraitMap]} wh
 
 typeof :: (Valid e) => e -> TypeChecker (Substitution, Type)
 typeof expr = case unExpr expr of
-  Int _ -> only "Int"
-  Float _ -> only "Float"
-  String _ -> do
-    tv <- newvar
-    only $ Type (oneTrait "StrLit" [tv]) tv
+  Int _ -> lit "IntLiteral"
+  Float _ -> lit "FloatLiteral"
+  String _ -> lit "StrLiteral"
   If c t f -> typeofIf c t f
   Var name -> teLookup name >>= \case
     Nothing -> err ["Unknown identifier '", name, "'"]
@@ -407,6 +511,7 @@ typeof expr = case unExpr expr of
   where only t = return (zero, t)
         err = sourceError expr
         ret s t = return (s, s •> t)
+        lit name = newvar >>= \tv -> only $ Type (oneTrait name [tv]) tv
 
 -- | Typing an `if` statement is a bit involved so we split it off here.
 typeofIf :: (Valid e) => e -> e -> Maybe e -> TypeChecker (Substitution, Type)
@@ -473,22 +578,20 @@ runTyping :: TypeChecker a -> Either ErrorList a
 runTyping = flip evalState' initState . runErrorT where
   evalState' s = fst . unsafePerformIO . runStateT s
 
+-- | Gets the type of an expression.
 typeExpr :: (Valid e) => e -> Either ErrorList (Substitution, Type)
 typeExpr = runTyping . typeof
 
-typeIt' :: String -> Either ErrorList (Substitution, Type)
-typeIt' input = case desugarIt input of
+-- | Gives the type of an expression, starting by parsing a string.
+typeIt :: String -> Either ErrorList (Substitution, Type)
+typeIt input = case desugarIt input of
   Left err -> Left err
   Right expr -> typeExpr expr
 
-typeIt :: String -> Either ErrorList Type
-typeIt input = case desugarIt input of
-  Left err -> Left err
-  Right expr -> fmap (normalize . snd) $ typeExpr expr
-
+-- | Tests in the IO monad.
 test :: String -> IO ()
-test input = case typeIt input of
+test input = case fmap snd $ typeIt input of
   Left err -> error $ P.show err
-  Right _type -> putStrLn $ unpack $ render _type
+  Right _type -> putStrLn $ unpack $ render $ normalize _type
 
 showLogs = False
