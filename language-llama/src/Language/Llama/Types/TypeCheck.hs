@@ -385,8 +385,7 @@ hasTrait name = HasTrait name . fmap TVar
 -- iterating as soon as it successfully applies the function to an element.
 firstMatch :: (t -> TypeChecker a) -> [t] -> TypeChecker a
 firstMatch _ [] = throwError1 "No match"
-firstMatch func (x:xs) = 
-  func x `catchError` \_ -> firstMatch func xs
+firstMatch func (x:xs) = func x `catchError` \_ -> firstMatch func xs
 
 -- | Similar to @firstMatch@, except that it returns a default if no match.
 firstMatchOr :: TypeChecker a -> (t -> TypeChecker a) -> [t] ->TypeChecker a
@@ -400,9 +399,6 @@ commaSep = \case
   [t1, t2] -> rndr t1 <> " and " <> rndr t2
   (t:ts) -> rndr t <> ", " <> commaSep ts
   where rndr x = "`" <> render x <> "`"
-
-concatM :: (Monoid a, Functor m, Monad m) => (b -> m a) -> [b] -> m a
-concatM f = fmap mconcat . mapM f
 
 --------------------------------------------------------------------------
 ---------------------- Running the type checker --------------------------
