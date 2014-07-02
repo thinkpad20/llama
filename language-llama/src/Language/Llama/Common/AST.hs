@@ -57,7 +57,8 @@ data AbsExpr expr = Var          !Name
                   | Break        !expr
                   | After        !expr !expr
                   | Before       !expr !expr
-                  | TypeDec       !(TypeDec expr)
+                  | TypeDec      !(TypeDec expr)
+                  | ChainedApply !expr ![expr]
                   | Modified     !Text !expr
                   | TypeDef      !Name !Type
                   | LambdaDot    !expr ![expr]
@@ -65,6 +66,8 @@ data AbsExpr expr = Var          !Name
                   | With         !expr ![(Name, expr)]
                   | PatAssert    !(PatAssert expr)
                   | GetAttrib    !Name !Int !expr
+                  | LeftPartialBinary !Name !expr
+                  | RightPartialBinary !expr !Name
                   | Continue
                   | WildCard
                   deriving (P.Show, Eq, Functor)
@@ -198,6 +201,9 @@ rndr isBlockStart e = case unExpr e of
   Case e alts -> "case " <> rec e <> " of " <> rndrOneAlts alts
   MultiCase e alts -> "case " <> rec e <> " of " <> rndrAlts alts
   Typed e t -> rec e <> " : " <> renderP t
+  LeftPartialBinary op e -> op <> " " <> rec e
+  RightPartialBinary e op -> rec e <> " " <> op
+  ChainedApply e es -> rec e <> "{|" <> T.intercalate ", " (map rec es) <> "|}"
   _ -> show e
   where
     rec = rndr isBlockStart

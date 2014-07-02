@@ -5,9 +5,10 @@ module Language.Llama.Parser.Parser (parse, Expr, Sourced(..)) where
 
 import qualified Prelude as P
 import Text.Parsec hiding (satisfy, parse, (<|>), many)
-import Data.Set hiding (map)
+import Data.Set hiding (map, foldl')
 import qualified Data.Set as S
 import qualified Data.Text as T
+
 
 import Language.Llama.Common.Common
 import Language.Llama.Common.AST
@@ -156,9 +157,6 @@ pLambda = do
     TSymbol "|" -> do
       pSymbol "|"
       bodies <- alt `sepBy1` pSymbol "|"
-      return $ \param -> Expr (_pos param) $ Lambdas ((param, body):bodies)
-    Indent -> do
-      bodies <- indented $ pBlockOf alt
       return $ \param -> Expr (_pos param) $ Lambdas ((param, body):bodies)
     _ -> return single
   where alt = do
@@ -467,10 +465,25 @@ pApply = pChain >>= parseRest where
     <|> return res   -- at some point the second parse will fail; then
                      -- return what we have so far
 
+pIndentApply :: Parser Expr
+pIndentApply = do
+  e <- pApply
+  option e $ item $ ChainedApply e <$> indented (pBlockOf pContinuedExpr)
+
+pContinuedExpr :: Parser Expr
+pContinuedExpr = choice [pRightPartialBinary, pPrefixOp
+                        , pLeftPartialBinary, pLambdaDot]
+
+pLeftPartialBinary :: Parser Expr
+pLeftPartialBinary = tritem $ LeftPartialBinary <$> pAnySym <*> pBinaryOp
+
+pRightPartialBinary :: Parser Expr
+pRightPartialBinary = tritem $ RightPartialBinary <$> pBinaryOp <*> pAnySym
+
 -- | Parses unary prefix operators.
 pPrefixOp :: Parser Expr
-pPrefixOp = item unary <|> pApply where
-  unary = try $ Prefix <$> pAnySym <*> immediate pApply
+pPrefixOp = item unary <|> pIndentApply where
+  unary = try $ Prefix <$> pAnySym <*> immediate pIndentApply
 
 -- | Parses something in parentheses; a single expression or tuple.
 pParens :: Parser Expr
@@ -526,7 +539,7 @@ pUnknownBinary :: Parser Expr
 pUnknownBinary = pLevel0 >>= go where
   go left = option left $ try $ pAnySym >>= \op -> do
     known <- _knownSymbols <$> getState
-    when (op `S.member` known) $ do
+    when (op `S.member` known) $
       unexpected $ unpack $ "Symbol " <> op <> " with known precedence"
     right <- pUnknownBinary
     go $ Expr (_pos left) $ Binary op left right
@@ -570,6 +583,9 @@ next = grab Just
 
 item :: Parser (AbsExpr Expr) -> Parser Expr
 item p = Expr <$> getPosition <*> p
+
+tritem :: Parser (AbsExpr Expr) -> Parser Expr
+tritem = try . item
 
 -- | Separators between statements or other discrete units.
 same :: Parser (Token PToken)

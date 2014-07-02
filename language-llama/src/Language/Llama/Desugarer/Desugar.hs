@@ -54,9 +54,14 @@ instance Render DExpr where render = rndr True . bareExpr
 expr2DExpr :: Expr -> DExpr
 expr2DExpr e = DExpr {_orig=e, _dsrd=fmap expr2DExpr $ unExpr e}
 
--- | Converts a monadic AbsExpr DExpr into a DExpr.
+-- | Converts a monadic AbsExpr DExpr into a DExpr. The first argument is the
+-- DExpr you started with.
 mk :: DExpr -> Desugar (AbsExpr DExpr) -> Desugar DExpr
-mk e = fmap $ \desugared -> DExpr {_orig=_orig e, _dsrd=desugared}
+mk dexpr = fmap $ \desugared -> DExpr {_orig=_orig dexpr, _dsrd=desugared}
+
+-- | Same as @mk@, but not monadic.
+mk' :: DExpr -> AbsExpr DExpr -> DExpr
+mk' dexpr adexpr = DExpr {_orig=_orig dexpr, _dsrd=adexpr}
 
 traverse :: Desugarer -> DExpr -> Desugar DExpr
 traverse ds e | doTest ds e = doTransform ds e
@@ -102,6 +107,9 @@ traverse ds e | doTest ds e = doTransform ds e
   Attribute expr name -> (\ex -> Attribute ex name) <$> rec expr
   GetAttrib name idx expr -> GetAttrib name idx <$> rec expr
   PatAssert pa -> PatAssert <$> recPA pa
+  LeftPartialBinary op expr -> LeftPartialBinary op <$> rec expr
+  RightPartialBinary expr op -> RightPartialBinary <$> rec expr <*> pure op
+  ChainedApply ex exs -> ChainedApply <$> rec ex <*> mapM rec exs
   _ -> error $ "Expression not covered in desugarer: " <> unpack (render e)
   where doTest :: Desugarer -> DExpr -> Bool
         doTest (_, t, _) e = t $ unExpr e
@@ -168,16 +176,18 @@ dsAfterBefore = ("Before/After", test, ds) where
   rec = traverse ("Before/After", test, ds)
 
 dsLambdaDot :: Desugarer
-dsLambdaDot = ("LambdaDot", test, ds) where
+dsLambdaDot = tup where
+  tup = ("LambdaDot", test, ds)
   test (LambdaDot _ _) = True
   test _ = False
-  ds e = let mk' ex = DExpr (_orig e) ex in case unExpr e of
+  ds e = mk e $ case unExpr e of
     LambdaDot e rest -> do
       name <- unusedVar "_arg"
-      e' <- rec e
-      let pat = mk' $ Var name
-      return $ mk' $ Lambda name $ mk' $ Dot pat e'
-  rec = traverse ("LambdaDot", test, ds)
+      e' <- traverse tup e
+      rest' <- mapM (traverse tup) rest
+      let dot = mk' e $ Dot (mk' e $ Var name) e'
+          body = foldl' (\e1 e2 -> mk' e1 $ Apply e1 e2) dot rest'
+      return $ Lambda name $ body
 
 dsPatternDef :: Desugarer
 dsPatternDef = ("Patterned definition", test, ds) where
@@ -264,6 +274,41 @@ dsBinary = tup where
       inner <- DExpr (_orig e) . Apply var <$> rec a
       Apply inner <$> rec b
 
+-- | Translates a @ChainedApply@ into a single statement. 
+-- A @ChainedApply@ consists of an initial expression and one or more 
+-- expressions "chained" after it. Based on the form of these expressions:
+-- Lambda-dot: @foo\n  .bar baz@ ≈> @foo.bar baz@
+-- Left prefix binary: @foo\n  + bar baz@ ≈> @foo + bar baz@
+-- Any other expression: @foo\n  bar baz@ ≈> @foo (bar baz)@
+dsChainedApply :: Desugarer
+dsChainedApply = tup where
+  tup = ("ChainedApply", test, ds)
+  test (ChainedApply _ _) = True
+  test _ = False
+  ds e = case unExpr e of 
+    ChainedApply first rest -> do
+      first' <- traverse tup first
+      rest' <- mapM (traverse tup) rest
+      go first' rest'
+  go :: DExpr -> [DExpr] -> Desugar DExpr
+  go first [] = return first
+  go first (e:rest) = case unExpr e of
+    LambdaDot _ _ -> go (mk' e $ Apply e first) rest
+    LeftPartialBinary _ _ -> go (mk' e $ Apply e first) rest
+    _ -> go (mk' e $ Apply first e) rest
+
+-- | Translates a LeftPartialBinary into a lambda expression.
+dsLeftPartialBinary :: Desugarer
+dsLeftPartialBinary = tup where
+  tup = ("LeftPartialBinary", test, ds)
+  test (LeftPartialBinary _ _) = True
+  test _ = False
+  ds e = mk e $ case unExpr e of
+    LeftPartialBinary op ex -> do
+      name <- unusedVar "_param"
+      ex' <- traverse tup ex
+      return $ Lambda name $ mk' e $ Binary op (mk' e $ Var name) ex'
+
 -- | Translates symbol variables into their "readable" forms with @toString@.
 dsSymbols :: Desugarer
 dsSymbols = tup where
@@ -271,7 +316,6 @@ dsSymbols = tup where
   test (Var n) | isSymbol n = True
   test (Constructor n) | isSymbol n = True
   test _ = False
-  rec = traverse tup
   ds e = mk e $ case unExpr e of
     Var n | T.head n == '_' -> return $ Var $ toString "post" n
           | T.last n == '_' -> return $ Var $ toString "pre" n
@@ -449,7 +493,9 @@ log xs = liftIO $ P.putStrLn $ P.concat $ fmap unpack xs
 
 desugarers :: [Desugarer]
 desugarers = [ dsAfterBefore
-             --, dsLambdaDot
+             , dsChainedApply
+             , dsLeftPartialBinary
+             , dsLambdaDot
              --, dsPrefixLine
              , dsDot
              --, dsForIn
