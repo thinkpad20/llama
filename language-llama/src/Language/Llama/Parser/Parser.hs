@@ -466,13 +466,12 @@ pApply = pChain >>= parseRest where
                      -- return what we have so far
 
 pIndentApply :: Parser Expr
-pIndentApply = do
-  e <- pApply
-  option e $ item $ ChainedApply e <$> indented (pBlockOf pContinuedExpr)
+pIndentApply = pApply >>= \e -> option e $ 
+  item $ ChainedApply e <$> indented (pBlockOf pContinuedExpr)
 
 pContinuedExpr :: Parser Expr
-pContinuedExpr = choice [pRightPartialBinary, pPrefixOp
-                        , pLeftPartialBinary, pLambdaDot]
+pContinuedExpr = choice [ pRightPartialBinary, pPrefixOp
+                        , pLeftPartialBinary,  pLambdaDot]
 
 pLeftPartialBinary :: Parser Expr
 pLeftPartialBinary = tritem $ LeftPartialBinary <$> pAnySym <*> pBinaryOp

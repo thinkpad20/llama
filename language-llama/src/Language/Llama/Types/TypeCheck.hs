@@ -18,48 +18,6 @@ class (IsExpr e, Render e, Sourced e) => Valid e where -- no methods
 instance Valid DExpr
 
 --------------------------------------------------------------------------
--------------------------- Type substitutions ----------------------------
---------------------------------------------------------------------------
-
-class Substitutable a where (•>) :: Substitution -> a -> a
-instance Substitutable BaseType where
-  subs@(Substitution s) •> t = case t of
-    TVar n | member n s -> s H.! n
-    TApply t1 t2 -> TApply (subs •> t1) (subs •> t2)
-    _ -> t
-instance Substitutable Assertion where
-  subs •> (HasTrait n ts) = HasTrait n $ fmap (subs •>) ts
-instance Substitutable Context where
-  subs •> (Context ctx) = Context $ S.map (subs •>) ctx
-instance Substitutable Type where
-  subs •> (Type ctx t) = Type (subs •> ctx) (subs •> t)
-instance Substitutable Polytype where
-  subs •> (Polytype vars t) = (Polytype vars (s t)) where
-    s = (S.foldr' remove subs vars •>)
-instance (Substitutable a, Substitutable b) => Substitutable (a, b) where
-  subs •> (a, b) = (subs •> a, subs •> b)
-instance (Substitutable val) => Substitutable (Map key val) where
-  subs •> m = fmap (subs •>) m
-instance Substitutable a => Substitutable [a] where
-  subs •> list = fmap (subs •>) list
-
-instance Zero Substitution where
-  zero = Substitution mempty
-
--- | Composes two substitutions. Newer substitution should go second.
-Substitution s1 • Substitution s2 = Substitution (s1' <> s2) where
-  s1' = fmap (Substitution s2 •>) s1
-
-compose :: [Substitution] -> Substitution
-compose = foldl' (•) zero
-
-oneSub :: Name -> BaseType -> Substitution
-oneSub n = Substitution . H.singleton n
-
-remove :: Name -> Substitution -> Substitution
-remove n (Substitution s) = Substitution (delete n s)
-
---------------------------------------------------------------------------
 ---------------------- Polytype <-> Type functions -----------------------
 --------------------------------------------------------------------------
 
@@ -254,7 +212,7 @@ getTraitMaps = _trmaps <$> get
 getInstances :: TypeChecker [Map Name [Instance]]
 getInstances = do
   trmaps <- getTraitMaps
-  return $ fmap (fmap fst) trmaps  
+  return $ fmap (fmap fst) trmaps
 
 -- | Get a list of lists of instances for a given trait.
 getInstancesFor :: Name -> TypeChecker [[Instance]]
@@ -277,10 +235,10 @@ push = modify $ \s -> s{_trmaps=mempty:_trmaps s, _tymaps=mempty:_tymaps s}
 -- | Pops the top environment off the stack.
 pop :: TypeChecker (TypeMap, TraitMap)
 pop = do
-  tymap <- head . _tymaps <$> get
-  trmap <- head . _trmaps <$> get
-  modify $ \s -> s{_trmaps=tail $ _trmaps s, _tymaps=tail $ _tymaps s}
-  return (tymap, trmap)
+  typemap:typemaps <- _tymaps <$> get
+  traitmap:traitmaps <- _trmaps <$> get
+  modify $ \s -> s{_trmaps=traitmaps, _tymaps=typemaps}
+  return (typemap, traitmap)
 
 -- | Pushes a new environment with a name and type, does an action, pops.
 withContext :: Name -> Type -> TypeChecker a -> TypeChecker a
@@ -291,7 +249,7 @@ withContext name _type action = push >> mod >> action <* pop where
 -- | The state we start with.
 initState :: TCState
 initState = TCState
-  { _count=0, _tymaps=[Defaults.typeMap], _trmaps=[Defaults.traitMap]}
+  {_count=0, _tymaps=[Defaults.typeMap], _trmaps=[Defaults.traitMap]}
 
 --------------------------------------------------------------------------
 ---------------------- Main inferrence functions -------------------------
